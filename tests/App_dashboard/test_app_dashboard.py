@@ -25,19 +25,21 @@ def test_get_current_user_empty_when_unset(monkeypatch):
     assert get_current_user() == ""
 
 
-def test_get_uploads_path_derives_upload_id_from_cwd(monkeypatch):
+def test_get_uploads_path_derives_upload_id_and_container_from_cwd(monkeypatch):
+    upload_dir = "analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ"
     monkeypatch.setattr(
-        os, "getcwd", lambda: "/home/jovyan/uploads/analysis-tools-mr60amaQRZ/App_dashboard"
+        os, "getcwd", lambda: f"/home/jovyan/uploads/{upload_dir}/apps/App_dashboard"
     )
-    assert get_uploads_path() == "uploads/analysis-tools-mr60amaQRZ"
+    assert get_uploads_path() == f"uploads/{upload_dir}/apps"
 
 
 def test_build_voila_url_matches_expected_nomad_structure():
-    url = build_voila_url(_ENTRY, "edgar", "uploads/analysis-tools-mr60amaQRZ-Ta21fXdf64Q")
+    uploads_path = "uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/apps"
+    url = build_voila_url(_ENTRY, "edgar", uploads_path)
 
     assert url == (
         VOILA_PATH_TEMPLATE.format(user="edgar")
-        + "/uploads/analysis-tools-mr60amaQRZ-Ta21fXdf64Q/XRD_peak_finder/xy_visualizer.ipynb"
+        + f"/{uploads_path}/XRD_peak_finder/xy_visualizer.ipynb"
     )
     assert url.startswith("/nomad-oasis/north/user/edgar/voila/voila/render/")
 

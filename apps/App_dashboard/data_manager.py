@@ -188,14 +188,18 @@ def get_current_user() -> str:
 
 
 def get_uploads_path() -> str:
-    """Derive 'uploads/<upload_id>' from the current working directory.
+    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
 
-    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/<AppFolder>,
-    so the upload id is the parent directory's basename.
+    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>,
+    where <container> is the folder holding all app folders (this repo's own upload
+    mirrors the repo layout, so <container> is "apps"). Both names are read from cwd
+    rather than hardcoded so this keeps working if the upload layout changes.
     """
-    parent = os.path.dirname(os.getcwd())
-    upload_id = os.path.basename(parent)
-    return f"uploads/{upload_id}"
+    container_dir = os.path.dirname(os.getcwd())
+    upload_dir = os.path.dirname(container_dir)
+    container = os.path.basename(container_dir)
+    upload_id = os.path.basename(upload_dir)
+    return f"uploads/{upload_id}/{container}"
 
 
 def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
