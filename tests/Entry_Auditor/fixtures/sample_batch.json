@@ -1,0 +1,70 @@
+{
+  "sample_links": {
+    "HZB_Demo_1": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry1",
+    "HZB_Demo_2": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry2",
+    "HZB_Demo_3": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry3"
+  },
+  "datasets": {
+    "Cleaning": [
+      {
+        "sample_id": "HZB_Demo_1",
+        "_entry_id": "entry1",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_1.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry1",
+        "name": "Cleaning Step 1",
+        "location": "HySpinBox",
+        "description": "Standard cleaning"
+      },
+      {
+        "sample_id": "HZB_Demo_2",
+        "_entry_id": "entry2",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_2.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry2",
+        "name": "Cleaning Step 1",
+        "location": "HySpinBox",
+        "description": "Standard cleaning"
+      },
+      {
+        "sample_id": "HZB_Demo_3",
+        "_entry_id": "entry3",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_3.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry3",
+        "name": "Cleaning Step 1",
+        "location": "HySpinbox",
+        "description": "Standard cleaning"
+      }
+    ],
+    "Substrate": [
+      {
+        "sample_id": "HZB_Demo_1",
+        "_entry_id": "entry4",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_1.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry4",
+        "substrate": "Glass/ITO",
+        "conducting_material": "ITO"
+      },
+      {
+        "sample_id": "HZB_Demo_2",
+        "_entry_id": "entry5",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_2.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry5",
+        "substrate": "Glass/ITO",
+        "conducting_material": "ITO"
+      },
+      {
+        "sample_id": "HZB_Demo_3",
+        "_entry_id": "entry6",
+        "_upload_id": "upload1",
+        "_mainfile": "20260715_Demo_Batch_3.archive.json",
+        "_gui_url": "https://nomad-hzb-se.de/nomad-oasis/gui/user/uploads/upload/id/upload1/entry/id/entry6",
+        "substrate": "Glass/ITO",
+        "conducting_material": "ITO"
+      }
+    ]
+  }
+}
