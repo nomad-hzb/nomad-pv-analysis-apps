@@ -1,0 +1,46 @@
+{
+  "sample_ids": ["S001", "S002"],
+  "descriptions": {
+    "S001": "ref",
+    "S002": "var1"
+  },
+  "measurements": {
+    "S001": [
+      [
+        {
+          "trpl_properties": {
+            "counts": [1000.0, 800.0, 600.0, 400.0, 200.0],
+            "time": [0.0, 1e-9, 2e-9, 3e-9, 4e-9],
+            "ns_per_bin": 1.0
+          },
+          "name": "meas_1",
+          "data_file": "batch.run_001.meta.hdf5"
+        }
+      ],
+      [
+        {
+          "trpl_properties": {
+            "counts": [900.0, 720.0, 540.0, 360.0, 180.0],
+            "time": [0.0, 1e-9, 2e-9, 3e-9, 4e-9],
+            "ns_per_bin": 1.0
+          },
+          "name": "meas_2",
+          "data_file": "batch.run_002.meta.hdf5"
+        }
+      ]
+    ],
+    "S002": [
+      [
+        {
+          "trpl_properties": {
+            "counts": [500.0, 400.0, 300.0, 200.0, 100.0],
+            "time": [0.0, 1e-9, 2e-9, 3e-9, 4e-9],
+            "ns_per_bin": 1.0
+          },
+          "name": "meas_1",
+          "data_file": "batch.run_003.meta.hdf5"
+        }
+      ]
+    ]
+  }
+}

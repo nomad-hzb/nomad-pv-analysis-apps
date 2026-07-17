@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jv-analysis"
+version = "5.0.0"
+description = "JV Analysis app for HySPRINT NOMAD Oasis"
+requires-python = ">=3.10"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "pydantic>=2.0",
+    "pandas",
+    "numpy",
+    "plotly",
+    "ipywidgets",
+    "ipython",
+    "notebook",
+    "voila",
+    "natsort",
+    "requests",
+    "openpyxl",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

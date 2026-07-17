@@ -1,0 +1,71 @@
+[
+  {
+    "label": "Efficiency (PCE)",
+    "column": "efficiency",
+    "path": "results.properties.optoelectronic.solar_cell.efficiency"
+  },
+  {
+    "label": "Open circuit voltage (Voc)",
+    "column": "open_circuit_voltage",
+    "path": "results.properties.optoelectronic.solar_cell.open_circuit_voltage"
+  },
+  {
+    "label": "Short circuit current density (Jsc)",
+    "column": "short_circuit_current_density",
+    "path": "results.properties.optoelectronic.solar_cell.short_circuit_current_density"
+  },
+  {
+    "label": "Fill factor (FF)",
+    "column": "fill_factor",
+    "path": "results.properties.optoelectronic.solar_cell.fill_factor"
+  },
+  {
+    "label": "Device architecture",
+    "column": "architecture",
+    "path": "results.properties.optoelectronic.solar_cell.device_architecture"
+  },
+  {
+    "label": "Band gap (converted to eV)",
+    "column": "band_gap",
+    "path": "results.properties.electronic.band_gap.value",
+    "unit_label": "eV",
+    "scale": 6.241509074460763e+18
+  },
+  {
+    "label": "Chemical formula (reduced)",
+    "column": "formula",
+    "path": "results.material.chemical_formula_reduced"
+  },
+  {
+    "label": "Elements",
+    "column": "elements",
+    "path": "results.material.elements",
+    "list_mode": "join"
+  },
+  {
+    "label": "DOI / references",
+    "column": "doi",
+    "path": "references",
+    "list_mode": "join"
+  },
+  {
+    "label": "device_area",
+    "column": "device_area",
+    "path": "results.properties.optoelectronic.solar_cell.device_area"
+  },
+  {
+    "label": "solvents",
+    "column": "solvents",
+    "path": "data.perovskite_deposition.solvents#perovskite_solar_cell_database.schema.PerovskiteSolarCell"
+  },
+  {
+    "label": "procedure",
+    "column": "procedure",
+    "path": "data.perovskite_deposition.procedure#perovskite_solar_cell_database.schema.PerovskiteSolarCell"
+  },
+  {
+    "label": "solvents_supplier",
+    "column": "solvents_supplier",
+    "path": "data.perovskite_deposition.solvents_supplier#perovskite_solar_cell_database.schema.PerovskiteSolarCell"
+  }
+]

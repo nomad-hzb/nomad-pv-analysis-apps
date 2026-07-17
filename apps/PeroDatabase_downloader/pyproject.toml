@@ -1,0 +1,23 @@
+[project]
+name = "perodatabase-downloader"
+version = "0.1.0"
+description = "NOMAD field extractor for the Perovskite Database"
+requires-python = ">=3.10"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "requests>=2.28",
+    "pandas>=2.0",
+    "ipywidgets>=8.0",
+    "ipython>=8.12",
+    "voila>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

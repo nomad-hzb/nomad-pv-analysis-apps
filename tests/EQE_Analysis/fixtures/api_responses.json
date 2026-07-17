@@ -1,0 +1,53 @@
+{
+  "sample_ids": ["S001", "S002"],
+  "descriptions": {
+    "S001": "ref",
+    "S002": "var1"
+  },
+  "measurements": {
+    "S001": [
+      [
+        {
+          "name": "meas_1",
+          "description": "reference sample",
+          "eqe_data": [
+            {
+              "photon_energy_array": [1.2, 1.4, 1.6, 1.8, 2.0],
+              "wavelength_array": [1033.0, 886.0, 775.0, 689.0, 620.0],
+              "eqe_array": [0.1, 0.5, 0.8, 0.85, 0.82],
+              "light_bias": 0.0,
+              "bandgap_eqe": 1.35,
+              "integrated_jsc": 18.5,
+              "integrated_j0rad": 1.2e-18,
+              "voc_rad": 1.18,
+              "urbach_energy": 0.014,
+              "urbach_energy_fit_std_dev": 0.001
+            }
+          ]
+        }
+      ]
+    ],
+    "S002": [
+      [
+        {
+          "name": "meas_1",
+          "description": "variant sample",
+          "eqe_data": [
+            {
+              "photon_energy_array": [1.2, 1.4, 1.6, 1.8, 2.0],
+              "wavelength_array": [1033.0, 886.0, 775.0, 689.0, 620.0],
+              "eqe_array": [0.05, 0.4, 0.75, 0.80, 0.78],
+              "light_bias": 0.0,
+              "bandgap_eqe": 1.32,
+              "integrated_jsc": 17.1,
+              "integrated_j0rad": 2.1e-18,
+              "voc_rad": 1.15,
+              "urbach_energy": 0.016,
+              "urbach_energy_fit_std_dev": 0.002
+            }
+          ]
+        }
+      ]
+    ]
+  }
+}

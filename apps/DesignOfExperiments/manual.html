@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design of Experiments — User Manual</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+      color: #222;
+      background: #fff;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 40px 32px 80px;
+    }
+
+    /* ── Typography ─────────────────────────────────────── */
+    h1 { font-size: 26px; font-weight: 700; color: #2E4057; margin-bottom: 6px; }
+    h2 { font-size: 19px; font-weight: 700; color: #2E4057; margin: 40px 0 10px;
+         padding-bottom: 5px; border-bottom: 2px solid #e0e0e0; }
+    h3 { font-size: 15px; font-weight: 700; color: #333; margin: 22px 0 6px; }
+    h4 { font-size: 13px; font-weight: 700; color: #444; margin: 14px 0 4px;
+         text-transform: uppercase; letter-spacing: 0.04em; }
+    p  { margin-bottom: 10px; }
+    ul, ol { margin: 8px 0 12px 22px; }
+    li { margin-bottom: 4px; }
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      background: #f3f4f6;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    strong { font-weight: 600; }
+
+    /* ── Header block ───────────────────────────────────── */
+    .doc-header {
+      border-bottom: 3px solid #2E4057;
+      padding-bottom: 16px;
+      margin-bottom: 8px;
+    }
+    .doc-meta {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    /* ── Tab sections ───────────────────────────────────── */
+    .tab-card {
+      border: 1px solid #dde1e7;
+      border-radius: 6px;
+      padding: 18px 22px;
+      margin: 18px 0;
+    }
+    .tab-label {
+      display: inline-block;
+      background: #2E4057;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 3px;
+      margin-bottom: 8px;
+    }
+
+    /* ── Info / tip / warning boxes ────────────────────── */
+    .note {
+      background: #f0f4ff;
+      border-left: 4px solid #4a6fa5;
+      padding: 10px 14px;
+      margin: 14px 0;
+      font-size: 13.5px;
+    }
+    .tip {
+      background: #f0faf3;
+      border-left: 4px solid #2ca02c;
+      padding: 10px 14px;
+      margin: 14px 0;
+      font-size: 13.5px;
+    }
+    .warn {
+      background: #fff8f0;
+      border-left: 4px solid #e07800;
+      padding: 10px 14px;
+      margin: 14px 0;
+      font-size: 13.5px;
+    }
+
+    /* ── Algorithm table ────────────────────────────────── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 13.5px;
+    }
+    th {
+      background: #f5f5f5;
+      border: 1px solid #dde;
+      padding: 7px 10px;
+      text-align: left;
+      font-weight: 700;
+    }
+    td {
+      border: 1px solid #dde;
+      padding: 7px 10px;
+      vertical-align: top;
+    }
+    tr:nth-child(even) td { background: #fafafa; }
+
+    /* ── Quality metric chips ───────────────────────────── */
+    .metric { display: inline-block; background: #eef; border: 1px solid #c8d;
+              border-radius: 3px; padding: 1px 7px; font-size: 12px; margin: 1px 2px; }
+
+    /* ── Section divider ────────────────────────────────── */
+    hr { border: none; border-top: 1px solid #eee; margin: 32px 0; }
+
+    /* ── TOC ────────────────────────────────────────────── */
+    .toc { background: #f9f9f9; border: 1px solid #e5e5e5; border-radius: 5px;
+           padding: 14px 20px; margin: 20px 0; }
+    .toc-title { font-size: 13px; font-weight: 700; text-transform: uppercase;
+                 letter-spacing: 0.05em; color: #555; margin-bottom: 8px; }
+    .toc a { color: #2E4057; text-decoration: none; font-size: 13.5px; }
+    .toc a:hover { text-decoration: underline; }
+    .toc ol { margin-left: 18px; }
+    .toc li { margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+
+<div class="doc-header">
+  <h1>Design of Experiments (DoE)</h1>
+  <p style="color:#555; font-size:14px; margin-top:5px;">
+    HySPRINT materials science experimental design tool — Voila web app
+  </p>
+  <div class="doc-meta">Version 1.0.0 &nbsp;·&nbsp; Last updated June 2026</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="toc">
+  <div class="toc-title">Contents</div>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#tab1">Tab 1 — Setup &amp; Variables</a></li>
+    <li><a href="#tab2">Tab 2 — Results &amp; Visualization</a></li>
+    <li><a href="#tab3">Tab 3 — Export</a></li>
+    <li><a href="#algorithms">Sampling Algorithms</a></li>
+    <li><a href="#variable-types">Variable Types</a></li>
+    <li><a href="#quality-metrics">Quality Metrics</a></li>
+    <li><a href="#workflow">Typical Workflow</a></li>
+    <li><a href="#tips">Tips &amp; Best Practices</a></li>
+  </ol>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="overview">1 · Overview</h2>
+
+<p>
+  The <strong>Design of Experiments</strong> app generates structured sets of experimental
+  conditions for materials science research. Instead of testing variables one at a time, DoE
+  lets you explore the full parameter space efficiently — covering more combinations with fewer
+  experiments.
+</p>
+<p>
+  The app is organised into three tabs:
+</p>
+<ul>
+  <li><strong>Setup &amp; Variables</strong> — choose algorithm, sample count, and define your parameters</li>
+  <li><strong>Results &amp; Visualization</strong> — review the generated design and explore it interactively</li>
+  <li><strong>Export</strong> — download the table for instruments or a readable protocol for the lab</li>
+</ul>
+
+<div class="note">
+  <strong>Reproducibility:</strong> Every generated design is tied to a random seed.
+  Record the seed alongside your results so the exact design can be regenerated later.
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="tab1">2 · Tab 1 — Setup &amp; Variables</h2>
+
+<div class="tab-card">
+  <div class="tab-label">Tab 1</div>
+  <strong>Setup &amp; Variables</strong>
+</div>
+
+<h3>2.1 Algorithm</h3>
+<p>
+  Select a sampling algorithm from the dropdown. A short description appears immediately below the
+  selector. See <a href="#algorithms">Section 5</a> for a comparison of all algorithms.
+</p>
+
+<h3>2.2 Sample Configuration</h3>
+
+<h4>Sample Size</h4>
+<p>
+  Use the slider to set the number of experimental conditions to generate.
+  Range: <code>4</code> to <code>500</code>.
+  The slider minimum automatically adjusts to the recommended minimum for the number of variables
+  you have defined (<em>n_variables²</em>, minimum 4).
+</p>
+
+<h4>Random Seed</h4>
+<p>
+  An integer seed that controls the random number generator. The same seed + same settings always
+  produces the same design. Click <strong>New Seed</strong> to pick a random value, or type one
+  directly. The seed range is 1 – 2 147 483 647 (full 31-bit range).
+</p>
+
+<h4>Advanced Options</h4>
+<p>
+  A collapsible accordion containing algorithm-specific settings:
+</p>
+<ul>
+  <li><strong>Latin Hypercube Sampling</strong> — optional centroid optimisation (<code>None</code>,
+      <code>random-cd</code>, <code>lloyd</code>)</li>
+  <li><strong>Sobol / Halton</strong> — scrambling checkbox (recommended; improves uniformity)</li>
+  <li>Other algorithms — no extra options</li>
+</ul>
+
+<h3>2.3 Variable Configuration</h3>
+<p>
+  Define the experimental parameters (factors) you want to vary. Two empty rows are pre-filled.
+  Use <strong>Add Variable</strong> to add more; <strong>Clear All</strong> to start over.
+</p>
+<p>Each row has:</p>
+<ul>
+  <li><strong>Variable Name</strong> — a unique identifier (letters, numbers, underscore, hyphen;
+      must start with a letter; max 50 characters)</li>
+  <li><strong>Type</strong> — <em>Discrete</em>, <em>Continuous</em>, or <em>Categorical</em>
+      (see <a href="#variable-types">Section 6</a>)</li>
+  <li><strong>Parameters</strong> — Min / Max / Step for numeric types; comma-separated values for categorical</li>
+  <li><strong>Description</strong> (optional) — appears in the exported protocol</li>
+</ul>
+
+<div class="warn">
+  <strong>Validation:</strong> A row highlighted with a red border means Min ≥ Max.
+  Fix the range before generating — invalid variables are silently skipped.
+</div>
+
+<div class="tip">
+  <strong>Comma decimal separator:</strong> Both <code>1.5</code> and <code>1,5</code> are accepted
+  in the Min / Max / Step fields.
+</div>
+
+<h3>2.4 Generate</h3>
+<p>
+  Click <strong>Generate Samples</strong> to run the selected algorithm.
+  The button is disabled during generation and re-enabled when done.
+  A progress indicator appears while generating.
+  On success the app automatically switches to Tab 2.
+</p>
+
+<h3>2.5 Quality Metrics (Tab 1, bottom)</h3>
+<p>
+  After generation a scrollable panel shows space-filling quality scores for the design
+  (see <a href="#quality-metrics">Section 7</a>).
+</p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="tab2">3 · Tab 2 — Results &amp; Visualization</h2>
+
+<div class="tab-card">
+  <div class="tab-label">Tab 2</div>
+  <strong>Results &amp; Visualization</strong> <span style="color:#888; font-size:12px;">(badge shows sample count after generation)</span>
+</div>
+
+<h3>3.1 Info Bar</h3>
+<p>
+  The top bar shows the <strong>seed</strong>, <strong>sample count</strong>, and
+  <strong>algorithm</strong> used for the current design. The <strong>New Design</strong> button
+  randomises the seed and immediately regenerates — useful for quickly exploring alternative designs
+  under the same settings.
+</p>
+
+<h3>3.2 Generated Samples Table</h3>
+<p>
+  Displays up to 50 rows of the generated design. The index starts at 1.
+  Numeric columns with only integer values show no decimal places (e.g. <code>3</code>);
+  columns with fractional values show two decimal places (e.g. <code>1.25</code>).
+  Categorical columns show the category labels.
+</p>
+<p>
+  The full dataset (all rows) is available for download on Tab 3.
+</p>
+
+<h3>3.3 Visualizations</h3>
+<p>
+  Select a plot type from the dropdown. Available types depend on the number of numeric variables:
+</p>
+
+<table>
+  <tr>
+    <th>Plot Type</th>
+    <th>Requires</th>
+    <th>Description</th>
+  </tr>
+  <tr>
+    <td>Scatter Plot Matrix</td>
+    <td>≥ 2 numeric vars</td>
+    <td>All pairwise scatter plots. Best for spotting correlations and fill patterns.</td>
+  </tr>
+  <tr>
+    <td>Parallel Coordinates</td>
+    <td>Any variables</td>
+    <td>Each variable is a vertical axis; each sample is a polyline. Good for high-dimensional designs.</td>
+  </tr>
+  <tr>
+    <td>Distribution Plots</td>
+    <td>Any variables</td>
+    <td>Histogram (numeric) or bar chart (categorical) per variable. Shows marginal distributions.</td>
+  </tr>
+  <tr>
+    <td>3D Scatter Plot</td>
+    <td>≥ 3 numeric vars</td>
+    <td>Interactive 3-axis scatter using the first three numeric variables.</td>
+  </tr>
+  <tr>
+    <td>Correlation Heatmap</td>
+    <td>≥ 2 numeric vars</td>
+    <td>Pearson correlation matrix. Ideal designs have near-zero off-diagonal values.</td>
+  </tr>
+  <tr>
+    <td>Space-Filling Quality</td>
+    <td>Any variables</td>
+    <td>Four-panel diagnostic: distance distribution, coverage, uniformity, 2-D scatter.</td>
+  </tr>
+</table>
+
+<p>
+  Click <strong>Export Plot</strong> to download the current figure as a self-contained HTML file
+  (includes Plotly; no internet needed to view).
+</p>
+
+<h3>3.4 Summary Statistics</h3>
+<p>
+  A scrollable table at the bottom of Tab 2 shows per-variable statistics:
+  type, minimum, maximum, and number of unique values.
+</p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="tab3">4 · Tab 3 — Export</h2>
+
+<div class="tab-card">
+  <div class="tab-label">Tab 3</div>
+  <strong>Export</strong>
+</div>
+
+<p>Two distinct export modes are available:</p>
+
+<h3>4.1 Export Table</h3>
+<p>
+  The sample matrix in machine-readable form, suitable for analysis software and lab automation
+  instruments. Choose a format from the dropdown, then click <strong>Export Table</strong>:
+</p>
+<ul>
+  <li><strong>CSV</strong> — plain text, one row per sample, comma-separated; opens in Excel, pandas, Origin, etc.</li>
+  <li><strong>JSON</strong> — includes the variable definitions, algorithm name, seed, and timestamp alongside the samples; suitable for re-importing the design.</li>
+  <li><strong>Excel</strong> — three sheets: <em>Samples</em>, <em>Variables</em>, <em>Metrics</em>.
+      Requires <code>openpyxl</code>.</li>
+</ul>
+
+<h3>4.2 Readable Protocol</h3>
+<p>
+  A numbered step-by-step document intended for a lab technician to follow manually.
+  Each experiment is listed with its exact parameter values.
+  Check <strong>Randomize experimental order</strong> to shuffle the execution sequence
+  (useful to prevent systematic time-of-day or instrument-warm-up biases).
+  Click <strong>Export Protocol</strong> to download as a plain-text <code>.txt</code> file.
+</p>
+
+<div class="note">
+  <strong>Export Table vs Readable Protocol:</strong> Export Table is for computers and instruments;
+  Readable Protocol is for humans in the lab.
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="algorithms">5 · Sampling Algorithms</h2>
+
+<table>
+  <tr>
+    <th>Algorithm</th>
+    <th>Best for</th>
+    <th>Notes</th>
+  </tr>
+  <tr>
+    <td><strong>Latin Hypercube Sampling</strong></td>
+    <td>General screening; response surface methodology</td>
+    <td>Guarantees each parameter is sampled uniformly across its range. Good default choice.</td>
+  </tr>
+  <tr>
+    <td><strong>Sobol Sequences</strong></td>
+    <td>Sensitivity analysis; computational experiments</td>
+    <td>Low-discrepancy quasi-random sequence. Excellent space-filling; prefer power-of-2 sample sizes.</td>
+  </tr>
+  <tr>
+    <td><strong>Halton Sequences</strong></td>
+    <td>Optimization studies requiring consistent coverage</td>
+    <td>Quasi-random; avoids clustering. Similar to Sobol but based on prime-number bases.</td>
+  </tr>
+  <tr>
+    <td><strong>Random Sampling</strong></td>
+    <td>Baseline comparison; unbiased exploration</td>
+    <td>No structure imposed. Clustering is possible, especially with small sample sizes.</td>
+  </tr>
+  <tr>
+    <td><strong>Uniform Grid Sampling</strong></td>
+    <td>Systematic mapping of a complete response surface</td>
+    <td>All combinations at regular intervals. Sample count must be a perfect n-th power of the number of variables; the app rounds up automatically.</td>
+  </tr>
+  <tr>
+    <td><strong>Maximin Distance Design</strong></td>
+    <td>Expensive experiments where each test must provide maximum information</td>
+    <td>Iteratively optimises the minimum inter-sample distance. Computationally heavier than other methods; slower for large n.</td>
+  </tr>
+</table>
+
+<div class="tip">
+  <strong>Rule of thumb:</strong> Use <em>Latin Hypercube Sampling</em> unless you have a specific
+  reason to choose otherwise. Uniform Grid grows exponentially with the number of variables —
+  avoid it with more than 3–4 variables.
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="variable-types">6 · Variable Types</h2>
+
+<h3>Continuous</h3>
+<p>
+  Any real value between Min and Max. Use for temperature, pressure, flow rate, concentration, etc.
+  Parameters: <strong>Min</strong>, <strong>Max</strong>.
+</p>
+<p>Example: <code>Temperature, 100, 300</code> → samples drawn from [100, 300].</p>
+
+<h3>Discrete</h3>
+<p>
+  Integer or evenly-spaced values defined by Min, Max, and Step.
+  Use for number of layers, spin speed in fixed increments, annealing cycles, etc.
+  Parameters: <strong>Min</strong>, <strong>Max</strong>, <strong>Step</strong> (default 1).
+</p>
+<p>Example: <code>Layers, 1, 5, 1</code> → valid values {1, 2, 3, 4, 5}.</p>
+
+<div class="note">
+  The table shows discrete values as whole numbers (<code>3</code>, not <code>3.00</code>) when
+  all values in the column are integers.
+</div>
+
+<h3>Categorical</h3>
+<p>
+  Named categories with no numeric ordering. Use for material type, solvent, substrate, catalyst, etc.
+  Parameters: a comma-separated list of at least two unique labels.
+</p>
+<p>Example: <code>Solvent, DMF, DMSO, GBL</code> → each sample is assigned one of the three labels.</p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="quality-metrics">7 · Quality Metrics</h2>
+
+<p>After generation, the following metrics assess the space-filling quality of the design:</p>
+
+<table>
+  <tr>
+    <th>Metric</th>
+    <th>Higher is better?</th>
+    <th>Meaning</th>
+  </tr>
+  <tr>
+    <td><span class="metric">Minimum Distance</span></td>
+    <td>Yes</td>
+    <td>Smallest Euclidean distance between any two samples in the normalised unit hypercube. Higher means samples are more spread out.</td>
+  </tr>
+  <tr>
+    <td><span class="metric">Mean Distance</span></td>
+    <td>Yes</td>
+    <td>Average pairwise distance. Provides a global view of separation.</td>
+  </tr>
+  <tr>
+    <td><span class="metric">Distance Uniformity</span></td>
+    <td>Lower is better</td>
+    <td>Coefficient of variation of pairwise distances. Lower means more even spacing.</td>
+  </tr>
+  <tr>
+    <td><span class="metric">Overall Coverage</span></td>
+    <td>Yes</td>
+    <td>Fraction of the design space utilised, averaged across variables.</td>
+  </tr>
+  <tr>
+    <td><span class="metric">Max Correlation</span></td>
+    <td>Lower is better</td>
+    <td>Largest absolute Pearson correlation between any two numeric variables. Near 0 is ideal.</td>
+  </tr>
+</table>
+
+<p>
+  The <em>Space-Filling Quality</em> plot on Tab 2 shows these metrics graphically:
+  distance histogram, per-variable coverage bars, uniformity scores, and a 2-D scatter of the first
+  two numeric variables.
+</p>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="workflow">8 · Typical Workflow</h2>
+
+<ol>
+  <li>
+    <strong>Define variables.</strong>
+    Go to Tab 1. Add the parameters you want to study, choose their types, and set meaningful ranges.
+    Watch for red-bordered rows (invalid Min/Max) and fix them.
+  </li>
+  <li>
+    <strong>Choose algorithm and sample size.</strong>
+    Latin Hypercube Sampling with 10–20× the number of variables is a good starting point.
+    Adjust the seed if you want a specific reproducible run.
+  </li>
+  <li>
+    <strong>Generate.</strong>
+    Click <strong>Generate Samples</strong>. The app switches automatically to Tab 2.
+  </li>
+  <li>
+    <strong>Review the design.</strong>
+    Check the sample table, inspect the Scatter Plot Matrix for clustering, and look at the
+    quality metrics. If the design looks poor, click <strong>New Design</strong> to get a different
+    random realisation without leaving Tab 2.
+  </li>
+  <li>
+    <strong>Export.</strong>
+    Go to Tab 3. Download the CSV/Excel for analysis software, and/or the Readable Protocol for
+    your lab notebook.
+  </li>
+</ol>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<h2 id="tips">9 · Tips &amp; Best Practices</h2>
+
+<h3>Sample size</h3>
+<ul>
+  <li>Minimum rule: at least <em>n²</em> samples for <em>n</em> variables.</li>
+  <li>For a response surface model: 10–20× the number of variables.</li>
+  <li>For a quick screening: 5–10× the number of variables.</li>
+  <li>Sobol sequences work best at power-of-2 sizes (8, 16, 32, 64 …).</li>
+</ul>
+
+<h3>Algorithm choice</h3>
+<ul>
+  <li>Start with <strong>Latin Hypercube Sampling</strong> — balanced and fast.</li>
+  <li>Use <strong>Sobol / Halton</strong> for sensitivity analysis or when you need near-perfect
+      uniformity.</li>
+  <li>Avoid <strong>Uniform Grid</strong> with more than 3 variables unless you want a very small
+      number of levels per variable.</li>
+  <li><strong>Maximin Distance</strong> is best for expensive experiments (slow synthesis,
+      long characterisation) where every data point must count.</li>
+</ul>
+
+<h3>Reproducibility</h3>
+<ul>
+  <li>Record the <strong>seed</strong> shown in the Tab 2 info bar alongside your experimental data.
+      The JSON export includes the seed automatically.</li>
+  <li>The <strong>New Design</strong> button automatically picks a new random seed; the seed is
+      always visible so you can reproduce any design.</li>
+</ul>
+
+<h3>Categorical variables</h3>
+<ul>
+  <li>Most algorithms treat categories as integers internally and then map back to labels — the
+      assignment is fair but not combinatorially exhaustive.  Use <strong>Uniform Grid</strong>
+      if you want every category to appear the same number of times.</li>
+  <li>Correlation metrics and the 3-D Scatter / Correlation Heatmap plots only use numeric variables;
+      categorical variables appear in Distribution Plots and Parallel Coordinates.</li>
+</ul>
+
+<h3>Validation (red borders)</h3>
+<ul>
+  <li>A red border on a variable row means Min ≥ Max. The variable is skipped during generation
+      without an error — check the table to confirm all expected columns are present.</li>
+</ul>
+
+<hr>
+<p style="font-size: 12px; color: #aaa; text-align: center;">
+  HySPRINT Design of Experiments · Helmholtz-Zentrum Berlin ·
+  Generated automatically — do not edit this file directly.
+</p>
+
+</body>
+</html>

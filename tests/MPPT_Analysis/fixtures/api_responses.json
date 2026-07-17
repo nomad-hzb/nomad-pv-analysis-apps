@@ -1,0 +1,32 @@
+{
+  "descriptions": {
+    "batch1&sample1": "Sample 1",
+    "batch1&sample2": "Sample 2"
+  },
+  "measurements": {
+    "batch1&sample1": [
+      [
+        [
+          {"time": 0.0, "power_density": 15.2, "voltage": 0.92, "current_density": -16.5, "name": "entry_1", "description": "test entry"},
+          {"time": 0.5, "power_density": 14.8, "voltage": 0.91, "current_density": -16.3, "name": "entry_1", "description": "test entry"},
+          {"time": 1.0, "power_density": 14.4, "voltage": 0.90, "current_density": -16.0, "name": "entry_1", "description": "test entry"}
+        ],
+        {}
+      ],
+      [
+        [
+          {"time": 0.0, "power_density": 13.0, "voltage": 0.88, "current_density": -14.7, "name": "entry_2", "description": "test entry 2"}
+        ],
+        {}
+      ]
+    ],
+    "batch1&sample2": [
+      [
+        [
+          {"time": 0.0, "power_density": 12.5, "voltage": 0.85, "current_density": -14.7, "name": "entry_1", "description": "sample2"}
+        ],
+        {}
+      ]
+    ]
+  }
+}

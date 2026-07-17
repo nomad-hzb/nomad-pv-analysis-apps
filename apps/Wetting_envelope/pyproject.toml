@@ -1,0 +1,22 @@
+[project]
+name = "wetting-envelope"
+version = "0.1.0"
+description = "Interactive wetting envelope plotter (Owens-Wendt model)"
+requires-python = ">=3.10"
+dependencies = [
+    "ipywidgets>=8.0",
+    "plotly>=5.0",
+    "numpy>=1.24",
+    "pydantic>=2.0",
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.metadata]
+allow-direct-references = true

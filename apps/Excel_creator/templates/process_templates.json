@@ -1,0 +1,186 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "description": "Process templates for laboratory automation",
+    "last_updated": "2025-06-16"
+  },
+  "templates": {
+	"empty_template": {
+		"name": "Empty Template",
+		"description": "Start with just Experiment Info", 
+		"category": "Basic",
+		"process_sequence": [
+			{"process": "Experiment Info"}
+		]
+	},
+    "bypass_diodes": {
+      "name": "Bypass diodes",
+      "description": "Bypass process with UV-Ozone cleaning and perovskite layer",
+      "category": "Bypass Processes",
+      "researcher": "Anne",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning UV-Ozone", "config": {"solvents": 3}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 5, "spinsteps": 1, "antisolvent": true}},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "inkjet_printing": {
+      "name": "Inkjet Printing",
+      "description": "Inkjet printing process with perovskite layer",
+      "category": "Printing Processes",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning UV-Ozone", "config": {"solvents": 4}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Inkjet Printing", "config": {"solvents": 3, "solutes": 5, "antisolvent": true}},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "multi_spin-coating_process": {
+      "name": "Multiple Spin-Coated Layers",
+      "description": "complex multi-layer process with washing and interlayer steps",
+      "category": "Advanced Processes",
+      "researcher": "Eike",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning UV-Ozone", "config": {"solvents": 1}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 2, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 2, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 6, "spinsteps": 2, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"},
+        {"process": "ALD"},
+        {"process": "Sputtering"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "triple_tandem": {
+      "name": "Triple Tandem Cells",
+      "description": "Comprehensive all-inorganic perovskite tandem process",
+      "category": "Tandem Processes",
+      "researcher": "Kevin Prince",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning UV-Ozone", "config": {"solvents": 4}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 8, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "ALD"},
+        {"process": "Sputtering"},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 4, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "ALD"},
+        {"process": "Sputtering"},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 8, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"},
+        {"process": "ALD"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "spinbot_process": {
+      "name": "Spinbot process",
+      "description": "Spinbot process with passivation layers",
+      "category": "Spinbot Processes",
+      "researcher": "Daniel",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning O2-Plasma", "config": {"solvents": 2}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 5, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 2, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "ALD"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "spinbot_gasquenched": {
+      "name": "Spinbot Gas Quenched",
+      "description": "Spinbot process with gas quenching technique",
+      "category": "Spinbot Processes",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning O2-Plasma", "config": {"solvents": 2}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 5, "spinsteps": 2, "gasquenching": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 2, "spinsteps": 1}},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "hybrid_process": {
+      "name": "Hybrid Process",
+      "description": "Hybrid process combining sequential evaporation with spin coating",
+      "category": "Hybrid Processes",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning O2-Plasma", "config": {"solvents": 2}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Seq-Evaporation", "config": {"materials": 2}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 3, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 2, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "Evaporation"},
+        {"process": "ALD"},
+        {"process": "Evaporation"}
+      ]
+    },
+    "sop_process": {
+      "name": "SOP Process",
+      "description": "Standard Operating Procedure process with NiO and PEAI treatment",
+      "category": "Standard Processes",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Cleaning O2-Plasma", "config": {"solvents": 3}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 6, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
+        {"process": "Evaporation"}
+      ]
+    },
+    "all_processes_test": {
+      "name": "All processes (Test)",
+      "description": "Comprehensive test template with all available processes",
+      "category": "Test Processes",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "ALD"},
+        {"process": "Blade Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "vacuumquenching": true}},
+        {"process": "Cleaning O2-Plasma", "config": {"solvents": 2}},
+        {"process": "Cleaning UV-Ozone"},
+        {"process": "Dip Coating"},
+        {"process": "Evaporation", "config": {"carbon_paste": true}},
+        {"process": "Generic Process"},
+        {"process": "Inkjet Printing", "config": {"solvents": 1, "solutes": 1, "annealing": true, "gavd": true}},
+        {"process": "Laser Scribing"},
+        {"process": "Slot Die Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "vacuumquenching": true}},
+        {"process": "Spin Coating", "config": {"solvents": 2, "solutes": 2, "spinsteps": 2, "antisolvent": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "vacuumquenching": true}},
+        {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "gasquenching": true}},
+        {"process": "Sputtering"}
+      ]
+    }
+  }
+}

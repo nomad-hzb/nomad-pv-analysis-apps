@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "file-uploader"
+version = "0.1.0"
+description = "File Uploader app for HySPRINT NOMAD Oasis"
+requires-python = ">=3.9"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "ipywidgets",
+    "ipyvuetify",
+    "requests",
+    "ipython",
+    "notebook",
+    "voila",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

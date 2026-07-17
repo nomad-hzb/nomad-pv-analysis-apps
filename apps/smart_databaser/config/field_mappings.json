@@ -1,0 +1,564 @@
+{
+  "version": 2,
+  "_readme": "Maps Excel column field keys (from sheet_experiment.py) to NOMAD archive JSON paths per process type, for live batch-template autofill. AUTHORITATIVE SOURCE (2026-07-15): this app's process types are ingested by NOMAD's own parser/mapper, which is the ground truth for archive field names - not the sample archive JSON dumps used earlier in this file's history (those only show what happened to be filled in one batch, not the full schema, and are easy to under-map from). Parser (routes Excel column headers -> per-process-type mapper by substring match): https://github.com/nomad-hzb/nomad-hysprint/blob/main/src/nomad_hysprint/parsers/hysprint_batch_parser.py . Field-by-field mapper (the map_<process_type> functions - this is where every archive path below was read from): https://github.com/nomad-hzb/nomad-baseclasses/blob/main/src/baseclasses/helper/solar_cell_batch_mapping.py . HOW TO UPDATE (both repos are actively developed upstream): (1) refetch both URLs above (raw.githubusercontent.com/.../main/... works without auth), (2) find the map_<type> function for the process type you're touching, (3) for each field you want, note the Excel column string passed to get_value(data, <key>, ...) - if <key> is a list, that's several ALTERNATIVE Excel spellings NOMAD's parser accepts, not several archive paths - and the archive attribute path being assigned into (a Python object's constructor kwarg name / attribute name, which the archive JSON serializes under that exact same key), (4) cross-check the Excel column string actually appears in apps/Excel_creator/sheet_experiment.py's generate_steps_for_process for that process type - if it doesn't, this app never generates that column, so don't bother mapping it (harmless if you do - it'll just never match a real field_spec - but it's noise), (5) add/edit the entry here; nothing in data_manager.py needs to change. 'path' is a list of dict keys / list indices walked in order. A field may instead use 'paths' (plural) - a list of ALTERNATIVE full archive paths tried in order, first non-None wins - for the cases (Evaporation, see below) where the archive stores the same field under a different parent key depending on data this app doesn't itself track (an 'Organic'/co-evaporation flag) - same field names inside, different list name. 'unit_verified: false' means the value is copied from the archive with NO unit conversion applied and has NOT been confirmed to match the Excel column's stated unit - check against the NOMAD web GUI, then flip to true, before trusting that field's autofill; string fields have no unit concept and are unit_verified: true. 'indexed_fields' generate one entry per n in 'range' (inclusive); '{i}' inside path_template (or path_templates, plural, same alternative-paths idea) is the 0-based list index (n - 1), '{n}' inside excel_key_template is the 1-based Excel column suffix. An indexed_fields entry may optionally carry a 'config_key' (e.g. 'solvents', 'solutes', 'spinsteps', 'materials') - tag exactly one representative entry per config concept; data_manager.infer_config_from_source_step uses it to widen a target process's config to match how much data a source batch step actually has. NOTE on process-type naming: the real archive's 'method' field doesn't always match this app's AVAILABLE_PROCESSES labels 1:1 (e.g. real 'Atomic Layer Deposition' vs this app's 'ALD', or a single real 'Cleaning' step covering what this app models as two separate types 'Cleaning O2-Plasma'/'Cleaning UV-Ozone') - see data_manager.resolve_process_type, which translates before these paths are looked up, so the keys below are still this app's own process type names, not the raw archive method string. Deliberately NOT mapped yet: Ink Recycling (separate mapper file, nomad_hysprint.parsers.file_parser.ink_recycling_mappers.map_ink_recycling, not yet fetched), Generic Process (free-form Name/Notes only, nothing structured to map), Sublimation (the real parser's parse() only substring-matches 'evaporation' in the column header, never 'sublimation' - Sublimation columns appear to have no real archive ingestion path at all despite sheet_experiment.py treating it like Evaporation client-side).",
+
+  "process_types": {
+    "Spin Coating": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing atmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Solution volume [uL]": {"path": ["solution", 0, "solution_volume"], "unit_verified": false},
+        "Viscosity [mPa*s]": {"path": ["solution", 0, "solution_viscosity"], "unit_verified": false},
+        "Contact angle [°]": {"path": ["solution", 0, "solution_contact_angle"], "unit_verified": false},
+        "Density [g/cm^3]": {"path": ["solution", 0, "solution_density"], "unit_verified": false},
+        "Surface tension [mN/m]": {"path": ["solution", 0, "solution_surface_tension"], "unit_verified": false},
+        "Rotation speed [rpm]": {"path": ["recipe_steps", 0, "speed"], "unit_verified": false},
+        "Rotation time [s]": {"path": ["recipe_steps", 0, "time"], "unit_verified": false},
+        "Acceleration [rpm/s]": {"path": ["recipe_steps", 0, "acceleration"], "unit_verified": false},
+        "Anti solvent name": {"path": ["quenching", "anti_solvent_2", "name"], "unit_verified": true},
+        "Anti solvent volume [ml]": {"path": ["quenching", "anti_solvent_volume"], "unit_verified": false},
+        "Anti solvent dropping time [s]": {"path": ["quenching", "anti_solvent_dropping_time"], "unit_verified": false},
+        "Anti solvent dropping speed [ul/s]": {"path": ["quenching", "anti_solvent_dropping_flow_rate"], "unit_verified": false},
+        "Anti solvent dropping heigt [mm]": {"path": ["quenching", "anti_solvent_dropping_height"], "unit_verified": false},
+        "Gas": {"path": ["quenching", "gas"], "unit_verified": true},
+        "Gas quenching start time [s]": {"path": ["quenching", "starting_delay"], "unit_verified": false},
+        "Gas quenching duration [s]": {"path": ["quenching", "duration"], "unit_verified": false},
+        "Gas quenching flow rate [ml/s]": {"path": ["quenching", "flow_rate"], "unit_verified": false},
+        "Gas quenching pressure [bar]": {"path": ["quenching", "pressure"], "unit_verified": false},
+        "Gas quenching velocity [m/s]": {"path": ["quenching", "velocity"], "unit_verified": false},
+        "Gas quenching height [mm]": {"path": ["quenching", "height"], "unit_verified": false},
+        "Nozzle shape": {"path": ["quenching", "nozzle_shape"], "unit_verified": true},
+        "Nozzle size [mm²]": {"path": ["quenching", "nozzle_size"], "unit_verified": false},
+        "Vacuum quenching start time [s]": {"path": ["quenching", "start_time"], "unit_verified": false},
+        "Vacuum quenching duration [s]": {"path": ["quenching", "duration"], "unit_verified": false},
+        "Vacuum quenching pressure [bar]": {"path": ["quenching", "pressure"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n} name",
+          "path_template": ["solution", 0, "solution_details", "solvent", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Solute {n} name",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solutes"
+        },
+        {
+          "excel_key_template": "Solute {n} Concentration [mM]",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "concentration_mol"],
+          "unit_verified": false,
+          "range": [1, 5]
+        },
+        {
+          "excel_key_template": "Rotation speed {n} [rpm]",
+          "path_template": ["recipe_steps", "{i}", "speed"],
+          "unit_verified": false,
+          "range": [1, 5],
+          "config_key": "spinsteps"
+        },
+        {
+          "excel_key_template": "Rotation time {n} [s]",
+          "path_template": ["recipe_steps", "{i}", "time"],
+          "unit_verified": false,
+          "range": [1, 5]
+        },
+        {
+          "excel_key_template": "Acceleration {n} [rpm/s]",
+          "path_template": ["recipe_steps", "{i}", "acceleration"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Slot Die Coating": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing atmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Solution volume [uL]": {"path": ["solution", 0, "solution_volume"], "unit_verified": false},
+        "Viscosity [mPa*s]": {"path": ["solution", 0, "solution_viscosity"], "unit_verified": false},
+        "Contact angle [°]": {"path": ["solution", 0, "solution_contact_angle"], "unit_verified": false},
+        "Density [g/cm^3]": {"path": ["solution", 0, "solution_density"], "unit_verified": false},
+        "Surface tension [mN/m]": {"path": ["solution", 0, "solution_surface_tension"], "unit_verified": false},
+        "Flow rate [ul/min]": {"path": ["properties", "flow_rate"], "unit_verified": false},
+        "Head gap [mm]": {"path": ["properties", "slot_die_head_distance_to_thinfilm"], "unit_verified": false},
+        "Speed [mm/s]": {"path": ["properties", "slot_die_head_speed"], "unit_verified": false},
+        "Chuck heating temperature [°C]": {"path": ["properties", "temperature"], "unit_verified": false},
+        "Gas": {"path": ["quenching", "gas"], "unit_verified": true},
+        "Gas quenching start time [s]": {"path": ["quenching", "starting_delay"], "unit_verified": false},
+        "Gas quenching duration [s]": {"path": ["quenching", "duration"], "unit_verified": false},
+        "Gas quenching flow rate [ml/s]": {"path": ["quenching", "flow_rate"], "unit_verified": false},
+        "Gas quenching pressure [bar]": {"path": ["quenching", "pressure"], "unit_verified": false},
+        "Gas quenching velocity [m/s]": {"path": ["quenching", "velocity"], "unit_verified": false},
+        "Gas quenching height [mm]": {"path": ["quenching", "height"], "unit_verified": false},
+        "Vacuum quenching start time [s]": {"path": ["quenching", "start_time"], "unit_verified": false},
+        "Vacuum quenching duration [s]": {"path": ["quenching", "duration"], "unit_verified": false},
+        "Vacuum quenching pressure [bar]": {"path": ["quenching", "pressure"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n} name",
+          "path_template": ["solution", 0, "solution_details", "solvent", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Solute {n} name",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solutes"
+        },
+        {
+          "excel_key_template": "Solute {n} Concentration [mM]",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "concentration_mol"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Blade Coating": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing atmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Solution volume [uL]": {"path": ["solution", 0, "solution_volume"], "unit_verified": false},
+        "Viscosity [mPa*s]": {"path": ["solution", 0, "solution_viscosity"], "unit_verified": false},
+        "Contact angle [°]": {"path": ["solution", 0, "solution_contact_angle"], "unit_verified": false},
+        "Density [g/cm^3]": {"path": ["solution", 0, "solution_density"], "unit_verified": false},
+        "Surface tension [mN/m]": {"path": ["solution", 0, "solution_surface_tension"], "unit_verified": false},
+        "Blade Speed [mm/s]": {"path": ["properties", "blade_speed"], "unit_verified": false},
+        "Dispensed Ink Volume [uL]": {"path": ["properties", "dispensed_volume"], "unit_verified": false},
+        "Blade Gap [um]": {"path": ["properties", "blade_substrate_gap"], "unit_verified": false},
+        "Blade Size": {"path": ["properties", "blade_size"], "unit_verified": true},
+        "Coating Width [mm]": {"path": ["properties", "coating_width"], "unit_verified": false},
+        "Coating Length [mm]": {"path": ["properties", "coating_length"], "unit_verified": false},
+        "Dead Length [mm]": {"path": ["properties", "dead_length"], "unit_verified": false},
+        "Bed Temperature [°C]": {"path": ["properties", "bed_temperature"], "unit_verified": false},
+        "Ink Temperature [°C]": {"path": ["properties", "ink_temperature"], "unit_verified": false},
+        "Gas": {"path": ["quenching", "gas"], "unit_verified": true},
+        "Gas quenching start time [s]": {"path": ["quenching", "starting_delay"], "unit_verified": false},
+        "Gas quenching duration [s]": {"path": ["quenching", "duration"], "unit_verified": false},
+        "Gas quenching flow rate [ml/s]": {"path": ["quenching", "flow_rate"], "unit_verified": false},
+        "Gas quenching pressure [bar]": {"path": ["quenching", "pressure"], "unit_verified": false},
+        "Gas quenching velocity [m/s]": {"path": ["quenching", "velocity"], "unit_verified": false},
+        "Gas quenching height [mm]": {"path": ["quenching", "height"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n} name",
+          "path_template": ["solution", 0, "solution_details", "solvent", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Solute {n} name",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solutes"
+        },
+        {
+          "excel_key_template": "Solute {n} Concentration [mM]",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "concentration_mol"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Dip Coating": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing atmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Solution volume [uL]": {"path": ["solution", 0, "solution_volume"], "unit_verified": false},
+        "Viscosity [mPa*s]": {"path": ["solution", 0, "solution_viscosity"], "unit_verified": false},
+        "Contact angle [°]": {"path": ["solution", 0, "solution_contact_angle"], "unit_verified": false},
+        "Density [g/cm^3]": {"path": ["solution", 0, "solution_density"], "unit_verified": false},
+        "Surface tension [mN/m]": {"path": ["solution", 0, "solution_surface_tension"], "unit_verified": false},
+        "Dipping duration [s]": {"path": ["properties", "time"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n} name",
+          "path_template": ["solution", 0, "solution_details", "solvent", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Solute {n} name",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solutes"
+        },
+        {
+          "excel_key_template": "Solute {n} Concentration [mM]",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "concentration_mol"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Inkjet Printing": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing atmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Solution volume [uL]": {"path": ["solution", 0, "solution_volume"], "unit_verified": false},
+        "Viscosity [mPa*s]": {"path": ["solution", 0, "solution_viscosity"], "unit_verified": false},
+        "Contact angle [°]": {"path": ["solution", 0, "solution_contact_angle"], "unit_verified": false},
+        "Density [g/cm^3]": {"path": ["solution", 0, "solution_density"], "unit_verified": false},
+        "Surface tension [mN/m]": {"path": ["solution", 0, "solution_surface_tension"], "unit_verified": false},
+        "Printhead name": {"path": ["properties", "print_head_properties", "print_head_name"], "unit_verified": true},
+        "Number of active nozzles": {"path": ["properties", "print_head_properties", "number_of_active_print_nozzles"], "unit_verified": true},
+        "Active nozzles": {"path": ["properties", "print_head_properties", "active_nozzles"], "unit_verified": true},
+        "Droplet density X [dpi]": {"path": ["properties", "drop_density"], "unit_verified": false},
+        "Droplet density Y [dpi]": {"path": ["properties", "drop_density_y"], "unit_verified": false},
+        "Quality factor": {"path": ["print_head_path", "quality_factor"], "unit_verified": true},
+        "Step size": {"path": ["print_head_path", "step_size"], "unit_verified": true},
+        "Printing direction": {"path": ["print_head_path", "directional"], "unit_verified": true},
+        "Number of swaths": {"path": ["print_head_path", "swaths"], "unit_verified": true},
+        "Printed area [mm²]": {"path": ["properties", "printed_area"], "unit_verified": false},
+        "Droplet per second [1/s]": {"path": ["properties", "print_head_properties", "print_nozzle_drop_frequency"], "unit_verified": false},
+        "Droplet volume [pl]": {"path": ["properties", "print_head_properties", "print_nozzle_drop_volume"], "unit_verified": false},
+        "Ink reservoir pressure [bar]": {"path": ["properties", "cartridge_pressure"], "unit_verified": false},
+        "Table temperature [°C]": {"path": ["properties", "substrate_temperature"], "unit_verified": false},
+        "Dropping Height [mm]": {"path": ["properties", "print_head_properties", "print_head_distance_to_substrate"], "unit_verified": false},
+        "Substrate thickness [mm]": {"path": ["properties", "substrate_height"], "unit_verified": false},
+        "Printing speed [mm/s]": {"path": ["properties", "print_head_properties", "print_speed"], "unit_verified": false},
+        "Print head angle [deg]": {"path": ["properties", "print_head_properties", "print_head_angle"], "unit_verified": false},
+        "Nozzle temperature [°C]": {"path": ["properties", "print_head_properties", "print_head_temperature"], "unit_verified": false},
+        "Nozzle voltage config file": {"path": ["nozzle_voltage_profile", "config_file"], "unit_verified": true},
+        "Image used": {"path": ["properties", "image_used"], "unit_verified": true},
+        "GAVD Gas": {"path": ["quenching", "gas_quenching_properties", "gas"], "unit_verified": true},
+        "GAVD start time [s]": {"path": ["quenching", "vacuum_properties", "start_time"], "unit_verified": false},
+        "GAVD vacuum pressure [mbar]": {"path": ["quenching", "vacuum_properties", "pressure"], "unit_verified": false},
+        "GAVD temperature [°C]": {"path": ["quenching", "vacuum_properties", "temperature"], "unit_verified": false},
+        "GAVD vacuum time [s]": {"path": ["quenching", "vacuum_properties", "duration"], "unit_verified": false},
+        "Gas flow duration [s]": {"path": ["quenching", "gas_quenching_properties", "duration"], "unit_verified": false},
+        "Gas flow pressure [mbar]": {"path": ["quenching", "gas_quenching_properties", "pressure"], "unit_verified": false},
+        "Nozzle shape": {"path": ["quenching", "gas_quenching_properties", "nozzle_shape"], "unit_verified": true},
+        "Nozzle type": {"path": ["quenching", "gas_quenching_properties", "nozzle_type"], "unit_verified": true},
+        "GAVD comment": {"path": ["quenching", "comment"], "unit_verified": true}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n} name",
+          "path_template": ["solution", 0, "solution_details", "solvent", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Solute {n} name",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solutes"
+        },
+        {
+          "excel_key_template": "Solute {n} Concentration [mM]",
+          "path_template": ["solution", 0, "solution_details", "solute", "{i}", "concentration_mol"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Evaporation": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Sample holder width [mm]": {
+          "paths": [
+            ["organic_evaporation", 0, "sample_holder"],
+            ["inorganic_evaporation", 0, "sample_holder"]
+          ],
+          "unit_verified": false
+        },
+        "Thickness [nm]": {
+          "paths": [
+            ["organic_evaporation", 0, "thickness"],
+            ["inorganic_evaporation", 0, "thickness"]
+          ],
+          "unit_verified": false
+        },
+        "Base pressure [bar]": {
+          "paths": [
+            ["organic_evaporation", 0, "pressure"],
+            ["inorganic_evaporation", 0, "pressure"]
+          ],
+          "unit_verified": false
+        },
+        "Pressure start [bar]": {
+          "paths": [
+            ["organic_evaporation", 0, "pressure_start"],
+            ["inorganic_evaporation", 0, "pressure_start"]
+          ],
+          "unit_verified": false
+        },
+        "Pressure end [bar]": {
+          "paths": [
+            ["organic_evaporation", 0, "pressure_end"],
+            ["inorganic_evaporation", 0, "pressure_end"]
+          ],
+          "unit_verified": false
+        },
+        "Source temperature start[°C]": {
+          "paths": [
+            ["organic_evaporation", 0, "temparature", 0],
+            ["inorganic_evaporation", 0, "temparature", 0]
+          ],
+          "unit_verified": false
+        },
+        "Source temperature end[°C]": {
+          "paths": [
+            ["organic_evaporation", 0, "temparature", 1],
+            ["inorganic_evaporation", 0, "temparature", 1]
+          ],
+          "unit_verified": false
+        },
+        "Substrate temperature [°C]": {
+          "paths": [
+            ["organic_evaporation", 0, "substrate_temparature"],
+            ["inorganic_evaporation", 0, "substrate_temparature"]
+          ],
+          "unit_verified": false
+        },
+        "Rate start [angstrom/s]": {
+          "paths": [
+            ["organic_evaporation", 0, "start_rate"],
+            ["inorganic_evaporation", 0, "start_rate"]
+          ],
+          "unit_verified": false
+        },
+        "Rate target [angstrom/s]": {
+          "paths": [
+            ["organic_evaporation", 0, "target_rate"],
+            ["inorganic_evaporation", 0, "target_rate"]
+          ],
+          "unit_verified": false
+        },
+        "Tooling factor": {
+          "paths": [
+            ["organic_evaporation", 0, "tooling_factor"],
+            ["inorganic_evaporation", 0, "tooling_factor"]
+          ],
+          "unit_verified": true
+        }
+      },
+      "indexed_fields": []
+    },
+    "Co-Evaporation": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Material name {n}",
+          "path_template": ["perovskite_evaporation", "{i}", "chemical_2", "name"],
+          "unit_verified": true,
+          "range": [1, 10],
+          "config_key": "materials"
+        },
+        {
+          "excel_key_template": "Source temperature start {n}[°C]",
+          "path_template": ["perovskite_evaporation", "{i}", "temparature", 0],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Source temperature end {n}[°C]",
+          "path_template": ["perovskite_evaporation", "{i}", "temparature", 1],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Thickness {n} [nm]",
+          "path_template": ["perovskite_evaporation", "{i}", "thickness"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Rate {n} [angstrom/s]",
+          "path_template": ["perovskite_evaporation", "{i}", "target_rate"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Base pressure {n} [bar]",
+          "path_template": ["perovskite_evaporation", "{i}", "pressure"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Pressure start {n} [bar]",
+          "path_template": ["perovskite_evaporation", "{i}", "pressure_start"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Pressure end {n} [bar]",
+          "path_template": ["perovskite_evaporation", "{i}", "pressure_end"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Substrate temperature {n} [°C]",
+          "path_template": ["perovskite_evaporation", "{i}", "substrate_temparature"],
+          "unit_verified": false,
+          "range": [1, 10]
+        },
+        {
+          "excel_key_template": "Tooling factor {n}",
+          "path_template": ["perovskite_evaporation", "{i}", "tooling_factor"],
+          "unit_verified": true,
+          "range": [1, 10]
+        }
+      ]
+    },
+    "Sputtering": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Gas": {"path": ["processes", 0, "gas_2", "name"], "unit_verified": true},
+        "Temperature [°C]": {"path": ["processes", 0, "temperature"], "unit_verified": false},
+        "Pressure [mbar]": {"path": ["processes", 0, "pressure"], "unit_verified": false},
+        "Deposition time [s]": {"path": ["processes", 0, "deposition_time"], "unit_verified": false},
+        "Burn in time [s]": {"path": ["processes", 0, "burn_in_time"], "unit_verified": false},
+        "Power [W]": {"path": ["processes", 0, "power"], "unit_verified": false},
+        "Rotation rate [rpm]": {"path": ["processes", 0, "rotation_rate"], "unit_verified": false},
+        "Thickness [nm]": {"path": ["processes", 0, "thickness"], "unit_verified": false},
+        "Gas flow rate [cm^3/min]": {"path": ["processes", 0, "gas_flow_rate"], "unit_verified": false}
+      },
+      "indexed_fields": []
+    },
+    "ALD": {
+      "fields": {
+        "Material name": {"path": ["layer", 0, "layer_material_name"], "unit_verified": true},
+        "Layer type": {"path": ["layer", 0, "layer_type"], "unit_verified": true},
+        "Tool/GB name": {"path": ["location"], "unit_verified": true},
+        "Source": {"path": ["properties", "source"], "unit_verified": true},
+        "Thickness [nm]": {"path": ["properties", "thickness"], "unit_verified": false},
+        "Temperature [°C]": {"path": ["properties", "temperature"], "unit_verified": false},
+        "Rate [A/s]": {"path": ["properties", "rate"], "unit_verified": false},
+        "Time [s]": {"path": ["properties", "time"], "unit_verified": false},
+        "Number of cycles": {"path": ["properties", "number_of_cycles"], "unit_verified": true},
+        "Precursor 1": {"path": ["properties", "material", "material", "name"], "unit_verified": true},
+        "Pulse duration 1 [s]": {"path": ["properties", "material", "pulse_duration"], "unit_verified": false},
+        "Manifold temperature 1 [°C]": {"path": ["properties", "material", "manifold_temperature"], "unit_verified": false},
+        "Bottle temperature 1 [°C]": {"path": ["properties", "material", "bottle_temperature"], "unit_verified": false},
+        "Precursor 2 (Oxidizer/Reducer)": {"path": ["properties", "oxidizer_reducer", "material", "name"], "unit_verified": true},
+        "Pulse duration 2 [s]": {"path": ["properties", "oxidizer_reducer", "pulse_duration"], "unit_verified": false},
+        "Manifold temperature 2 [°C]": {"path": ["properties", "oxidizer_reducer", "manifold_temperature"], "unit_verified": false}
+      },
+      "indexed_fields": []
+    },
+    "Cleaning UV-Ozone": {
+      "fields": {
+        "UV-Ozone Time [s]": {"path": ["cleaning_uv", 0, "time"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n}",
+          "path_template": ["cleaning", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Time {n} [s]",
+          "path_template": ["cleaning", "{i}", "time"],
+          "unit_verified": false,
+          "range": [1, 5]
+        },
+        {
+          "excel_key_template": "Temperature {n} [°C]",
+          "path_template": ["cleaning", "{i}", "temperature"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Cleaning O2-Plasma": {
+      "fields": {
+        "Gas-Plasma Gas": {"path": ["cleaning_plasma", 0, "plasma_type"], "unit_verified": true},
+        "Gas-Plasma Time [s]": {"path": ["cleaning_plasma", 0, "time"], "unit_verified": false},
+        "Gas-Plasma Power [W]": {"path": ["cleaning_plasma", 0, "power"], "unit_verified": false}
+      },
+      "indexed_fields": [
+        {
+          "excel_key_template": "Solvent {n}",
+          "path_template": ["cleaning", "{i}", "name"],
+          "unit_verified": true,
+          "range": [1, 5],
+          "config_key": "solvents"
+        },
+        {
+          "excel_key_template": "Time {n} [s]",
+          "path_template": ["cleaning", "{i}", "time"],
+          "unit_verified": false,
+          "range": [1, 5]
+        },
+        {
+          "excel_key_template": "Temperature {n} [°C]",
+          "path_template": ["cleaning", "{i}", "temperature"],
+          "unit_verified": false,
+          "range": [1, 5]
+        }
+      ]
+    },
+    "Laser Scribing": {
+      "fields": {
+        "Recipe file": {"path": ["recipe_file"], "unit_verified": true},
+        "Laser wavelength [nm]": {"path": ["properties", "laser_wavelength"], "unit_verified": true},
+        "Laser pulse time [ps]": {"path": ["properties", "laser_pulse_time"], "unit_verified": true},
+        "Laser pulse frequency [kHz]": {"path": ["properties", "laser_pulse_frequency"], "unit_verified": true},
+        "Speed [mm/s]": {"path": ["properties", "speed"], "unit_verified": true},
+        "Fluence [J/cm2]": {"path": ["properties", "fluence"], "unit_verified": true},
+        "Power [%]": {"path": ["properties", "power_in_percent"], "unit_verified": true},
+        "Width of cell [mm]": {"path": ["properties", "cell_width"], "unit_verified": true},
+        "Dead area [cm2]": {"path": ["properties", "dead_area"], "unit_verified": true},
+        "Number of cells": {"path": ["properties", "number_of_cells"], "unit_verified": true}
+      },
+      "indexed_fields": []
+    },
+    "Annealing": {
+      "fields": {
+        "Annealing temperature [°C]": {"path": ["annealing", "temperature"], "unit_verified": false},
+        "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
+        "Annealing athmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
+        "Relative humidity [%]": {"path": ["atmosphere", "relative_humidity"], "unit_verified": true}
+      },
+      "indexed_fields": []
+    }
+  }
+}

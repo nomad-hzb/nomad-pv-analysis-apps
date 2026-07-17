@@ -1,0 +1,27 @@
+[tool.pytest.ini_options]
+markers = ["live: requires live NOMAD server (skipped in CI)"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "G"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hysprint_utils"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pre-existing long HTML/CSS/JS/Markdown template strings cannot use per-line noqa inside literals
+"apps/Excel_creator/voila_experiment_app.py" = ["E501"]
+"apps/Excel_creator/sheet_data_entry_guide.py" = ["E501"]
+"apps/Excel_creator/sheet_experiment.py" = ["E501"]
+"apps/JV-Analysis/data_manager.py" = ["E501"]
+"apps/JV-Analysis/gui_components.py" = ["E501"]
+"apps/JV-Analysis/resizable_plot_utility.py" = ["E501"]
+"apps/bitmap_maker/gui_components.py" = ["E501"]
+"apps/bitmap_maker/utils.py" = ["E501"]
+"apps/Wetting_envelope/gui_components.py" = ["E501"]
+"shared/hysprint_utils/api_calls.py" = ["E501"]
+"apps/Global_analyzer/*.py" = ["E501"]
+"apps/MPPT_Analysis/fitting_tools.py" = ["E501"]
+"apps/MPPT_Analysis/gui_components.py" = ["E501"]

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "_readme": "Sets of 'analogous' fields that should count as ONE progress unit (filling either satisfies the pair), scoped per process INSTANCE - two different Spin Coating steps in the same sequence are never merged into one unit by an alias group. Primary real scenario: sheet_experiment.py names rotation-speed fields differently depending on spinsteps - 'Rotation speed [rpm]' when spinsteps == 1, vs 'Rotation speed {n} [rpm]' when spinsteps > 1 - same concept, different key. '{n}' in field_pattern is a wildcard resolved against whatever fields are actually present on a given process instance. To add a new alias group: add an entry here, nothing in alias_config.py needs to change.",
+
+  "alias_groups": [
+    {
+      "id": "spin_rotation_speed",
+      "description": "Rotation speed, single-step vs multi-step Spin Coating naming",
+      "members": [
+        {"process_type": "Spin Coating", "field_pattern": "Rotation speed [rpm]"},
+        {"process_type": "Spin Coating", "field_pattern": "Rotation speed {n} [rpm]"}
+      ]
+    },
+    {
+      "id": "spin_rotation_time",
+      "description": "Rotation time, single-step vs multi-step Spin Coating naming",
+      "members": [
+        {"process_type": "Spin Coating", "field_pattern": "Rotation time [s]"},
+        {"process_type": "Spin Coating", "field_pattern": "Rotation time {n} [s]"}
+      ]
+    },
+    {
+      "id": "spin_acceleration",
+      "description": "Acceleration, single-step vs multi-step Spin Coating naming",
+      "members": [
+        {"process_type": "Spin Coating", "field_pattern": "Acceleration [rpm/s]"},
+        {"process_type": "Spin Coating", "field_pattern": "Acceleration {n} [rpm/s]"}
+      ]
+    }
+  ]
+}

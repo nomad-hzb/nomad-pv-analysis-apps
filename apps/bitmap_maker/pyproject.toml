@@ -1,0 +1,23 @@
+[project]
+name = "bitmap-maker"
+version = "0.1.0"
+description = "HySPRINT bitmap maker app"
+requires-python = ">=3.10"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "ipython>=8.12",
+    "ipywidgets>=8.1",
+    "numpy>=2.4",
+    "Pillow>=12.2",
+    "scipy>=1.17",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

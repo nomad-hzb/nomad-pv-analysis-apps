@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m ruff check .)",
+      "Bash(python -m ruff check apps/Wetting_envelope apps/Excel_creator apps/bitmap_maker apps/PeroDatabase_downloader apps/Global_analyzer tests/Wetting_envelope tests/Excel_creator tests/bitmap_maker tests/PeroDatabase_downloader tests/Global_analyzer tests/conftest.py pyproject.toml)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep -v 'file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared')",
+      "Bash(python -c ' *)",
+      "Bash(\"/c/Users/oxl/PycharmProjects/nomad_voila/.venv/Scripts/python.exe\" -m pytest tests/ -m \"not live\" -p no:randomly --tb=no -q)",
+      "Bash(\"/c/Users/oxl/PycharmProjects/nomad_voila/.venv/Scripts/python.exe\" -m pytest tests/JV-Analysis/ -q --tb=short)",
+      "Bash(python -m ruff check --select T20 apps/Global_analyzer apps/Wetting_envelope apps/Excel_creator apps/bitmap_maker apps/PeroDatabase_downloader)",
+      "Bash(python -m ruff check --select T20 apps/Global_analyzer)",
+      "Bash(gh auth *)",
+      "Bash(python -m pytest tests/App_dashboard -v)",
+      "Bash(python -m ruff check --fix apps/App_dashboard tests/App_dashboard)",
+      "Bash(python -m ruff format apps/App_dashboard tests/App_dashboard)",
+      "Bash(python -m ruff check apps/App_dashboard tests/App_dashboard)",
+      "Bash(python -m ruff format --check apps/App_dashboard tests/App_dashboard)",
+      "Bash(python -m pytest tests/App_dashboard -q)",
+      "Bash(NOMAD_CLIENT_USER=edgar python -c ' *)",
+      "Bash(NOMAD_CLIENT_USER=edgar python -W ignore -c ' *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}

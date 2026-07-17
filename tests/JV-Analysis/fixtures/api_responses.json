@@ -1,0 +1,52 @@
+{
+  "sample_ids": ["sid-001", "sid-002"],
+  "descriptions": {},
+  "measurements": {
+    "sid-001": [
+      [
+        {
+          "data_file": "SampleA.nxs",
+          "jv_curve": [
+            {
+              "cell_name": "C1Rev",
+              "open_circuit_voltage": 1.05,
+              "short_circuit_current_density": 18.3,
+              "fill_factor": 0.784,
+              "efficiency": 15.1,
+              "potential_at_maximum_power_point": 0.87,
+              "current_density_at_maximun_power_point": 17.4,
+              "series_resistance": 4.2,
+              "shunt_resistance": 1200.0,
+              "voltage": [0.0, 0.3, 0.6, 0.9, 1.05],
+              "current_density": [-18.3, -18.0, -17.0, -10.0, 0.0]
+            }
+          ]
+        },
+        {"upload_id": "upload_abc"}
+      ]
+    ],
+    "sid-002": [
+      [
+        {
+          "data_file": "SampleB.nxs",
+          "jv_curve": [
+            {
+              "cell_name": "C2For",
+              "open_circuit_voltage": 0.98,
+              "short_circuit_current_density": 17.1,
+              "fill_factor": 0.720,
+              "efficiency": 12.1,
+              "potential_at_maximum_power_point": 0.80,
+              "current_density_at_maximun_power_point": 15.1,
+              "series_resistance": null,
+              "shunt_resistance": null,
+              "voltage": [0.0, 0.3, 0.6, 0.8, 0.98],
+              "current_density": [-17.1, -16.8, -15.5, -10.0, 0.0]
+            }
+          ]
+        },
+        {"upload_id": "upload_xyz"}
+      ]
+    ]
+  }
+}
