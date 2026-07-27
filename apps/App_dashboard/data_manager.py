@@ -35,25 +35,34 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "fa-upload",
         ),
         AppEntry(
+            "Excel_creator",
+            "excel_creator.ipynb",
+            "Excel Creator",
+            "Generate formatted Excel reports from measurement data.",
+            "fa-file-excel",
+        ),
+        AppEntry(
             "smart_databaser",
             "smart_databaser.ipynb",
             "Smart Databaser",
-            "Build and curate sample/batch entries in the NOMAD database.",
+            "The evolution of Excel Creator: build and curate sample/batch entries "
+            "straight into the NOMAD database, no spreadsheet required.",
             "fa-database",
+        ),
+        AppEntry(
+            "Entry_Auditor",
+            "entry_auditor.ipynb",
+            "Entry Auditor",
+            "Hunt down inconsistencies across your NOMAD database and fix the "
+            "values right where they live.",
+            "fa-clipboard-check",
         ),
         AppEntry(
             "PeroDatabase_downloader",
             "nomad_extractor.ipynb",
             "Database Downloader",
-            "Extract and export data from NOMAD into local files.",
+            "Extract and export data from NOMAD into files.",
             "fa-download",
-        ),
-        AppEntry(
-            "DesignOfExperiments",
-            "DoE.ipynb",
-            "Design of Experiments",
-            "Plan and generate experimental design matrices.",
-            "fa-flask",
         ),
     ],
     "Device Characterization": [
@@ -78,15 +87,6 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Analyze maximum power point tracking data for solar cells.",
             "fa-chart-line",
         ),
-        AppEntry(
-            "Global_analyzer",
-            "global_analyzer.ipynb",
-            "Global Analyzer",
-            "Explore and compare measurements across samples.",
-            "fa-globe",
-        ),
-    ],
-    "Optical & Structural Analysis": [
         AppEntry(
             "AbsPL_Analysis",
             "abspl_plotter.ipynb",
@@ -125,6 +125,20 @@ CATEGORIES: dict[str, list[AppEntry]] = {
     ],
     "Utilities & Calculators": [
         AppEntry(
+            "DesignOfExperiments",
+            "DoE.ipynb",
+            "Design of Experiments",
+            "Plan and generate experimental design matrices.",
+            "fa-flask",
+        ),
+        AppEntry(
+            "Global_analyzer",
+            "global_analyzer.ipynb",
+            "Global Analyzer",
+            "Explore and compare measurements across samples.",
+            "fa-globe",
+        ),
+        AppEntry(
             "Hansen_green_calculator",
             "hansen_app.ipynb",
             "Hansen Calculator",
@@ -137,13 +151,6 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Wetting Envelope",
             "Compute wetting envelopes for solvent selection.",
             "fa-water",
-        ),
-        AppEntry(
-            "Excel_creator",
-            "excel_creator.ipynb",
-            "Excel Creator",
-            "Generate formatted Excel reports from measurement data.",
-            "fa-file-excel",
         ),
         AppEntry(
             "bitmap_maker",
