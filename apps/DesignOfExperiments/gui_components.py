@@ -354,25 +354,56 @@ class GUIComponents:
     
     def create_sample_size_configurator(self) -> widgets.Widget:
         """Create sample size configuration interface."""
-        # Sample size slider
+        # Sample size slider - bar spans from the recommended minimum to 100.
         self.sample_size_slider = widgets.IntSlider(
             value=25,
             min=4,
-            max=500,
+            max=100,
             step=1,
             description="Sample Size:",
             style=self.INPUT_STYLE,
             layout=widgets.Layout(width='400px')
         )
-        
+
+        # Free-typing number box kept in sync with the slider. Unlike the
+        # slider it has no min/max, so a user can type a value above 100 or
+        # below the recommended minimum and it is used as-is.
+        self.sample_size_input = widgets.IntText(
+            value=25,
+            layout=widgets.Layout(width='80px')
+        )
+
+        self._syncing_sample_size = False
+
+        def _on_slider_change(change: Dict[str, Any]) -> None:
+            if self._syncing_sample_size:
+                return
+            self._syncing_sample_size = True
+            self.sample_size_input.value = change['new']
+            self._syncing_sample_size = False
+
+        def _on_input_change(change: Dict[str, Any]) -> None:
+            if self._syncing_sample_size:
+                return
+            self._syncing_sample_size = True
+            # Only move the bar; the bar can't visually go below its
+            # recommended-minimum floor or above 100, but the typed value
+            # itself is left untouched either way.
+            slider = self.sample_size_slider
+            self.sample_size_slider.value = max(slider.min, min(change['new'], slider.max))
+            self._syncing_sample_size = False
+
+        self.sample_size_slider.observe(_on_slider_change, names='value')
+        self.sample_size_input.observe(_on_input_change, names='value')
+
         # Minimum size label
         self.min_size_label = widgets.HTML(
             value="<i>Minimum recommended: 4 samples</i>",
             layout=widgets.Layout(margin='5px 0')
         )
-        
+
         return widgets.VBox([
-            self.sample_size_slider,
+            widgets.HBox([self.sample_size_slider, self.sample_size_input]),
             self.min_size_label
         ])
     
@@ -775,11 +806,22 @@ class GUIComponents:
         min_samples = max(count ** 2, 4)
         self.variable_count_label.value = f"<b>Variables: {count}</b> (Min samples: {min_samples})"
         
-        # Update minimum sample size if slider exists
+        # Update minimum sample size if slider exists. This only moves the
+        # bar's floor/position - it never overwrites a value the user has
+        # typed into sample_size_input, so a deliberately-smaller typed
+        # value keeps working.
         if hasattr(self, 'sample_size_slider') and count > 0:
-            self.sample_size_slider.min = min_samples
-            if self.sample_size_slider.value < min_samples:
-                self.sample_size_slider.value = min_samples
+            self._syncing_sample_size = True
+            try:
+                # If the recommended minimum exceeds the bar's cap, raise the
+                # cap so the recommended value stays reachable on the bar.
+                if min_samples > self.sample_size_slider.max:
+                    self.sample_size_slider.max = min_samples
+                self.sample_size_slider.min = min_samples
+                if self.sample_size_slider.value < min_samples:
+                    self.sample_size_slider.value = min_samples
+            finally:
+                self._syncing_sample_size = False
             # Update the label too
             if hasattr(self, 'min_size_label'):
                 self.min_size_label.value = f"<i>Minimum recommended: {min_samples} samples</i>"
@@ -841,7 +883,7 @@ class GUIComponents:
     def get_sampling_parameters(self) -> Dict[str, Any]:
         """Get sampling parameters from UI."""
         params = {
-            'n_samples': self.sample_size_slider.value if hasattr(self, 'sample_size_slider') else 25,
+            'n_samples': self.sample_size_input.value if hasattr(self, 'sample_size_input') else 25,
             'random_state': self.random_seed.value if hasattr(self, 'random_seed') else 42
         }
         
