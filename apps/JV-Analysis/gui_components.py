@@ -514,7 +514,11 @@ class FilterUI:
                     num_measurements = len(sample_df)
 
                     if condition not in selected_conditions:
-                        selected_conditions[condition] = {"samples": 0, "cells": 0, "measurements": 0}
+                        selected_conditions[condition] = {
+                            "samples": 0,
+                            "cells": 0,
+                            "measurements": 0,
+                        }
 
                     selected_conditions[condition]["samples"] += 1
                     selected_conditions[condition]["cells"] += num_cells
@@ -522,13 +526,15 @@ class FilterUI:
                     total_cells += num_cells
                     total_measurements += num_measurements
 
-            print("Selected %d samples: %d cells, %d measurements" % (
-                len(self.selected_samples), total_cells, total_measurements
-            ))
+            print(
+                "Selected %d samples: %d cells, %d measurements"
+                % (len(self.selected_samples), total_cells, total_measurements)
+            )
             for condition, stats in sorted(selected_conditions.items()):
-                print("  %s: %d samples, %d cells, %d measurements" % (
-                    condition, stats["samples"], stats["cells"], stats["measurements"]
-                ))
+                print(
+                    "  %s: %d samples, %d cells, %d measurements"
+                    % (condition, stats["samples"], stats["cells"], stats["measurements"])
+                )
 
     def get_jv_flip_current(self):
         """Return True when JV curves should use positive current (1st quadrant)."""
@@ -605,9 +611,7 @@ class FilterUI:
                 widgets.HTML("<b>JV Curve Orientation:</b>"),
                 self.jv_quadrant_checkbox,
             ],
-            layout=widgets.Layout(
-                border="1px solid #eee", padding="8px", margin="0 0 10px 0"
-            ),
+            layout=widgets.Layout(border="1px solid #eee", padding="8px", margin="0 0 10px 0"),
         )
         return widgets.VBox(
             [
@@ -627,6 +631,10 @@ class PlotUI:
     def __init__(self):
         self.plot_presets = {
             "Default": [
+                ("Boxplot", "The big 4: Voc, Jsc, FF, PCE", "by Variable"),
+                ("JV Curve", "Best device overall", "Show JV summary"),
+            ],
+            "Separated Boxplots": [
                 ("Boxplot", "PCE", "by Variable"),
                 ("Boxplot", "Voc", "by Variable"),
                 ("Boxplot", "Jsc", "by Variable"),
@@ -718,10 +726,14 @@ class PlotUI:
             width="100px",
         )
         option1_dropdown = WidgetFactory.create_dropdown(
-            options=[], description="Option 1:", width="100px",
+            options=[],
+            description="Option 1:",
+            width="100px",
         )
         option2_dropdown = WidgetFactory.create_dropdown(
-            options=[], description="Option 2:", width="100px",
+            options=[],
+            description="Option 2:",
+            width="100px",
         )
 
         _BEST_DEVICE_OPTIONS = {
@@ -752,7 +764,9 @@ class PlotUI:
             indent=False,
             layout=widgets.Layout(
                 width="160px",
-                display="" if plot_type_dropdown.value in ("Boxplot", "Boxplot (omitted)") else "none",
+                display=""
+                if plot_type_dropdown.value in ("Boxplot", "Boxplot (omitted)")
+                else "none",
             ),
         )
 
@@ -770,7 +784,9 @@ class PlotUI:
         )
         plot_type_dropdown.observe(update_direction_visibility, names="value")
 
-        return widgets.HBox([plot_type_dropdown, option1_dropdown, option2_dropdown, direction_checkbox])
+        return widgets.HBox(
+            [plot_type_dropdown, option1_dropdown, option2_dropdown, direction_checkbox]
+        )
 
     def _update_plot_options(self, plot_type_dropdown, option1_dropdown, option2_dropdown):
         """Update option dropdowns based on plot type"""
@@ -914,7 +930,8 @@ class PlotUI:
                 }
                 if plot_type == "JV Curve" and option1 in _best_device_opts:
                     new_group.children[2].value = (
-                        option2 if option2 in ("Show JV summary", "Hide JV summary")
+                        option2
+                        if option2 in ("Show JV summary", "Hide JV summary")
                         else "Show JV summary"
                     )
                 elif option2 in new_group.children[2].options:

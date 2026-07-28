@@ -221,9 +221,7 @@ class ResizablePlotManager:
 
         for i, (fig, name) in enumerate(zip(figs, names)):
             try:
-                display(widgets.HTML(
-                    f'<h4 style="margin:12px 0 2px 0;padding:0;">{name}</h4>'
-                ))
+                display(widgets.HTML(f'<h4 style="margin:12px 0 2px 0;padding:0;">{name}</h4>'))
                 # Reduce the bottom margin so there is no large blank gap below each plot
                 try:
                     b = fig.layout.margin.b
@@ -231,7 +229,11 @@ class ResizablePlotManager:
                         fig.update_layout(margin=dict(b=25))
                 except Exception:
                     pass
-                display(fig)
+                # Wrap as a FigureWidget: Voila renders ipywidgets natively via the comm
+                # protocol, whereas a plain go.Figure relies on the notebook's plotly
+                # mimetype renderer, which isn't guaranteed to be registered server-side
+                # (this is why plots showed in VS Code but not on the deployed server).
+                display(go.FigureWidget(fig))
             except Exception as e:
                 logger.error("Error displaying plot %d (%s): %s", i + 1, name, e)
 
