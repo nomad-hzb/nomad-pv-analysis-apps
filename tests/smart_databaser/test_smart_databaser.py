@@ -3441,6 +3441,31 @@ def test_build_field_row_date_field_today_button_fills_current_date(fresh_state)
     assert value_widget.value == datetime.now().strftime("%d-%m-%Y")
 
 
+def test_build_field_row_datetime_field_colon_is_not_a_forbidden_character(fresh_state):
+    """Regression test: Datetime's "%d.%m.%Y %H:%M:%S" format needs colons, and this
+    field never feeds compute_nomad_id/build_experiment_filename - it must be exempt from
+    the forbidden-character guard (colon is otherwise in FORBIDDEN_VALUE_CHARACTERS)."""
+    process = fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    panel = ProcessFieldsPanel(fresh_state, process)
+
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    datetime_row = rows_by_label["Datetime *"]
+    value_widget, today_button, warning = (
+        datetime_row.children[2],
+        datetime_row.children[3],
+        datetime_row.children[-1],
+    )
+    assert today_button.description == "Today"
+
+    today_button.click()
+
+    assert ":" in value_widget.value
+    assert process.field_specs["Datetime"].value == value_widget.value
+    assert warning.value == ""
+    assert not value_widget.layout.border  # guard never even touched this widget
+
+
 def test_build_field_row_operator_field_me_button_fills_current_user(fresh_state, monkeypatch):
     monkeypatch.setenv("NOMAD_CLIENT_USER", "Jane Doe")
     process = fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
@@ -3549,16 +3574,25 @@ def test_variation_template_panel_apply_updates_state_and_legend(fresh_state):
     assert calls == [1]
 
 
-def test_variation_template_panel_refresh_reflects_new_varying_fields(fresh_state):
+def test_variation_template_panel_hides_when_no_matrix_table(fresh_state):
+    """Same show/hide condition as VaryingFieldsMatrix's own placeholder - no point
+    offering a custom Variation format when there's no varying-fields table to apply it
+    to (no varying field, or no sample yet)."""
     fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
     rebuild_field_specs(fresh_state)
     process = fresh_state.get_process(1)
     panel = VariationTemplatePanel(fresh_state)
-    assert "No fields are marked" in panel.legend.value
+    assert panel.layout.display == "none"
 
+    # a varying field alone, with no sample, still isn't a real table
     set_field_varies(process.field_specs["Material name"], True, [])
     panel.refresh()
+    assert panel.layout.display == "none"
 
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    panel.refresh()
+
+    assert panel.layout.display == ""
     assert "Material name" in panel.legend.value
 
 

@@ -102,12 +102,14 @@ def _forbidden_chars_message(forbidden: list) -> str:
 
 def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets.HTML, on_valid):
     """Shared by every data-value Text widget in this app (field rows, matrix cells) -
-    NOT the Variation template pattern, which legitimately needs a backslash. Rejects
-    (does not persist) any value containing a data_manager.FORBIDDEN_VALUE_CHARACTERS
-    character: shows a red border + warning message instead of calling on_valid, so nothing
-    downstream (Excel generation, Nomad ID) ever sees it. The widget still shows whatever
-    the user typed - only the underlying state write is skipped - so typing isn't fought
-    mid-keystroke."""
+    NOT the Variation template pattern (needs a backslash) and NOT Date/Datetime fields
+    (see _DATE_FIELD_FORMATS - "%d.%m.%Y %H:%M:%S" legitimately needs colons, and neither
+    field ever feeds into compute_nomad_id/build_experiment_filename anyway, so there's
+    nothing downstream for a colon to break here). Rejects (does not persist) any value
+    containing a data_manager.FORBIDDEN_VALUE_CHARACTERS character: shows a red border +
+    warning message instead of calling on_valid, so nothing downstream (Excel generation,
+    Nomad ID) ever sees it. The widget still shows whatever the user typed - only the
+    underlying state write is skipped - so typing isn't fought mid-keystroke."""
 
     def _on_change(change):
         new_value = change["new"]
@@ -167,11 +169,18 @@ def _build_field_row(
             placeholder=placeholder,
             layout=widgets.Layout(width="200px"),
         )
-        _guard_forbidden_characters(
-            value_widget,
-            warning_html,
-            lambda new_value, key=field_key: on_value_change(key, new_value),
-        )
+        if field_key in _DATE_FIELD_FORMATS:
+            # Exempt: colons in "HH:MM:SS" are legitimate here, and this field never
+            # feeds into an ID/filename - see _guard_forbidden_characters' docstring.
+            value_widget.observe(
+                lambda change, key=field_key: on_value_change(key, change["new"]), names="value"
+            )
+        else:
+            _guard_forbidden_characters(
+                value_widget,
+                warning_html,
+                lambda new_value, key=field_key: on_value_change(key, new_value),
+            )
 
         date_format = _DATE_FIELD_FORMATS.get(field_key)
         if date_format is not None:
@@ -865,7 +874,9 @@ class VariationTemplatePanel(widgets.VBox):
     Needs an explicit refresh() wired into app.py's refresh_all: the \\N legend depends on
     iter_varying_fields(state), which changes in response to OTHER widgets' actions
     (ProcessFieldsPanel/ExperimentInfoPanel's 'varies' checkboxes), not this panel's
-    own."""
+    own. Hides itself entirely (same condition VaryingFieldsMatrix uses to show its own
+    placeholder) whenever there's no actual matrix table to apply a Variation format
+    to."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
@@ -906,14 +917,14 @@ class VariationTemplatePanel(widgets.VBox):
 
     def refresh(self) -> None:
         """Re-renders the \\N legend from the CURRENT varying fields - call whenever
-        anything outside this panel changes which fields are marked varying."""
+        anything outside this panel changes which fields are marked varying. Hides the
+        whole panel (same condition as VaryingFieldsMatrix's own placeholder) when
+        there's no varying field, or no sample, for a Variation format to apply to."""
         varying_fields = iter_varying_fields(self.state)
-        if not varying_fields:
-            self.legend.value = (
-                "<i style='color:#7f8c8d; font-size:11px;'>No fields are marked "
-                "'varies' yet - mark some below to see the \\N legend.</i>"
-            )
+        if not varying_fields or not self.state.sample_numbers():
+            self.layout.display = "none"
             return
+        self.layout.display = ""
         rows = [
             f"<code>\\{index}</code> = {label}"
             for index, (label, _spec) in enumerate(varying_fields, start=1)
@@ -1143,16 +1154,16 @@ def _progress_html(filled: int, total: int) -> str:
 def _field_row_caption() -> widgets.HTML:
     return widgets.HTML(
         value=(
-            "<i style='color:#7f8c8d; font-size:11px;'>Check 'varies' if a field's value "
-            "differs per sample - it moves into the Varying Fields matrix below and stays "
-            "editable there. <b>Legend:</b> a field name followed by <b>*</b> is required "
-            "(counts toward the completion bar/nudge review below - to change what's "
-            "required, edit config/required_fields.json, there's no in-app toggle for "
-            "this). <span style='color:#c0392b'>&#9888; outlier</span> means an autofilled "
-            "value differs substantially from other samples at the same step - worth a "
-            "second look, not necessarily wrong. The grey 'Sourced from Batch ...' line "
-            "above the fields applies to every autofilled field in this section, not just "
-            "one.</i>"
+            "<i style='color:#7f8c8d; font-size:11px;'>"
+            "Check 'varies' if a field's value differs per sample - it moves into the "
+            "Varying Fields matrix below and stays editable there.<br>"
+            "<b>*</b> after a field name = required (counts toward the completion "
+            "bar/nudge review below - edit config/required_fields.json to change this, "
+            "there's no in-app toggle).<br>"
+            "<span style='color:#c0392b'>&#9888; outlier</span> = an autofilled value "
+            "differs substantially from other samples at the same step - worth a second "
+            "look, not necessarily wrong."
+            "</i>"
         )
     )
 
