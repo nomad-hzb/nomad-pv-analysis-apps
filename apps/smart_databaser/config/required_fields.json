@@ -1,0 +1,5 @@
+{
+  "_readme": "Exceptions-only: every field defaults to required_for_progress=True (see ProcessFieldSpec in data_manager.py). List a field key in 'global' to make it never required, for every process type. List it under 'by_process_type' -> '<process type>' to except it only for that one process type (this app's own AVAILABLE_PROCESSES label, e.g. 'Evaporation', 'Cleaning UV-Ozone' - not the raw NOMAD schema class name). Loaded by data_manager.load_required_field_exceptions(). There is no in-app UI to edit this - required fields are shown as a '*' next to the label instead of a checkbox; edit this file directly (or ask to have it edited) to change what counts toward the completion bar/nudge review.",
+  "global": ["Notes"],
+  "by_process_type": {}
+}

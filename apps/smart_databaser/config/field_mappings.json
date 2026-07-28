@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "_readme": "Maps Excel column field keys (from sheet_experiment.py) to NOMAD archive JSON paths per process type, for live batch-template autofill. AUTHORITATIVE SOURCE (2026-07-15): this app's process types are ingested by NOMAD's own parser/mapper, which is the ground truth for archive field names - not the sample archive JSON dumps used earlier in this file's history (those only show what happened to be filled in one batch, not the full schema, and are easy to under-map from). Parser (routes Excel column headers -> per-process-type mapper by substring match): https://github.com/nomad-hzb/nomad-hysprint/blob/main/src/nomad_hysprint/parsers/hysprint_batch_parser.py . Field-by-field mapper (the map_<process_type> functions - this is where every archive path below was read from): https://github.com/nomad-hzb/nomad-baseclasses/blob/main/src/baseclasses/helper/solar_cell_batch_mapping.py . HOW TO UPDATE (both repos are actively developed upstream): (1) refetch both URLs above (raw.githubusercontent.com/.../main/... works without auth), (2) find the map_<type> function for the process type you're touching, (3) for each field you want, note the Excel column string passed to get_value(data, <key>, ...) - if <key> is a list, that's several ALTERNATIVE Excel spellings NOMAD's parser accepts, not several archive paths - and the archive attribute path being assigned into (a Python object's constructor kwarg name / attribute name, which the archive JSON serializes under that exact same key), (4) cross-check the Excel column string actually appears in apps/Excel_creator/sheet_experiment.py's generate_steps_for_process for that process type - if it doesn't, this app never generates that column, so don't bother mapping it (harmless if you do - it'll just never match a real field_spec - but it's noise), (5) add/edit the entry here; nothing in data_manager.py needs to change. 'path' is a list of dict keys / list indices walked in order. A field may instead use 'paths' (plural) - a list of ALTERNATIVE full archive paths tried in order, first non-None wins - for the cases (Evaporation, see below) where the archive stores the same field under a different parent key depending on data this app doesn't itself track (an 'Organic'/co-evaporation flag) - same field names inside, different list name. 'unit_verified: false' means the value is copied from the archive with NO unit conversion applied and has NOT been confirmed to match the Excel column's stated unit - check against the NOMAD web GUI, then flip to true, before trusting that field's autofill; string fields have no unit concept and are unit_verified: true. 'indexed_fields' generate one entry per n in 'range' (inclusive); '{i}' inside path_template (or path_templates, plural, same alternative-paths idea) is the 0-based list index (n - 1), '{n}' inside excel_key_template is the 1-based Excel column suffix. An indexed_fields entry may optionally carry a 'config_key' (e.g. 'solvents', 'solutes', 'spinsteps', 'materials') - tag exactly one representative entry per config concept; data_manager.infer_config_from_source_step uses it to widen a target process's config to match how much data a source batch step actually has. NOTE on process-type naming: the real archive's 'method' field doesn't always match this app's AVAILABLE_PROCESSES labels 1:1 (e.g. real 'Atomic Layer Deposition' vs this app's 'ALD', or a single real 'Cleaning' step covering what this app models as two separate types 'Cleaning O2-Plasma'/'Cleaning UV-Ozone') - see data_manager.resolve_process_type, which translates before these paths are looked up, so the keys below are still this app's own process type names, not the raw archive method string. Deliberately NOT mapped yet: Ink Recycling (separate mapper file, nomad_hysprint.parsers.file_parser.ink_recycling_mappers.map_ink_recycling, not yet fetched), Generic Process (free-form Name/Notes only, nothing structured to map), Sublimation (the real parser's parse() only substring-matches 'evaporation' in the column header, never 'sublimation' - Sublimation columns appear to have no real archive ingestion path at all despite sheet_experiment.py treating it like Evaporation client-side).",
+  "_readme": "Maps Excel column field keys (from sheet_experiment.py) to NOMAD archive JSON paths per process type, for live batch-template autofill. AUTHORITATIVE SOURCE (2026-07-15): this app's process types are ingested by NOMAD's own parser/mapper, which is the ground truth for archive field names - not the sample archive JSON dumps used earlier in this file's history (those only show what happened to be filled in one batch, not the full schema, and are easy to under-map from). Parser (routes Excel column headers -> per-process-type mapper by substring match): https://github.com/nomad-hzb/nomad-hysprint/blob/main/src/nomad_hysprint/parsers/hysprint_batch_parser.py . Field-by-field mapper (the map_<process_type> functions - this is where every archive path below was read from): https://github.com/nomad-hzb/nomad-baseclasses/blob/main/src/baseclasses/helper/solar_cell_batch_mapping.py . HOW TO UPDATE (both repos are actively developed upstream): (1) refetch both URLs above (raw.githubusercontent.com/.../main/... works without auth), (2) find the map_<type> function for the process type you're touching, (3) for each field you want, note the Excel column string passed to get_value(data, <key>, ...) - if <key> is a list, that's several ALTERNATIVE Excel spellings NOMAD's parser accepts, not several archive paths - and the archive attribute path being assigned into (a Python object's constructor kwarg name / attribute name, which the archive JSON serializes under that exact same key), (4) cross-check the Excel column string actually appears in apps/Excel_creator/sheet_experiment.py's generate_steps_for_process for that process type - if it doesn't, this app never generates that column, so don't bother mapping it (harmless if you do - it'll just never match a real field_spec - but it's noise), (5) add/edit the entry here; nothing in data_manager.py needs to change. 'path' is a list of dict keys / list indices walked in order. A field may instead use 'paths' (plural) - a list of ALTERNATIVE full archive paths tried in order, first non-None wins - for the cases (Evaporation, see below) where the archive stores the same field under a different parent key depending on data this app doesn't itself track (an 'Organic'/co-evaporation flag) - same field names inside, different list name. 'unit_verified: false' means the value is copied from the archive with NO unit conversion applied and has NOT been confirmed to match the Excel column's stated unit - check against the NOMAD web GUI, then flip to true, before trusting that field's autofill; string fields have no unit concept and are unit_verified: true. 'indexed_fields' generate one entry per n in 'range' (inclusive); '{i}' inside path_template (or path_templates, plural, same alternative-paths idea) is the 0-based list index (n - 1), '{n}' inside excel_key_template is the 1-based Excel column suffix. An indexed_fields entry may optionally carry a 'config_key' (e.g. 'solvents', 'solutes', 'spinsteps', 'materials') - tag exactly one representative entry per config concept; data_manager.infer_config_from_source_step uses it to widen a target process's config to match how much data a source batch step actually has. NOTE on process-type naming: the real archive's 'method' field doesn't always match this app's AVAILABLE_PROCESSES labels 1:1 (e.g. real 'Atomic Layer Deposition' vs this app's 'ALD', or a single real 'Cleaning' step covering what this app models as two separate types 'Cleaning O2-Plasma'/'Cleaning UV-Ozone') - see data_manager.resolve_process_type, which translates before these paths are looked up, so the keys below are still this app's own process type names, not the raw archive method string. Deliberately NOT mapped yet: Ink Recycling (separate mapper file, nomad_hysprint.parsers.file_parser.ink_recycling_mappers.map_ink_recycling, not yet fetched), Generic Process (free-form Name/Notes only, nothing structured to map), Sublimation (the real parser's parse() only substring-matches 'evaporation' in the column header, never 'sublimation' - Sublimation columns appear to have no real archive ingestion path at all despite sheet_experiment.py treating it like Evaporation client-side). An optional 'multiply' key (field entries and indexed_fields entries) applies a confirmed numeric unit-conversion factor to the raw archive value before it's written/previewed (data_manager.FIELD_VALUE_MULTIPLIERS/_apply_multiplier) - only add it once verified against the actual NOMAD quantity definition, not guessed, same discipline as unit_verified. Example added 2026-07-28: Cleaning's shared CleaningTechnique.time quantity is declared unit='minute' in nomad-baseclasses/material_processes_misc/cleaning.py, but this app's Excel columns for it ('Time {n} [s]', 'UV-Ozone Time [s]', 'Gas-Plasma Time [s]') are labeled seconds - confirmed live against real batch HZB_IJP_Green Ink_6_1 (a real value of 15 = 15 minutes, previously copied unconverted into a '[s]' column) - so those three carry 'multiply': 60 and are now unit_verified: true. The 'Experiment Info' entry below is a special case: its 'path' segments index into a synthetic {'sample': <HySprint_Sample data>, 'substrate': <HySprint_Substrate data>} dict (see data_manager.fetch_experiment_info_source), not a process step from get_processing_steps, since these fields live on the sample/substrate entities rather than a process. Date/Project_Name/Batch/Subbatch are deliberately never autofilled even though 'Experiment Info' has other mapped fields - see EXPERIMENT_INFO_NEVER_AUTOFILLED in data_manager.py. 'Sample dimension' has no known NOMAD archive source and is deliberately left unmapped.",
 
   "process_types": {
     "Spin Coating": {
@@ -484,7 +484,7 @@
     },
     "Cleaning UV-Ozone": {
       "fields": {
-        "UV-Ozone Time [s]": {"path": ["cleaning_uv", 0, "time"], "unit_verified": false}
+        "UV-Ozone Time [s]": {"path": ["cleaning_uv", 0, "time"], "unit_verified": true, "multiply": 60}
       },
       "indexed_fields": [
         {
@@ -497,8 +497,9 @@
         {
           "excel_key_template": "Time {n} [s]",
           "path_template": ["cleaning", "{i}", "time"],
-          "unit_verified": false,
-          "range": [1, 5]
+          "unit_verified": true,
+          "range": [1, 5],
+          "multiply": 60
         },
         {
           "excel_key_template": "Temperature {n} [°C]",
@@ -511,7 +512,7 @@
     "Cleaning O2-Plasma": {
       "fields": {
         "Gas-Plasma Gas": {"path": ["cleaning_plasma", 0, "plasma_type"], "unit_verified": true},
-        "Gas-Plasma Time [s]": {"path": ["cleaning_plasma", 0, "time"], "unit_verified": false},
+        "Gas-Plasma Time [s]": {"path": ["cleaning_plasma", 0, "time"], "unit_verified": true, "multiply": 60},
         "Gas-Plasma Power [W]": {"path": ["cleaning_plasma", 0, "power"], "unit_verified": false}
       },
       "indexed_fields": [
@@ -525,8 +526,9 @@
         {
           "excel_key_template": "Time {n} [s]",
           "path_template": ["cleaning", "{i}", "time"],
-          "unit_verified": false,
-          "range": [1, 5]
+          "unit_verified": true,
+          "range": [1, 5],
+          "multiply": 60
         },
         {
           "excel_key_template": "Temperature {n} [°C]",
@@ -557,6 +559,17 @@
         "Annealing time [min]": {"path": ["annealing", "time"], "unit_verified": false},
         "Annealing athmosphere": {"path": ["annealing", "atmosphere"], "unit_verified": true},
         "Relative humidity [%]": {"path": ["atmosphere", "relative_humidity"], "unit_verified": true}
+      },
+      "indexed_fields": []
+    },
+    "Experiment Info": {
+      "fields": {
+        "Number of junctions": {"path": ["sample", "number_of_junctions"], "unit_verified": true},
+        "Substrate material": {"path": ["substrate", "substrate"], "unit_verified": true},
+        "Substrate conductive layer": {"path": ["substrate", "conducting_material", 0], "unit_verified": true},
+        "Sample area [cm^2]": {"path": ["substrate", "solar_cell_area"], "unit_verified": true},
+        "Sheet Resistance [Ohms/square]": {"path": ["substrate", "layer_sheet_resistance"], "unit_verified": false},
+        "Transmission [%]": {"path": ["substrate", "layer_transmission"], "unit_verified": false}
       },
       "indexed_fields": []
     }

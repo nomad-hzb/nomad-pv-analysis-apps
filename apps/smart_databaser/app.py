@@ -7,10 +7,12 @@ import logging
 import ipywidgets as widgets
 from data_manager import ExperimentState, NomadSessionCache, rebuild_field_specs
 from gui_components import (
+    BatchFieldMappingDebugPanel,
     NudgePopupFlow,
     ProcessSequenceBuilder,
     ProgressBarWidget,
     SampleSetupPanel,
+    VariationTemplatePanel,
     VaryingFieldsMatrix,
     create_finish_section,
     create_whole_experiment_template_picker,
@@ -44,6 +46,7 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
     progress_bar = ProgressBarWidget(state)
     matrix = VaryingFieldsMatrix(state)
     sequence_builder = ProcessSequenceBuilder(state, url, token, cache)
+    variation_template_panel = VariationTemplatePanel(state, on_change=lambda: refresh_all())
 
     def refresh_all():
         progress_bar.refresh()
@@ -51,8 +54,11 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
         # ProcessSequenceBuilder only re-renders itself in response to its OWN actions -
         # without this, the whole-experiment template picker replacing
         # state.process_sequence wholesale would update the data but leave the on-screen
-        # rows stale.
+        # rows stale. Same reasoning for variation_template_panel's \N legend, which
+        # depends on iter_varying_fields(state) - a 'varies' checkbox toggled anywhere
+        # else must still refresh this panel's legend.
         sequence_builder.refresh()
+        variation_template_panel.refresh()
 
     sequence_builder.on_change = refresh_all
 
@@ -86,6 +92,10 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
 
     finish_section = create_finish_section(state, url, token, cache, progress_bar)
 
+    debug_panel = widgets.Accordion(children=[BatchFieldMappingDebugPanel(url, token, cache)])
+    debug_panel.set_title(0, "Debug: Batch Field Mapping")
+    debug_panel.selected_index = None  # collapsed by default - diagnostic tool, not everyday UI
+
     main_interface = widgets.VBox(
         [
             widgets.HTML(value="<h2>Smart Databaser</h2>"),
@@ -107,11 +117,13 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
             refresh_matrix_button,
             refresh_matrix_status,
             matrix,
+            variation_template_panel,
             widgets.HTML(value="<h4>Nudge Review</h4>"),
             nudge_button,
             nudge_container,
             widgets.HTML(value="<h4>Finish</h4>"),
             finish_section,
+            debug_panel,
         ],
         layout=widgets.Layout(padding="15px", max_width="1100px"),
     )

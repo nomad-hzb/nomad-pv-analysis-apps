@@ -15,6 +15,7 @@ from app import initialize_ui
 from data_manager import (
     EXPERIMENT_INFO_COMPUTED_KEYS,
     FIELD_MAPPINGS_CONFIG_PATH,
+    FORBIDDEN_VALUE_CHARACTERS,
     PIXEL_FIELD_KEYS,
     PROCESS_TYPE_FIELD_PATHS,
     FieldProvenance,
@@ -24,10 +25,13 @@ from data_manager import (
     ProcessInstance,
     append_parent_id_column,
     apply_process_override,
+    apply_variation_template,
     apply_whole_experiment_template,
+    autofill_experiment_info_from_batch,
     autofill_process_from_batch,
     build_column_map,
     build_experiment_filename,
+    build_field_mapping_debug_report,
     build_missing_fields_summary,
     build_nudge_queue,
     build_process_sequence_from_batch,
@@ -42,19 +46,25 @@ from data_manager import (
     compute_variation_label,
     enumerate_sample_rows,
     expand_process_config_for_source,
+    fetch_experiment_info_source,
     fetch_process_field_values,
+    find_forbidden_characters,
     generate_full_workbook,
     generate_header_workbook,
     infer_config_from_source_step,
+    is_field_required_by_default,
     is_outlier,
     iter_varying_fields,
     list_process_occurrences,
     load_field_mappings,
+    load_field_value_multipliers,
+    load_required_field_exceptions,
     occurrence_index_for_process,
     preview_value_for_field,
     process_sequence_to_dicts,
     progress_band,
     rebuild_field_specs,
+    render_variation_template,
     resolve_cell_value,
     resolve_process_type,
     set_field_if_empty,
@@ -64,18 +74,21 @@ from data_manager import (
     set_pixel_field_if_empty,
     set_pixel_field_manual,
     steps_for_process_type,
+    subbatch_for_sample,
     sync_field_specs_from_columns,
     update_variation_column,
     upload_experiment_excel,
     workbook_to_bytes,
 )
 from gui_components import (
+    BatchFieldMappingDebugPanel,
     ExperimentInfoPanel,
     NudgePopupFlow,
     ProcessFieldsPanel,
     ProcessSequenceBuilder,
     ProgressBarWidget,
     SampleSetupPanel,
+    VariationTemplatePanel,
     VaryingFieldsMatrix,
     create_download_button,
     create_finish_section,
@@ -1098,9 +1111,16 @@ def test_clear_autofilled_value_on_varying_field_only_clears_matching_samples():
 # ---------------------------------------------------------------------------
 
 
-def _cache_with(batch_id: str, steps: list[dict]) -> NomadSessionCache:
+def _cache_with(
+    batch_id: str, steps: list[dict], experiment_info_source: dict | None = None
+) -> NomadSessionCache:
+    """experiment_info_source defaults to None (pre-cached, not fetched) so tests that
+    don't care about Experiment Info autofill never trigger a real network call via
+    apply_whole_experiment_template's autofill_experiment_info_from_batch step - pass it
+    explicitly to exercise that behavior."""
     cache = NomadSessionCache()
     cache._processing_steps_by_batch[batch_id] = steps
+    cache._experiment_info_source_by_batch[batch_id] = experiment_info_source
     return cache
 
 
@@ -1366,7 +1386,7 @@ def test_compute_variation_label_joins_checked_fields_with_delimiter(fresh_state
 
     label = compute_variation_label(fresh_state, sample_number=1)
 
-    assert label == "PCBM_ETL"
+    assert label == "material-name-PCBM_layer-type-ETL"
 
 
 def test_compute_variation_label_skips_unfilled_varying_fields(fresh_state):
@@ -1380,7 +1400,7 @@ def test_compute_variation_label_skips_unfilled_varying_fields(fresh_state):
 
     label = compute_variation_label(fresh_state, sample_number=1)
 
-    assert label == "PCBM"
+    assert label == "material-name-PCBM"
 
 
 def test_update_variation_column_writes_empty_slots_only(fresh_state):
@@ -1397,8 +1417,9 @@ def test_update_variation_column_writes_empty_slots_only(fresh_state):
 
     written = update_variation_column(fresh_state)
 
-    assert fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "user set this"
-    assert fresh_state.experiment_info_fields["Variation"].per_sample_values[2] == "Spiro"
+    variation_spec = fresh_state.experiment_info_fields["Variation"]
+    assert variation_spec.per_sample_values[1] == "user set this"
+    assert variation_spec.per_sample_values[2] == "material-name-Spiro"
     assert written == 1
 
 
@@ -1520,7 +1541,7 @@ def test_compute_process_progress_excludes_not_required_fields(fresh_state):
     rebuild_field_specs(fresh_state)
     filled_before, total_before = compute_process_progress(process)
 
-    set_field_required_for_progress(process.field_specs["Notes"], False)
+    set_field_required_for_progress(process.field_specs["Recipe file"], False)
 
     filled_after, total_after = compute_process_progress(process)
     assert total_after == total_before - 1
@@ -1552,6 +1573,9 @@ def test_compute_experiment_progress_sums_across_processes(fresh_state):
 def test_compute_experiment_info_progress_excludes_computed_and_pixel_keys(fresh_state):
     rebuild_field_specs(fresh_state)
     fresh_state.experiment_info_fields["Project_Name"].value = "CsFA"
+    # isolate this test from config/required_fields.json's "Notes" exception - it's
+    # testing the computed/pixel-key exclusion specifically, not the required-fields config
+    fresh_state.experiment_info_fields["Notes"].required_for_progress = True
 
     filled, total = compute_experiment_info_progress(fresh_state)
 
@@ -1725,11 +1749,15 @@ def test_fetch_process_field_values_sputtering_step():
 
 
 def test_fetch_process_field_values_cleaning_uv_ozone_step():
+    """CleaningTechnique.time is declared unit='minute' in nomad-baseclasses even though
+    this app's Excel columns for it are labeled seconds - fetch_process_field_values
+    applies the confirmed x60 conversion (field_mappings.json's "multiply": 60)."""
     cache = _cache_with("B1", [CLEANING_STEP])
     values, _source = fetch_process_field_values("url", "token", cache, "B1", "Cleaning UV-Ozone")
     assert values["Solvent 1"] == "Hellmanex-DI water"
     assert values["Solvent 2"] == "DI Water"
-    assert values["UV-Ozone Time [s]"] == 15.0
+    assert values["Time 1 [s]"] == 600.0
+    assert values["UV-Ozone Time [s]"] == 900.0
 
 
 def test_build_process_sequence_from_batch_resolves_aliased_and_cleaning_types(fresh_state):
@@ -1898,7 +1926,8 @@ def test_fetch_process_field_values_cleaning_o2_plasma_gas_plasma_fields():
     cache = _cache_with("B1", [step])
     values, _source = fetch_process_field_values("url", "token", cache, "B1", "Cleaning O2-Plasma")
     assert values["Gas-Plasma Gas"] == "Oxygen"
-    assert values["Gas-Plasma Time [s]"] == 180.0
+    # raw 180.0 is minutes (CleaningTechnique.time unit) -> x60 to the "[s]" column
+    assert values["Gas-Plasma Time [s]"] == 10800.0
     assert values["Gas-Plasma Power [W]"] == 50.0
 
 
@@ -1913,7 +1942,8 @@ def test_process_fields_panel_renders_one_row_per_field(fresh_state):
     process = fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
     panel = ProcessFieldsPanel(fresh_state, process)
-    assert len(panel.children) == len(process.field_specs)
+    # children[0] is the one-line provenance summary, ahead of one row per field
+    assert len(panel.children) == len(process.field_specs) + 1
 
 
 def test_process_fields_panel_varies_checkbox_promotes_scope(fresh_state):
@@ -1953,31 +1983,20 @@ def test_process_fields_panel_calls_on_change_callback(fresh_state):
     assert calls == [1]
 
 
-def test_process_fields_panel_required_checkbox_updates_state_and_progress(fresh_state):
-    # Laser Scribing is not material-gated, so its progress isn't confounded by an
-    # unrelated "Material name" gate the way Evaporation/Spin Coating would be.
-    process = fresh_state.add_process("Laser Scribing")
-    rebuild_field_specs(fresh_state)
-    panel = ProcessFieldsPanel(fresh_state, process)
-    total_before = compute_process_progress(process)[1]
-
-    panel._on_required_change("Recipe file", False)
-
-    assert process.field_specs["Recipe file"].required_for_progress is False
-    assert compute_process_progress(process)[1] == total_before - 1
-
-
-def test_process_fields_panel_required_checkbox_reflects_spec_state(fresh_state):
+def test_process_fields_panel_required_field_shows_asterisk(fresh_state):
+    """The per-row 'Required' checkbox was removed (required_for_progress is now
+    config/required_fields.json-driven, not user-toggleable in this panel) - a required
+    field's label instead gets a trailing '*', an excepted one doesn't."""
     process = fresh_state.add_process("Laser Scribing")
     rebuild_field_specs(fresh_state)
     set_field_required_for_progress(process.field_specs["Recipe file"], False)
 
     panel = ProcessFieldsPanel(fresh_state, process)
 
-    rows_by_label = {row.children[1].value: row for row in panel.children}
-    required_checkbox = rows_by_label["Recipe file"].children[-1]
-    assert required_checkbox.description == "Required"
-    assert required_checkbox.value is False
+    # panel.children[0] is the provenance summary, not a field row - skip it
+    labels = [row.children[1].value for row in panel.children[1:]]
+    assert "Recipe file" in labels  # excepted -> no asterisk
+    assert "Laser wavelength [nm] *" in labels  # still required by default -> asterisk
 
 
 def test_process_fields_panel_shows_preview_placeholder_for_empty_field(fresh_state):
@@ -1988,8 +2007,8 @@ def test_process_fields_panel_shows_preview_placeholder_for_empty_field(fresh_st
 
     panel = ProcessFieldsPanel(fresh_state, process, cache=cache)
 
-    rows_by_label = {row.children[1].value: row for row in panel.children}
-    material_value_widget = rows_by_label["Material name"].children[2]
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    material_value_widget = rows_by_label["Material name *"].children[2]
     assert material_value_widget.value == ""
     assert material_value_widget.placeholder == "Me4PACz"
 
@@ -2000,8 +2019,8 @@ def test_process_fields_panel_falls_back_to_generic_placeholder_without_preview(
 
     panel = ProcessFieldsPanel(fresh_state, process, cache=NomadSessionCache())
 
-    rows_by_label = {row.children[1].value: row for row in panel.children}
-    material_value_widget = rows_by_label["Material name"].children[2]
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    material_value_widget = rows_by_label["Material name *"].children[2]
     assert material_value_widget.placeholder == "value"
 
 
@@ -2031,8 +2050,9 @@ def test_varying_fields_matrix_shows_set_column_before_variation(fresh_state):
     matrix = VaryingFieldsMatrix(fresh_state)
 
     header_row, sample_row = matrix.children
-    assert header_row.children[1].value == "Set"
-    assert sample_row.children[1].value == "2"
+    assert header_row.children[1].value == "Subbatch"
+    # 1-based: variation_group_index=2 displays as Subbatch 3, matching subbatch_for_sample
+    assert sample_row.children[1].value == "3"
 
 
 def test_varying_fields_matrix_hard_refresh_clears_before_rebuilding(fresh_state):
@@ -2074,7 +2094,9 @@ def test_varying_fields_matrix_cell_edit_updates_state_and_recomputes_variation(
     matrix._on_cell_change(spec, 1, "C60")
 
     assert spec.per_sample_values[1] == "C60"
-    assert fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "C60"
+    assert (
+        fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "material-name-C60"
+    )
 
 
 def test_varying_fields_matrix_variation_cell_manual_edit_is_respected(fresh_state):
@@ -2109,7 +2131,7 @@ def test_progress_bar_widget_refresh_updates_after_state_change(fresh_state):
     bar = ProgressBarWidget(fresh_state)
     before = bar.bar.value
 
-    process.field_specs["Notes"].value = "done"
+    process.field_specs["Recipe file"].value = "done"
     bar.refresh()
 
     assert bar.bar.value == before + 1
@@ -2638,11 +2660,14 @@ def test_enumerate_sample_rows_mother_then_children_uneven_counts(fresh_state):
 
 
 def test_compute_nomad_id_basic_with_subbatch(fresh_state):
+    """Subbatch is computed from the sample's variation Subbatch (variation_group_index),
+    1-based - never a manually-set experiment_info_fields["Subbatch"] value, see
+    subbatch_for_sample."""
     fresh_state.experiment_info_fields["Project_Name"] = ProcessFieldSpec(
         key="Project_Name", value="CsFA"
     )
     fresh_state.experiment_info_fields["Batch"] = ProcessFieldSpec(key="Batch", value="2028")
-    fresh_state.experiment_info_fields["Subbatch"] = ProcessFieldSpec(key="Subbatch", value="1")
+    fresh_state.add_sample(variation_group_index=0, sample_number=3)
 
     assert compute_nomad_id(fresh_state, sample_number=3, child_index=None) == "HZB_CsFA_2028_1_3"
     assert compute_nomad_id(fresh_state, sample_number=3, child_index=2) == "HZB_CsFA_2028_1_3_C-2"
@@ -2750,17 +2775,21 @@ def test_generate_full_workbook_writes_one_row_per_mother_and_child(fresh_state)
 
     nomad_id_col = column_map[(0, "Nomad ID")]
     sample_col = column_map[(0, "Sample")]
+    subbatch_col = column_map[(0, "Subbatch")]
     parent_id_col = worksheet.max_column  # appended last
 
-    assert worksheet.cell(row=3, column=nomad_id_col).value == "HZB_CsFA_2028_1"
+    # both samples are in variation Subbatch 0 (1-based Subbatch value "1")
+    assert worksheet.cell(row=3, column=nomad_id_col).value == "HZB_CsFA_2028_1_1"
     assert worksheet.cell(row=3, column=sample_col).value == 1
+    assert worksheet.cell(row=3, column=subbatch_col).value == "1"
     assert worksheet.cell(row=3, column=parent_id_col).value is None  # mother
 
-    assert worksheet.cell(row=4, column=nomad_id_col).value == "HZB_CsFA_2028_1_C-1"
-    assert worksheet.cell(row=4, column=parent_id_col).value == "HZB_CsFA_2028_1"
+    assert worksheet.cell(row=4, column=nomad_id_col).value == "HZB_CsFA_2028_1_1_C-1"
+    assert worksheet.cell(row=4, column=parent_id_col).value == "HZB_CsFA_2028_1_1"
 
-    assert worksheet.cell(row=6, column=nomad_id_col).value == "HZB_CsFA_2028_2"
+    assert worksheet.cell(row=6, column=nomad_id_col).value == "HZB_CsFA_2028_1_2"
     assert worksheet.cell(row=6, column=sample_col).value == 2
+    assert worksheet.cell(row=6, column=subbatch_col).value == "1"
 
     material_col = column_map[(process.sequence_index, "Material name")]
     assert worksheet.cell(row=3, column=material_col).value == "C60"
@@ -2806,14 +2835,16 @@ def test_experiment_info_panel_excludes_computed_and_pixel_keys(fresh_state):
     rebuild_field_specs(fresh_state)
     panel = ExperimentInfoPanel(fresh_state)
 
-    rendered_labels = {row.children[1].value for row in panel.children}
+    # panel.children[0] is the provenance summary, not a field row - skip it
+    rendered_labels = {row.children[1].value for row in panel.children[1:]}
 
     assert "Variation" not in rendered_labels
     assert "Nomad ID" not in rendered_labels
     assert "Sample" not in rendered_labels
+    assert "Subbatch" not in rendered_labels
     assert "Number of pixels" not in rendered_labels
     assert "Pixel area [cm^2]" not in rendered_labels
-    assert "Project_Name" in rendered_labels  # a normal field is still shown
+    assert "Project_Name *" in rendered_labels  # a normal (required) field is still shown
 
 
 def test_experiment_info_panel_value_edit_sets_manual_provenance(fresh_state):
@@ -2850,13 +2881,17 @@ def test_experiment_info_panel_calls_on_change_callback(fresh_state):
     assert calls == [1]
 
 
-def test_experiment_info_panel_required_checkbox_updates_state(fresh_state):
+def test_experiment_info_panel_not_required_field_has_no_asterisk(fresh_state):
+    """The per-row 'Required' checkbox was removed (required_for_progress is now
+    config/required_fields.json-driven) - "Notes" is a global exception there, so its
+    label never gets a '*'."""
     rebuild_field_specs(fresh_state)
     panel = ExperimentInfoPanel(fresh_state)
 
-    panel._on_required_change("Project_Name", False)
+    rendered_labels = {row.children[1].value for row in panel.children[1:]}
 
-    assert fresh_state.experiment_info_fields["Project_Name"].required_for_progress is False
+    assert "Notes" in rendered_labels
+    assert "Notes *" not in rendered_labels
 
 
 # ---------------------------------------------------------------------------
@@ -2864,8 +2899,15 @@ def test_experiment_info_panel_required_checkbox_updates_state(fresh_state):
 # ---------------------------------------------------------------------------
 
 
-def test_sample_setup_panel_apply_adds_samples_for_default_single_set(fresh_state):
+def test_sample_setup_panel_defaults_are_16_samples_4_subbatches(fresh_state):
     panel = SampleSetupPanel(fresh_state)
+    assert panel.total_samples_input.value == 16
+    assert panel.set_count_input.value == 4
+
+
+def test_sample_setup_panel_apply_adds_samples_for_single_set(fresh_state):
+    panel = SampleSetupPanel(fresh_state)
+    panel.set_count_input.value = 1
     panel.sets_inputs_box.children[0].value = 3
 
     panel._on_apply(None)
@@ -2877,6 +2919,7 @@ def test_sample_setup_panel_apply_adds_samples_for_default_single_set(fresh_stat
 
 def test_sample_setup_panel_apply_is_additive_never_removes(fresh_state):
     panel = SampleSetupPanel(fresh_state)
+    panel.set_count_input.value = 1
     panel.sets_inputs_box.children[0].value = 3
     panel._on_apply(None)
     fresh_state.samples[0].child_count = 2  # simulate user-configured data
@@ -3221,3 +3264,344 @@ def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
 
     assert nudge_area.children == ()
     assert "base64," in status_output.value
+
+
+# ---------------------------------------------------------------------------
+# subbatch_for_sample / required_fields.json / Experiment Info autofill / field-value
+# multipliers / field-mapping debug report - all new 2026-07-28.
+# ---------------------------------------------------------------------------
+
+
+def test_subbatch_for_sample_is_one_based_variation_group(fresh_state):
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=2, sample_number=2)
+
+    assert subbatch_for_sample(fresh_state, 1) == "1"
+    assert subbatch_for_sample(fresh_state, 2) == "3"
+
+
+def test_subbatch_for_sample_missing_sample_returns_none(fresh_state):
+    assert subbatch_for_sample(fresh_state, 99) is None
+
+
+def test_is_field_required_by_default_global_exception():
+    assert is_field_required_by_default("Laser Scribing", "Notes") is False
+    assert is_field_required_by_default("Experiment Info", "Notes") is False
+
+
+def test_is_field_required_by_default_true_for_ordinary_field():
+    assert is_field_required_by_default("Laser Scribing", "Recipe file") is True
+
+
+def test_load_required_field_exceptions_matches_shipped_config():
+    global_exceptions, by_process_type = load_required_field_exceptions()
+    assert "Notes" in global_exceptions
+    assert isinstance(by_process_type, dict)
+
+
+def test_sync_field_specs_from_columns_uses_required_fields_config(fresh_state):
+    process = fresh_state.add_process("Laser Scribing")
+    rebuild_field_specs(fresh_state)
+    assert process.field_specs["Notes"].required_for_progress is False
+    assert process.field_specs["Recipe file"].required_for_progress is True
+
+
+def test_load_field_value_multipliers_confirms_cleaning_time_conversion():
+    multipliers = load_field_value_multipliers()
+    assert multipliers["Cleaning UV-Ozone"]["UV-Ozone Time [s]"] == 60
+    assert multipliers["Cleaning UV-Ozone"]["Time 1 [s]"] == 60
+    assert multipliers["Cleaning O2-Plasma"]["Gas-Plasma Time [s]"] == 60
+
+
+def test_fetch_experiment_info_source_follows_substrate_reference():
+    cache = NomadSessionCache()
+    sample_data = {"number_of_junctions": 1, "substrate": "../uploads/U1/archive/SUB1#/data"}
+    substrate_data = {"substrate": "Soda Lime Glass", "conducting_material": ["ITO"]}
+
+    with (
+        patch("data_manager.get_ids_in_batch", return_value=["S1"]),
+        patch("data_manager.get_entryid", return_value="ENTRY1"),
+        patch(
+            "data_manager.get_entry_data",
+            side_effect=lambda url, token, entry_id: (
+                sample_data if entry_id == "ENTRY1" else substrate_data
+            ),
+        ),
+    ):
+        source = fetch_experiment_info_source("url", "token", cache, "B1")
+
+    assert source == {"sample": sample_data, "substrate": substrate_data}
+
+
+def test_fetch_experiment_info_source_no_samples_returns_none():
+    cache = NomadSessionCache()
+    with patch("data_manager.get_ids_in_batch", return_value=[]):
+        assert fetch_experiment_info_source("url", "token", cache, "B1") is None
+
+
+def test_autofill_experiment_info_from_batch_fills_mapped_fields_skips_never_autofilled(
+    fresh_state,
+):
+    rebuild_field_specs(fresh_state)
+    source = {
+        "sample": {"number_of_junctions": 2},
+        "substrate": {
+            "substrate": "Soda Lime Glass",
+            "conducting_material": ["ITO"],
+            "solar_cell_area": 6.4516,
+        },
+    }
+    cache = _cache_with("B1", [], experiment_info_source=source)
+
+    written = autofill_experiment_info_from_batch(fresh_state, "url", "token", cache, "B1")
+
+    assert written > 0
+    assert fresh_state.experiment_info_fields["Number of junctions"].value == 2
+    assert fresh_state.experiment_info_fields["Substrate material"].value == "Soda Lime Glass"
+    assert fresh_state.experiment_info_fields["Substrate conductive layer"].value == "ITO"
+    assert fresh_state.experiment_info_fields["Sample area [cm^2]"].value == 6.4516
+    # never autofilled, even though nothing in `source` maps to them anyway
+    assert fresh_state.experiment_info_fields["Date"].value is None
+    assert fresh_state.experiment_info_fields["Project_Name"].value is None
+    assert fresh_state.experiment_info_fields["Batch"].value is None
+
+
+def test_autofill_experiment_info_from_batch_no_source_writes_nothing(fresh_state):
+    rebuild_field_specs(fresh_state)
+    cache = _cache_with("B1", [], experiment_info_source=None)
+
+    written = autofill_experiment_info_from_batch(fresh_state, "url", "token", cache, "B1")
+
+    assert written == 0
+
+
+def test_apply_whole_experiment_template_also_autofills_experiment_info(fresh_state):
+    source = {"sample": {"number_of_junctions": 1}, "substrate": {"substrate": "Soda Lime Glass"}}
+    cache = _cache_with("B1", [SPIN_COATING_STEP], experiment_info_source=source)
+
+    apply_whole_experiment_template(fresh_state, "url", "token", cache, "B1")
+
+    assert fresh_state.experiment_info_fields["Substrate material"].value == "Soda Lime Glass"
+    assert fresh_state.experiment_info_fields["Project_Name"].value is None
+
+
+def test_build_field_mapping_debug_report_reports_mapped_and_ignored():
+    report = build_field_mapping_debug_report("Cleaning UV-Ozone", CLEANING_STEP)
+
+    mapped_by_key = {row["excel_key"]: row for row in report["mapped"]}
+    assert mapped_by_key["UV-Ozone Time [s]"]["value"] == 900.0
+    assert mapped_by_key["Solvent 1"]["value"] == "Hellmanex-DI water"
+
+    ignored_paths = {row["path"] for row in report["ignored"]}
+    # "method"/"positon_in_experimental_plan" are real raw fields no mapping claims
+    assert "method" in ignored_paths
+    assert "positon_in_experimental_plan" in ignored_paths
+
+
+def test_build_field_mapping_debug_report_unmapped_process_type_reports_everything_ignored():
+    report = build_field_mapping_debug_report("Generic Process", {"method": "Cleaning"})
+    assert report["mapped"] == []
+    assert {row["path"] for row in report["ignored"]} == {"method"}
+
+
+def test_batch_field_mapping_debug_panel_loads_batch_and_renders_report(fresh_state):
+    cache = NomadSessionCache()
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_ids_in_batch", return_value=["S1"]),
+        patch("data_manager.get_processing_steps", return_value=[SPIN_COATING_STEP]),
+    ):
+        panel = BatchFieldMappingDebugPanel("url", "token", cache)
+        _caption, batch_picker, process_type_dropdown, _occurrence_dropdown, report_output = (
+            panel.children
+        )
+        process_type_dropdown.value = "Spin Coating"
+        search_field, selector, load_button, status = batch_picker.children
+        selector.value = ("B1",)
+        load_button.click()
+
+    assert "Loaded B1" in status.value
+    assert "Material name" in report_output.value
+    assert "Me4PACz" in report_output.value
+
+
+def test_build_field_row_date_field_today_button_fills_current_date(fresh_state):
+    from datetime import datetime
+
+    fresh_state.experiment_info_fields["Date"] = ProcessFieldSpec(key="Date")
+    panel = ExperimentInfoPanel(fresh_state)
+
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    date_row = rows_by_label["Date *"]
+    value_widget, today_button = date_row.children[2], date_row.children[3]
+    assert today_button.description == "Today"
+
+    today_button.click()
+
+    assert value_widget.value == datetime.now().strftime("%d-%m-%Y")
+
+
+def test_build_field_row_operator_field_me_button_fills_current_user(fresh_state, monkeypatch):
+    monkeypatch.setenv("NOMAD_CLIENT_USER", "Jane Doe")
+    process = fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    panel = ProcessFieldsPanel(fresh_state, process)
+
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    operator_row = rows_by_label["Operator *"]
+    value_widget, me_button = operator_row.children[2], operator_row.children[3]
+    assert me_button.description == "Me"
+
+    me_button.click()
+
+    assert value_widget.value == "Jane Doe"
+
+
+# ---------------------------------------------------------------------------
+# Custom Variation template ("\1"/"\2"/... syntax) and the forbidden-character guard on
+# every data-value Text widget - both added 2026-07-28.
+# ---------------------------------------------------------------------------
+
+
+def test_render_variation_template_substitutes_by_position():
+    assert render_variation_template(r"Den=\1_Sol-\2", ["1", "ipa"]) == "Den=1_Sol-ipa"
+
+
+def test_render_variation_template_not_every_value_has_to_be_used():
+    # \2 is skipped entirely - the template just never references it
+    assert render_variation_template(r"Sol-\2", ["1", "ipa", "20"]) == "Sol-ipa"
+
+
+def test_render_variation_template_missing_value_becomes_blank():
+    assert render_variation_template(r"Den=\1_Sol-\2", ["1", None]) == "Den=1_Sol-"
+
+
+def test_render_variation_template_out_of_range_index_becomes_blank():
+    assert render_variation_template(r"Den=\1_Extra-\5", ["1"]) == "Den=1_Extra-"
+
+
+def test_compute_variation_label_uses_template_when_set(fresh_state):
+    fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.get_process(1)
+    set_field_varies(process.field_specs["Material name"], True, [])
+    process.field_specs["Material name"].per_sample_values[1] = "PCBM"
+    fresh_state.variation_template = r"Mat=\1"
+
+    assert compute_variation_label(fresh_state, sample_number=1) == "Mat=PCBM"
+
+
+def test_apply_variation_template_regenerates_computed_values_only(fresh_state):
+    fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.get_process(1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=2)
+    set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
+    process.field_specs["Material name"].per_sample_values = {1: "PCBM", 2: "Spiro"}
+    update_variation_column(fresh_state)  # seeds the automatic label first
+    # sample 2's Variation was manually overridden - must survive a template switch
+    fresh_state.experiment_info_fields["Variation"].per_sample_provenance[2] = FieldProvenance(
+        source="manual"
+    )
+
+    apply_variation_template(fresh_state, r"Mat=\1")
+
+    assert fresh_state.variation_template == r"Mat=\1"
+    variation_spec = fresh_state.experiment_info_fields["Variation"]
+    assert variation_spec.per_sample_values[1] == "Mat=PCBM"
+    # "manual"-provenance value untouched by the template switch
+    assert variation_spec.per_sample_values[2] == "material-name-Spiro"
+
+
+def test_apply_variation_template_blank_reverts_to_automatic_label(fresh_state):
+    fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.get_process(1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
+    process.field_specs["Material name"].per_sample_values[1] = "PCBM"
+    apply_variation_template(fresh_state, r"Mat=\1")
+
+    apply_variation_template(fresh_state, "   ")
+
+    assert fresh_state.variation_template is None
+    variation_spec = fresh_state.experiment_info_fields["Variation"]
+    assert variation_spec.per_sample_values[1] == "material-name-PCBM"
+
+
+def test_variation_template_panel_apply_updates_state_and_legend(fresh_state):
+    fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.get_process(1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
+    process.field_specs["Material name"].per_sample_values[1] = "PCBM"
+    calls = []
+    panel = VariationTemplatePanel(fresh_state, on_change=lambda: calls.append(1))
+    assert r"\1" in panel.legend.value  # legend shows the current \N mapping
+
+    panel.template_input.value = r"Mat=\1"
+    panel.apply_button.click()
+
+    assert fresh_state.variation_template == r"Mat=\1"
+    assert fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "Mat=PCBM"
+    assert calls == [1]
+
+
+def test_variation_template_panel_refresh_reflects_new_varying_fields(fresh_state):
+    fresh_state.add_process("Spin Coating", config={"solvents": 0, "solutes": 0})
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.get_process(1)
+    panel = VariationTemplatePanel(fresh_state)
+    assert "No fields are marked" in panel.legend.value
+
+    set_field_varies(process.field_specs["Material name"], True, [])
+    panel.refresh()
+
+    assert "Material name" in panel.legend.value
+
+
+def test_find_forbidden_characters_detects_reserved_set():
+    assert find_forbidden_characters(r"bad\name") == ["\\"]
+    assert set(find_forbidden_characters('a/b:c*d?e"f<g>h|i\\j')) == FORBIDDEN_VALUE_CHARACTERS
+    assert find_forbidden_characters("normal-value_1.5") == []
+    assert find_forbidden_characters(None) == []
+
+
+def test_build_field_row_rejects_forbidden_character_value(fresh_state):
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    panel = ProcessFieldsPanel(fresh_state, process)
+
+    rows_by_label = {row.children[1].value: row for row in panel.children[1:]}
+    row = rows_by_label["Material name *"]
+    value_widget, warning = row.children[2], row.children[-1]
+
+    value_widget.value = "bad\\name"
+
+    assert process.field_specs["Material name"].value is None  # never persisted
+    assert "\\" in warning.value
+    assert value_widget.layout.border != ""
+
+    value_widget.value = "good-name"
+
+    assert process.field_specs["Material name"].value == "good-name"
+    assert warning.value == ""
+
+
+def test_varying_fields_matrix_rejects_forbidden_character_cell(fresh_state):
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    spec = process.field_specs["Material name"]
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+
+    matrix = VaryingFieldsMatrix(fresh_state)
+    header_row, sample_row = matrix.children
+    material_cell = sample_row.children[2]
+
+    material_cell.value = "bad|name"
+
+    assert spec.per_sample_values.get(1) is None
+    assert material_cell.layout.border != ""

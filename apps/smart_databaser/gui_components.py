@@ -5,7 +5,9 @@
 
 import base64
 import logging
+import os
 import random
+from datetime import datetime
 
 import ipywidgets as widgets
 from data_manager import (
@@ -22,8 +24,10 @@ from data_manager import (
     ProcessFieldSpec,
     ProcessInstance,
     apply_process_override,
+    apply_variation_template,
     apply_whole_experiment_template,
     build_experiment_filename,
+    build_field_mapping_debug_report,
     build_missing_fields_summary,
     build_nudge_queue,
     clear_process_override,
@@ -32,6 +36,7 @@ from data_manager import (
     compute_process_progress,
     compute_sample_set_split,
     default_config_for,
+    find_forbidden_characters,
     generate_full_workbook,
     iter_varying_fields,
     list_process_occurrences,
@@ -39,8 +44,8 @@ from data_manager import (
     progress_band,
     rebuild_field_specs,
     set_field_manual,
-    set_field_required_for_progress,
     set_field_varies,
+    steps_for_process_type,
     update_variation_column,
     upload_experiment_excel,
     workbook_to_bytes,
@@ -48,15 +53,74 @@ from data_manager import (
 
 logger = logging.getLogger(__name__)
 
+# Field keys that get a quick-fill button in _build_field_row - "Today"/"Now" for
+# date-like fields (format matches sheet_experiment.py's own make_label examples for each
+# key), "Me" for Operator (reads the same NOMAD_CLIENT_USER env var
+# hysprint_utils.access_token.log_notebook_usage() already uses to attribute app usage,
+# rather than an extra NOMAD /users/me API round trip this app doesn't otherwise need).
+_DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
 
-def _provenance_html(spec: ProcessFieldSpec) -> widgets.HTML:
-    if spec.provenance is None or spec.provenance.source == "manual":
+
+def _current_user_name() -> str:
+    return os.environ.get("NOMAD_CLIENT_USER", "").strip() or "Unknown User"
+
+
+def _provenance_summary_html(specs) -> widgets.HTML:
+    """One 'Sourced from Batch X, Sample Y' summary line for the whole panel, instead of
+    repeating the same tag on every autofilled row - in practice every field in one
+    process/Experiment Info panel shares the same source (one process instance sources
+    from one batch/occurrence at a time), so a per-row repeat was pure noise. Picks the
+    first non-manual provenance found among the given specs."""
+    for spec in specs:
+        if spec.provenance is not None and spec.provenance.source != "manual":
+            tag = f"Sourced from Batch {spec.provenance.source_batch_id}"
+            if spec.provenance.source_sample_id:
+                tag += f", Sample {spec.provenance.source_sample_id}"
+            return widgets.HTML(value=f"<span style='color:#7f8c8d; font-size:11px;'>{tag}</span>")
+    return widgets.HTML(value="")
+
+
+def _outlier_flag_html(spec: ProcessFieldSpec) -> widgets.HTML:
+    if not spec.is_outlier:
         return widgets.HTML(value="")
-    tag = f"from Batch {spec.provenance.source_batch_id}"
-    if spec.provenance.source_sample_id:
-        tag += f", Sample {spec.provenance.source_sample_id}"
-    color = "#c0392b" if spec.is_outlier else "#7f8c8d"
-    return widgets.HTML(value=f"<span style='color:{color}; font-size:11px;'>{tag}</span>")
+    return widgets.HTML(
+        value=(
+            "<span style='color:#c0392b; font-size:11px;' "
+            "title='Autofilled value differs substantially from other samples at this "
+            "same step - see the legend above.'>&#9888; outlier</span>"
+        )
+    )
+
+
+def _forbidden_chars_message(forbidden: list) -> str:
+    chars = " ".join(forbidden)
+    return (
+        f"<span style='color:#c0392b; font-size:11px;'>Not saved - "
+        f"<code>{chars}</code> not allowed here (breaks IDs/file names downstream).</span>"
+    )
+
+
+def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets.HTML, on_valid):
+    """Shared by every data-value Text widget in this app (field rows, matrix cells) -
+    NOT the Variation template pattern, which legitimately needs a backslash. Rejects
+    (does not persist) any value containing a data_manager.FORBIDDEN_VALUE_CHARACTERS
+    character: shows a red border + warning message instead of calling on_valid, so nothing
+    downstream (Excel generation, Nomad ID) ever sees it. The widget still shows whatever
+    the user typed - only the underlying state write is skipped - so typing isn't fought
+    mid-keystroke."""
+
+    def _on_change(change):
+        new_value = change["new"]
+        forbidden = find_forbidden_characters(new_value)
+        if forbidden:
+            text_widget.layout.border = "2px solid #c0392b"
+            warning_html.value = _forbidden_chars_message(forbidden)
+            return
+        text_widget.layout.border = ""
+        warning_html.value = ""
+        on_valid(new_value)
+
+    text_widget.observe(_on_change, names="value")
 
 
 def _build_field_row(
@@ -64,28 +128,24 @@ def _build_field_row(
     spec: ProcessFieldSpec,
     on_varies_change,
     on_value_change,
-    on_required_change,
     preview_value=None,
 ) -> widgets.Widget:
     """Shared by ProcessFieldsPanel and ExperimentInfoPanel: a 'varies' checkbox, the
-    field label, a value input, a provenance tag when autofilled, and a trailing
-    'Required' checkbox. Non-varying fields are edited here directly; once a field is
-    marked varying, its value moves to VaryingFieldsMatrix instead (edited per-sample
-    there). Every autofilled field stays editable here, per the product requirement that
-    autofill never locks a field.
+    field label (with a trailing '*' when required_for_progress), a value input (with a
+    quick-fill button for Date/Datetime/Operator fields), and an 'outlier' flag when
+    flagged. Non-varying fields are edited here directly; once a field is marked varying,
+    its value moves to VaryingFieldsMatrix instead (edited per-sample there). Every
+    autofilled field stays editable here, per the product requirement that autofill never
+    locks a field.
 
     `preview_value`, when the field is still empty, is shown as the input's placeholder
     (native greyed-out text, not an official value) - a hint of what the active source
     batch would supply if adopted; falls back to a generic "value" placeholder when no
     preview is available.
 
-    The 'Required' checkbox (checked by default) is unrelated to Excel generation - it
-    only controls whether this field counts toward the completion bar/nudge review (see
-    data_manager.set_field_required_for_progress), per the product ask to let users
-    exclude fields that "aren't really important" from the count without having to fill
-    them just to make the number look right. Appended at the END of the row (not
-    inserted earlier) so existing code that indexes into a row's children by position
-    (e.g. row.children[1] for the label) keeps working unchanged."""
+    required_for_progress is no longer editable from this row (see
+    config/required_fields.json) - it's shown as a '*' after the label instead of a
+    checkbox, per the product ask to keep "what's required" out of the day-to-day UI."""
     varies_checkbox = widgets.Checkbox(
         value=spec.varies, indent=False, layout=widgets.Layout(width="24px")
     )
@@ -93,8 +153,11 @@ def _build_field_row(
         lambda change, key=field_key: on_varies_change(key, change["new"]), names="value"
     )
 
-    label = widgets.Label(value=field_key, layout=widgets.Layout(width="220px"))
+    label_text = f"{field_key} *" if spec.required_for_progress else field_key
+    label = widgets.Label(value=label_text, layout=widgets.Layout(width="220px"))
 
+    quick_fill_button = None
+    warning_html = widgets.HTML(value="")
     if spec.varies:
         value_widget = widgets.HTML(value="<i>varies - see matrix</i>")
     else:
@@ -104,25 +167,39 @@ def _build_field_row(
             placeholder=placeholder,
             layout=widgets.Layout(width="200px"),
         )
-        value_widget.observe(
-            lambda change, key=field_key: on_value_change(key, change["new"]), names="value"
+        _guard_forbidden_characters(
+            value_widget,
+            warning_html,
+            lambda new_value, key=field_key: on_value_change(key, new_value),
         )
 
-    required_checkbox = widgets.Checkbox(
-        value=spec.required_for_progress,
-        description="Required",
-        indent=False,
-        layout=widgets.Layout(width="90px"),
-        style={"description_width": "initial"},
-    )
-    required_checkbox.observe(
-        lambda change, key=field_key: on_required_change(key, change["new"]), names="value"
-    )
+        date_format = _DATE_FIELD_FORMATS.get(field_key)
+        if date_format is not None:
 
-    return widgets.HBox(
-        [varies_checkbox, label, value_widget, _provenance_html(spec), required_checkbox],
-        layout=widgets.Layout(align_items="center", margin="1px 0"),
-    )
+            def _fill_today(_button, widget=value_widget, fmt=date_format):
+                widget.value = datetime.now().strftime(fmt)
+
+            quick_fill_button = widgets.Button(
+                description="Today", layout=widgets.Layout(width="55px")
+            )
+            quick_fill_button.on_click(_fill_today)
+        elif field_key == "Operator":
+
+            def _fill_operator(_button, widget=value_widget):
+                widget.value = _current_user_name()
+
+            quick_fill_button = widgets.Button(
+                description="Me", layout=widgets.Layout(width="45px")
+            )
+            quick_fill_button.on_click(_fill_operator)
+
+    row_children = [varies_checkbox, label, value_widget]
+    if quick_fill_button is not None:
+        row_children.append(quick_fill_button)
+    row_children.append(_outlier_flag_html(spec))
+    row_children.append(warning_html)
+
+    return widgets.HBox(row_children, layout=widgets.Layout(align_items="center", margin="1px 0"))
 
 
 _REAL_PROCESS_TYPES = [p for p in AVAILABLE_PROCESSES if p != "Experiment Info"]
@@ -163,15 +240,17 @@ class ProcessFieldsPanel(widgets.VBox):
 
     def _render(self) -> None:
         self.children = [
-            _build_field_row(
-                field_key,
-                spec,
-                self._on_varies_change,
-                self._on_value_change,
-                self._on_required_change,
-                preview_value=self._preview_for(field_key, spec),
-            )
-            for field_key, spec in self.process.field_specs.items()
+            _provenance_summary_html(self.process.field_specs.values()),
+            *(
+                _build_field_row(
+                    field_key,
+                    spec,
+                    self._on_varies_change,
+                    self._on_value_change,
+                    preview_value=self._preview_for(field_key, spec),
+                )
+                for field_key, spec in self.process.field_specs.items()
+            ),
         ]
 
     def _on_varies_change(self, field_key: str, varies: bool) -> None:
@@ -182,11 +261,6 @@ class ProcessFieldsPanel(widgets.VBox):
     def _on_value_change(self, field_key: str, new_value) -> None:
         spec = self.process.field_specs[field_key]
         set_field_manual(spec, new_value)
-        self._notify_change()
-
-    def _on_required_change(self, field_key: str, required: bool) -> None:
-        spec = self.process.field_specs[field_key]
-        set_field_required_for_progress(spec, required)
         self._notify_change()
 
 
@@ -211,16 +285,17 @@ class ExperimentInfoPanel(widgets.VBox):
             self.on_change()
 
     def _render(self) -> None:
-        self.children = [
-            _build_field_row(
-                field_key,
-                spec,
-                self._on_varies_change,
-                self._on_value_change,
-                self._on_required_change,
-            )
+        relevant = {
+            field_key: spec
             for field_key, spec in self.state.experiment_info_fields.items()
             if field_key not in EXPERIMENT_INFO_COMPUTED_KEYS and field_key not in PIXEL_FIELD_KEYS
+        }
+        self.children = [
+            _provenance_summary_html(relevant.values()),
+            *(
+                _build_field_row(field_key, spec, self._on_varies_change, self._on_value_change)
+                for field_key, spec in relevant.items()
+            ),
         ]
 
     def _on_varies_change(self, field_key: str, varies: bool) -> None:
@@ -233,44 +308,41 @@ class ExperimentInfoPanel(widgets.VBox):
         set_field_manual(spec, new_value)
         self._notify_change()
 
-    def _on_required_change(self, field_key: str, required: bool) -> None:
-        spec = self.state.experiment_info_fields[field_key]
-        set_field_required_for_progress(spec, required)
-        self._notify_change()
-
 
 class SampleSetupPanel(widgets.VBox):
-    """Setup-time sample/set configuration - distinct from the auto-computed Variation
-    LABEL in VaryingFieldsMatrix (see the addendum: 'Number of samples' / 'Number of
-    variations' are setup-time inputs, not the same concept). Internally, a "set" is still
-    ExperimentState/SamplePlan's `variation_group_index` - only the UI-facing wording
-    changed (product ask: 'group' reads as confusing, call it 'set'). 'Apply Sample Setup'
-    only ADDS samples up to each set's requested count; it never removes existing samples,
-    so re-clicking after adjusting counts never destroys already-configured per-sample
-    data - matching this app's no-clobber philosophy elsewhere. Per-sample child-row
-    (diced pixel) configuration is intentionally not exposed here for now - it only
-    applies to a minority of experiments and was confusing alongside set assignment;
-    SamplePlan.child_count still exists and defaults to 0. The per-sample list/remove-
-    button table was removed too, per the same "confusing, doesn't make sense here"
-    feedback - individual samples still exist on ExperimentState.samples and remain
+    """Setup-time sample/Subbatch configuration - distinct from the auto-computed
+    Variation LABEL in VaryingFieldsMatrix (see the addendum: 'Number of samples' /
+    'Number of variations' are setup-time inputs, not the same concept). Internally, a
+    "Subbatch" is still ExperimentState/SamplePlan's `variation_group_index` - only the
+    UI-facing wording changed (product ask: first 'group' -> 'set' since 'group' read as
+    confusing, then 'set' -> 'Subbatch' since the Subbatch Excel column is always exactly
+    this value, 1-based - see data_manager.subbatch_for_sample). 'Apply Sample Setup' only
+    ADDS samples up to each Subbatch's requested count; it never removes existing
+    samples, so re-clicking after adjusting counts never destroys already-configured
+    per-sample data - matching this app's no-clobber philosophy elsewhere. Per-sample
+    child-row (diced pixel) configuration is intentionally not exposed here for now - it
+    only applies to a minority of experiments and was confusing alongside Subbatch
+    assignment; SamplePlan.child_count still exists and defaults to 0. The per-sample
+    list/remove-button table was removed too, per the same "confusing, doesn't make sense
+    here" feedback - individual samples still exist on ExperimentState.samples and remain
     removable programmatically (ExperimentState.remove_sample), just not from this
     panel."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
-        self.set_count_input = widgets.BoundedIntText(
-            value=1,
-            min=1,
-            max=50,
-            description="Variation sets:",
-            style={"description_width": "initial"},
-        )
         self.total_samples_input = widgets.BoundedIntText(
-            value=0,
+            value=16,
             min=0,
             max=1000,
             description="Total samples:",
+            style={"description_width": "initial"},
+        )
+        self.set_count_input = widgets.BoundedIntText(
+            value=4,
+            min=1,
+            max=50,
+            description="Variation Subbatch:",
             style={"description_width": "initial"},
         )
         self.sets_inputs_box = widgets.VBox([])
@@ -282,19 +354,20 @@ class SampleSetupPanel(widgets.VBox):
 
         caption = widgets.HTML(
             value=(
-                "<i style='color:#7f8c8d; font-size:11px;'>Set how many variation sets you "
-                "have and the total sample count, then Apply - samples are split as evenly "
-                "as possible across sets (e.g. 15 samples / 4 sets &rarr; 4, 4, 4, 3). "
-                "Adjust an individual set's count below before re-applying if you want a "
-                "different split.</i>"
+                "<i style='color:#7f8c8d; font-size:11px;'>Set the total sample count and "
+                "how many variation Subbatches you have, then Apply - samples are split as "
+                "evenly as possible across Subbatches (e.g. 15 samples / 4 Subbatches "
+                "&rarr; 4, 4, 4, 3). Adjust an individual Subbatch's count below before "
+                "re-applying if you want a different split. Each sample's 'Subbatch' Excel "
+                "value is always its Subbatch number (1-based) - never typed manually.</i>"
             )
         )
 
         super().__init__(
             [
                 caption,
-                self.set_count_input,
                 self.total_samples_input,
+                self.set_count_input,
                 self.apply_button,
                 self.sets_inputs_box,
             ]
@@ -313,7 +386,7 @@ class SampleSetupPanel(widgets.VBox):
                 value=max(existing_count, default_value),
                 min=0,
                 max=200,
-                description=f"Set {set_index} samples:",
+                description=f"Subbatch {set_index + 1} samples:",
                 style={"description_width": "initial"},
                 layout=widgets.Layout(margin="0 0 0 20px"),
             )
@@ -646,10 +719,12 @@ def _split_varying_field_label(combined_label: str) -> tuple[str, str]:
 
 
 class VaryingFieldsMatrix(widgets.VBox):
-    """One column per currently-varying field, one row per sample, plus a leading Set
-    column (the sample's variation_group_index from Sample Setup) and a trailing
-    (always-last) computed Variation column. Cells are directly editable; the Variation
-    cell is too (a manual edit there is respected by no-clobber going forward)."""
+    """One column per currently-varying field, one row per sample, plus a leading
+    Subbatch column (the sample's variation_group_index from Sample Setup, shown 1-based
+    to match the Excel "Subbatch" value - see data_manager.subbatch_for_sample) and a
+    trailing (always-last) computed Variation column. Cells are directly editable; the
+    Variation cell is too (a manual edit there is respected by no-clobber going
+    forward)."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
@@ -689,7 +764,7 @@ class VaryingFieldsMatrix(widgets.VBox):
 
         header_cells = [
             widgets.Label(value="Sample", layout=widgets.Layout(width="70px")),
-            widgets.Label(value="Set", layout=widgets.Layout(width="50px")),
+            widgets.Label(value="Subbatch", layout=widgets.Layout(width="70px")),
         ]
         header_cells.extend(
             widgets.HTML(
@@ -720,11 +795,15 @@ class VaryingFieldsMatrix(widgets.VBox):
     def _build_sample_row(
         self, sample_number, set_index, varying_fields, variation_spec
     ) -> widgets.HBox:
+        # One shared warning line for the whole row (space is tight, one column per
+        # varying field) - an invalid cell also gets its own red border, so which cell is
+        # bad stays visible even after the message itself is superseded by a later edit.
+        row_warning = widgets.HTML(value="")
         cells = [
             widgets.Label(value=str(sample_number), layout=widgets.Layout(width="70px")),
             widgets.Label(
-                value="" if set_index is None else str(set_index),
-                layout=widgets.Layout(width="50px"),
+                value="" if set_index is None else str(set_index + 1),
+                layout=widgets.Layout(width="70px"),
             ),
         ]
         for _label, spec in varying_fields:
@@ -732,9 +811,10 @@ class VaryingFieldsMatrix(widgets.VBox):
             cell = widgets.Text(
                 value="" if value is None else str(value), layout=widgets.Layout(width="180px")
             )
-            cell.observe(
-                lambda change, s=spec, sn=sample_number: self._on_cell_change(s, sn, change["new"]),
-                names="value",
+            _guard_forbidden_characters(
+                cell,
+                row_warning,
+                lambda new_value, s=spec, sn=sample_number: self._on_cell_change(s, sn, new_value),
             )
             cells.append(cell)
 
@@ -744,11 +824,13 @@ class VaryingFieldsMatrix(widgets.VBox):
         variation_cell = widgets.Text(
             value=str(variation_value), layout=widgets.Layout(width="180px")
         )
-        variation_cell.observe(
-            lambda change, sn=sample_number: self._on_variation_cell_change(sn, change["new"]),
-            names="value",
+        _guard_forbidden_characters(
+            variation_cell,
+            row_warning,
+            lambda new_value, sn=sample_number: self._on_variation_cell_change(sn, new_value),
         )
         cells.append(variation_cell)
+        cells.append(row_warning)
         return widgets.HBox(cells)
 
     def _on_cell_change(self, spec: ProcessFieldSpec, sample_number: int, new_value) -> None:
@@ -764,6 +846,94 @@ class VaryingFieldsMatrix(widgets.VBox):
             variation_spec.varies = True
             set_field_manual(variation_spec, new_value, sample_number=sample_number)
         self._notify_change()
+
+
+class VariationTemplatePanel(widgets.VBox):
+    """Optional custom format for the computed Variation column - e.g.
+    'Den=\\1_Sol-\\2_SubTemp=\\3' instead of the automatic field-slug label. '\\N' (1-based)
+    refers to the Nth currently-varying column, in the SAME order as the Varying Fields
+    matrix's columns (a live '\\1 = ...' legend below the input shows exactly what that
+    order is right now, since it shifts as fields are marked varying/un-varying
+    elsewhere). Not every varying column has to be referenced by the template, and a
+    referenced column left unfilled for a given sample just renders as empty for that
+    sample - see data_manager.render_variation_template.
+
+    Deliberately exempt from the forbidden-character guard every other Text input in
+    this app uses (_guard_forbidden_characters) - this pattern legitimately needs a
+    backslash, it's a control input, not sample/experiment data.
+
+    Needs an explicit refresh() wired into app.py's refresh_all: the \\N legend depends on
+    iter_varying_fields(state), which changes in response to OTHER widgets' actions
+    (ProcessFieldsPanel/ExperimentInfoPanel's 'varies' checkboxes), not this panel's
+    own."""
+
+    def __init__(self, state: ExperimentState, on_change=None):
+        self.state = state
+        self.on_change = on_change
+
+        self.template_input = widgets.Text(
+            value=state.variation_template or "",
+            placeholder=r"e.g. Den=\1_Sol-\2_SubTemp=\3 - leave blank for the automatic label",
+            layout=widgets.Layout(width="420px"),
+        )
+        self.apply_button = widgets.Button(description="Apply", button_style="primary")
+        self.apply_button.on_click(self._on_apply)
+        self.status = widgets.HTML(value="")
+        self.legend = widgets.HTML(value="")
+
+        caption = widgets.HTML(
+            value=(
+                "<i style='color:#7f8c8d; font-size:11px;'>Custom Variation format "
+                "(optional). Reference a varying column by position with "
+                "<code>\\1</code>, <code>\\2</code>, <code>\\3</code>... in the same order "
+                "as the legend below - you don't have to use every column. If a "
+                "referenced column has no value for a given sample, it's simply left "
+                "blank for that sample, not an error. Click Apply to (re)generate the "
+                "Variation column under the new format; leave the box empty and click "
+                "Apply to go back to the automatic label.</i>"
+            )
+        )
+
+        super().__init__(
+            [
+                caption,
+                widgets.HBox([self.template_input, self.apply_button]),
+                self.status,
+                self.legend,
+            ]
+        )
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Re-renders the \\N legend from the CURRENT varying fields - call whenever
+        anything outside this panel changes which fields are marked varying."""
+        varying_fields = iter_varying_fields(self.state)
+        if not varying_fields:
+            self.legend.value = (
+                "<i style='color:#7f8c8d; font-size:11px;'>No fields are marked "
+                "'varies' yet - mark some below to see the \\N legend.</i>"
+            )
+            return
+        rows = [
+            f"<code>\\{index}</code> = {label}"
+            for index, (label, _spec) in enumerate(varying_fields, start=1)
+        ]
+        self.legend.value = (
+            "<span style='color:#7f8c8d; font-size:11px;'>"
+            + " &nbsp;|&nbsp; ".join(rows)
+            + "</span>"
+        )
+
+    def _on_apply(self, _button) -> None:
+        apply_variation_template(self.state, self.template_input.value)
+        self.status.value = (
+            "<span style='color:#2c7a4b'>Applied.</span>"
+            if self.state.variation_template
+            else "<span style='color:#2c7a4b'>Reverted to the automatic label.</span>"
+        )
+        self.refresh()
+        if self.on_change:
+            self.on_change()
 
 
 _PROGRESS_BAR_STYLE_BY_BAND = {
@@ -975,9 +1145,14 @@ def _field_row_caption() -> widgets.HTML:
         value=(
             "<i style='color:#7f8c8d; font-size:11px;'>Check 'varies' if a field's value "
             "differs per sample - it moves into the Varying Fields matrix below and stays "
-            "editable there. Uncheck 'Required' for fields that aren't really important - "
-            "they're excluded from the completion count and nudge review below, but are "
-            "still written to the output Excel if you fill them in.</i>"
+            "editable there. <b>Legend:</b> a field name followed by <b>*</b> is required "
+            "(counts toward the completion bar/nudge review below - to change what's "
+            "required, edit config/required_fields.json, there's no in-app toggle for "
+            "this). <span style='color:#c0392b'>&#9888; outlier</span> means an autofilled "
+            "value differs substantially from other samples at the same step - worth a "
+            "second look, not necessarily wrong. The grey 'Sourced from Batch ...' line "
+            "above the fields applies to every autofilled field in this section, not just "
+            "one.</i>"
         )
     )
 
@@ -1404,3 +1579,168 @@ class ProcessSequenceBuilder(widgets.VBox):
     def _remove(self, sequence_index: int) -> None:
         self.state.remove_process(sequence_index)
         self._notify_change()
+
+
+def _debug_report_to_html(report: dict, process_type: str, occurrence_label: str) -> str:
+    rows = [
+        f"<h5 style='margin-bottom:2px;'>Mapped fields - {process_type} ({occurrence_label})</h5>"
+    ]
+    if not report["mapped"]:
+        rows.append("<i>No field mappings configured for this process type.</i>")
+    else:
+        rows.append(
+            "<table style='border-collapse:collapse; font-size:12px;'>"
+            "<tr><th style='text-align:left; padding:2px 8px;'>Excel field</th>"
+            "<th style='text-align:left; padding:2px 8px;'>Value</th>"
+            "<th style='text-align:left; padding:2px 8px;'>Archive path</th></tr>"
+        )
+        for row in report["mapped"]:
+            value = row["value"]
+            value_html = "<i style='color:#c0392b'>not found</i>" if value is None else str(value)
+            unverified = (
+                ""
+                if row["unit_verified"]
+                else " <span style='color:#c0392b'>(unit unverified)</span>"
+            )
+            rows.append(
+                f"<tr><td style='padding:2px 8px;'>{row['excel_key']}</td>"
+                f"<td style='padding:2px 8px;'>{value_html}{unverified}</td>"
+                f"<td style='padding:2px 8px; color:#7f8c8d;'>{', '.join(row['paths'])}</td></tr>"
+            )
+        rows.append("</table>")
+
+    rows.append("<h5 style='margin-bottom:2px;'>Raw fields ignored by every mapping</h5>")
+    if not report["ignored"]:
+        rows.append("<i>None - every raw field on this step is claimed by a mapping.</i>")
+    else:
+        rows.append(
+            "<table style='border-collapse:collapse; font-size:12px;'>"
+            "<tr><th style='text-align:left; padding:2px 8px;'>Archive path</th>"
+            "<th style='text-align:left; padding:2px 8px;'>Value</th></tr>"
+        )
+        for row in report["ignored"]:
+            rows.append(
+                f"<tr><td style='padding:2px 8px;'>{row['path']}</td>"
+                f"<td style='padding:2px 8px;'>{row['value']}</td></tr>"
+            )
+        rows.append("</table>")
+    return "".join(rows)
+
+
+class BatchFieldMappingDebugPanel(widgets.VBox):
+    """Diagnostic tool: pick a real batch, then a process type (including 'Experiment
+    Info'), to see every configured Excel field mapping's resolved value (found or 'not
+    found') alongside every raw archive field NOT claimed by any mapping. Answers 'what's
+    taken from the database and what's ignored' directly against real data, so a real gap
+    (wrong process-type disambiguation, a genuinely unmapped field, a config range too
+    narrow) can be spotted and reported precisely instead of guessed at. Read-only - never
+    writes into ExperimentState."""
+
+    def __init__(self, url: str, token: str, cache: NomadSessionCache):
+        self.url = url
+        self.token = token
+        self.cache = cache
+        self._batch_id: str | None = None
+
+        self.process_type_dropdown = widgets.Dropdown(
+            options=AVAILABLE_PROCESSES,
+            value="Experiment Info",
+            description="Process type:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="280px"),
+        )
+        self.occurrence_dropdown = widgets.Dropdown(
+            options=[],
+            description="Occurrence:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="280px", visibility="hidden"),
+        )
+        self.report_output = widgets.HTML(value="")
+
+        self.process_type_dropdown.observe(self._on_selection_change, names="value")
+        self.occurrence_dropdown.observe(self._on_selection_change, names="value")
+
+        batch_picker = _create_batch_picker(
+            cache, url, token, "Batch", self._on_batch_loaded, button_label="Load"
+        )
+
+        super().__init__(
+            [
+                widgets.HTML(
+                    value=(
+                        "<i style='color:#7f8c8d; font-size:11px;'>Pick a batch, then a "
+                        "process type, to see exactly what this app would copy from that "
+                        "batch's real archive data versus every raw field left "
+                        "unmapped.</i>"
+                    )
+                ),
+                batch_picker,
+                self.process_type_dropdown,
+                self.occurrence_dropdown,
+                self.report_output,
+            ]
+        )
+
+    def _on_batch_loaded(self, batch_id: str) -> str:
+        self._batch_id = batch_id
+        self._refresh_occurrences()
+        self._refresh_report()
+        return f"<span style='color:#2c7a4b'>Loaded {batch_id}.</span>"
+
+    def _on_selection_change(self, change) -> None:
+        if change["name"] != "value":
+            return
+        self._refresh_occurrences()
+        self._refresh_report()
+
+    def _refresh_occurrences(self) -> None:
+        process_type = self.process_type_dropdown.value
+        if not self._batch_id or process_type == "Experiment Info":
+            self.occurrence_dropdown.options = []
+            self.occurrence_dropdown.layout.visibility = "hidden"
+            return
+        try:
+            occurrences = list_process_occurrences(
+                self.url, self.token, self.cache, self._batch_id, process_type
+            )
+        except Exception:
+            occurrences = []
+        if not occurrences:
+            self.occurrence_dropdown.options = []
+            self.occurrence_dropdown.layout.visibility = "hidden"
+            return
+        self.occurrence_dropdown.options = [(label, idx) for idx, label in occurrences]
+        self.occurrence_dropdown.layout.visibility = "visible"
+
+    def _refresh_report(self) -> None:
+        if not self._batch_id:
+            self.report_output.value = ""
+            return
+        process_type = self.process_type_dropdown.value
+        try:
+            if process_type == "Experiment Info":
+                source = self.cache.get_experiment_info_source(self.url, self.token, self._batch_id)
+                if source is None:
+                    self.report_output.value = (
+                        "<i>This batch has no samples with a resolvable substrate.</i>"
+                    )
+                    return
+                occurrence_label = "first sample"
+            else:
+                steps = steps_for_process_type(
+                    self.cache.get_processing_steps(self.url, self.token, self._batch_id),
+                    process_type,
+                )
+                if not steps:
+                    self.report_output.value = f"<i>Batch has no {process_type} step.</i>"
+                    return
+                occurrence = self.occurrence_dropdown.value or 0
+                if occurrence >= len(steps):
+                    occurrence = 0
+                source = steps[occurrence]
+                occurrence_label = f"occurrence {occurrence + 1} of {len(steps)}"
+        except Exception as exc:
+            self.report_output.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            return
+        report = build_field_mapping_debug_report(process_type, source)
+        self.report_output.value = _debug_report_to_html(report, process_type, occurrence_label)

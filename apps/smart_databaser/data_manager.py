@@ -5,6 +5,7 @@
 import io
 import json
 import logging
+import re
 import statistics
 import time
 from datetime import datetime
@@ -22,6 +23,8 @@ from sheet_experiment import add_experiment_sheet
 from hysprint_utils.api_calls import (
     get_all_uploads,
     get_batch_ids,
+    get_entry_data,
+    get_entryid,
     get_ids_in_batch,
     get_processing_steps,
 )
@@ -49,8 +52,19 @@ PIXEL_FIELD_KEYS = {"Number of pixels", "Pixel area [cm^2]"}
 
 # Experiment Info fields that are always derived/computed, never directly edited via
 # ExperimentInfoPanel - "Variation" (matrix-computed), "Nomad ID"/"Sample" (derived at
-# Excel-generation time from sample_number/child_index, see generate_full_workbook).
-EXPERIMENT_INFO_COMPUTED_KEYS = {"Variation", "Nomad ID", "Sample"}
+# Excel-generation time from sample_number/child_index, see generate_full_workbook),
+# "Subbatch" (derived from each sample's variation Subbatch/variation_group_index, see
+# subbatch_for_sample - product decision: Subbatch is never manually typed, it always
+# matches which variation Subbatch (Sample Setup) a sample belongs to, 1-based).
+EXPERIMENT_INFO_COMPUTED_KEYS = {"Variation", "Nomad ID", "Sample", "Subbatch"}
+
+# Experiment Info fields never sourced from a batch template, even though "Experiment
+# Info" has other autofillable fields (Substrate material, Sample area, ...) - see
+# autofill_experiment_info_from_batch. Date/Project_Name/Batch are per-upload identifiers
+# the user must set fresh for a NEW experiment (copying them would silently mislabel the
+# new experiment as the source one); Subbatch is fully computed (see
+# EXPERIMENT_INFO_COMPUTED_KEYS above), never a field_specs value sourced from anywhere.
+EXPERIMENT_INFO_NEVER_AUTOFILLED = {"Date", "Project_Name", "Batch", "Subbatch"}
 
 # Process catalog - mirrors Excel_creator's voila_experiment_app.py MinimalistExperimentBuilder
 # (available_processes / configurable_processes / _get_default_config), reimplemented here as
@@ -160,6 +174,28 @@ BOOLEAN_CONFIG_FIELDS = [
 
 ATMOSPHERIC_CONFIG_KEY = "add_atmospheric"
 
+# Classic Windows-filename-reserved characters. This app derives Nomad IDs
+# (compute_nomad_id) and the output Excel filename (build_experiment_filename) directly
+# from field values, and a stray one of these has caused real problems in the past.
+# Deliberately NOT included: "." (legitimate in decimal values like "1.42"), "@" and
+# accented/umlaut letters (ö/ä/ü/ß, ...) - none of those cause problems anywhere in this
+# app's pipeline (Excel cells, JSON config, the NOMAD HTTP API) since everything already
+# reads/writes UTF-8 throughout. Exempt from this check: the Variation template pattern
+# (VariationTemplatePanel) - "\1"/"\2" syntax legitimately needs a backslash.
+FORBIDDEN_VALUE_CHARACTERS = set('\\/:*?"<>|')
+
+
+def find_forbidden_characters(value: Any) -> list[str]:
+    """Distinct forbidden characters (see FORBIDDEN_VALUE_CHARACTERS) present in value,
+    in first-seen order - empty list if none or if value isn't a string."""
+    if not isinstance(value, str):
+        return []
+    seen: list[str] = []
+    for char in value:
+        if char in FORBIDDEN_VALUE_CHARACTERS and char not in seen:
+            seen.append(char)
+    return seen
+
 
 def default_config_for(process_type: str) -> dict:
     return dict(DEFAULT_CONFIG_BY_PROCESS_TYPE.get(process_type, {}))
@@ -240,6 +276,9 @@ class ExperimentState(BaseModel):
     pixel_fields: dict[str, PixelFieldSpec] = Field(default_factory=dict)
     samples: list[SamplePlan] = Field(default_factory=list)
     whole_experiment_template_batch_id: str | None = None
+    # None means "use the automatic field-slug label" (compute_variation_label's
+    # default) - see render_variation_template for the "\1"/"\2"/... syntax when set.
+    variation_template: str | None = None
 
     def get_process(self, sequence_index: int) -> ProcessInstance:
         for process in self.process_sequence:
@@ -456,7 +495,9 @@ def sync_field_specs_from_columns(
 ) -> None:
     """Additive only: creates a ProcessFieldSpec/PixelFieldSpec for every column that
     doesn't have one yet. Never removes an existing spec (e.g. after reducing a solvent
-    count), so already-filled values are never silently dropped."""
+    count), so already-filled values are never silently dropped. A newly-created spec's
+    required_for_progress starts from is_field_required_by_default(process_type,
+    field_key) (config/required_fields.json) rather than always True."""
     for sequence_index, field_key in column_map:
         if sequence_index == 0:
             if field_key in PIXEL_FIELD_KEYS:
@@ -464,10 +505,15 @@ def sync_field_specs_from_columns(
                     state.pixel_fields[field_key] = PixelFieldSpec(key=field_key)
                 continue
             bucket = state.experiment_info_fields
+            process_type = "Experiment Info"
         else:
             bucket = state.get_process(sequence_index).field_specs
+            process_type = state.get_process(sequence_index).process_type
         if field_key not in bucket:
-            bucket[field_key] = ProcessFieldSpec(key=field_key)
+            bucket[field_key] = ProcessFieldSpec(
+                key=field_key,
+                required_for_progress=is_field_required_by_default(process_type, field_key),
+            )
 
 
 def rebuild_field_specs(state: ExperimentState) -> dict[tuple[int, str], int]:
@@ -596,6 +642,85 @@ def load_indexed_config_keys(config_path: Path | None = None) -> dict[str, dict[
 INDEXED_CONFIG_KEYS: dict[str, dict[str, str]] = load_indexed_config_keys()
 
 
+def load_field_value_multipliers(config_path: Path | None = None) -> dict[str, dict[str, float]]:
+    """{process_type: {excel_field_key: multiplier}} for fields whose optional 'multiply'
+    key in field_mappings.json corrects a confirmed unit mismatch between the archive's
+    stored unit and this app's Excel column label (applied in fetch_process_field_values/
+    preview_value_for_field - the raw archive value is multiplied before it's written or
+    previewed). Example: Cleaning's shared CleaningTechnique.time quantity is declared
+    unit='minute' in nomad-baseclasses (verified against
+    baseclasses/material_processes_misc/cleaning.py), but this app's Excel columns for it
+    ("Time {n} [s]", "UV-Ozone Time [s]", "Gas-Plasma Time [s]") are labeled seconds - so
+    those entries carry "multiply": 60. Only add "multiply" once the unit mismatch is
+    actually confirmed (not guessed) - same discipline as unit_verified."""
+    path = config_path or FIELD_MAPPINGS_CONFIG_PATH
+    with open(path, encoding="utf-8") as config_file:
+        raw = json.load(config_file)
+
+    result: dict[str, dict[str, float]] = {}
+    for process_type, spec in raw.get("process_types", {}).items():
+        multipliers: dict[str, float] = {}
+        for excel_key, field_spec in spec.get("fields", {}).items():
+            if "multiply" in field_spec:
+                multipliers[excel_key] = field_spec["multiply"]
+        for indexed in spec.get("indexed_fields", []):
+            if "multiply" not in indexed:
+                continue
+            start, end = indexed["range"]
+            for n in range(start, end + 1):
+                multipliers[indexed["excel_key_template"].format(n=n)] = indexed["multiply"]
+        if multipliers:
+            result[process_type] = multipliers
+    return result
+
+
+# Process-type -> {excel_field_key: multiplier}, loaded from config/field_mappings.json
+# alongside PROCESS_TYPE_FIELD_PATHS above.
+FIELD_VALUE_MULTIPLIERS: dict[str, dict[str, float]] = load_field_value_multipliers()
+
+
+REQUIRED_FIELDS_CONFIG_PATH = Path(__file__).parent / "config" / "required_fields.json"
+
+
+def load_required_field_exceptions(
+    config_path: Path | None = None,
+) -> tuple[set[str], dict[str, set[str]]]:
+    """Loads config/required_fields.json: (global_exceptions, by_process_type). Every
+    field is required_for_progress=True by default (see ProcessFieldSpec) - this file
+    lists ONLY the exceptions, per the product ask ('Notes are never required, can this
+    be per schema?'). global_exceptions apply to a field key regardless of process type
+    (e.g. "Notes"); by_process_type[process_type] excepts a field only for that specific
+    process type (e.g. a field that matters everywhere except one schema). Edit this file
+    directly to change what counts toward the completion bar/nudge review - there is no
+    in-app UI for this (the per-row checkbox was removed; required fields are now shown
+    as a '*' next to the label instead, see _build_field_row in gui_components.py)."""
+    path = config_path or REQUIRED_FIELDS_CONFIG_PATH
+    with open(path, encoding="utf-8") as config_file:
+        raw = json.load(config_file)
+    global_exceptions = set(raw.get("global", []))
+    by_process_type = {
+        process_type: set(field_keys)
+        for process_type, field_keys in raw.get("by_process_type", {}).items()
+    }
+    return global_exceptions, by_process_type
+
+
+_REQUIRED_FIELD_GLOBAL_EXCEPTIONS, _REQUIRED_FIELD_EXCEPTIONS_BY_PROCESS_TYPE = (
+    load_required_field_exceptions()
+)
+
+
+def is_field_required_by_default(process_type: str, field_key: str) -> bool:
+    """True unless field_key is listed as an exception in config/required_fields.json,
+    either globally or specifically for process_type - see
+    load_required_field_exceptions. Used to set a newly-created ProcessFieldSpec's
+    initial required_for_progress (sync_field_specs_from_columns) - a later manual change
+    via set_field_required_for_progress always wins over this default."""
+    if field_key in _REQUIRED_FIELD_GLOBAL_EXCEPTIONS:
+        return False
+    return field_key not in _REQUIRED_FIELD_EXCEPTIONS_BY_PROCESS_TYPE.get(process_type, set())
+
+
 def infer_config_from_source_step(process_type: str, step: dict) -> dict:
     """Best-effort config (solvents/solutes/spinsteps/... counts) inferred from how many
     of a source step's indexed fields (Solvent N name, Rotation speed N, ...) actually
@@ -624,12 +749,14 @@ class NomadSessionCache:
     def __init__(self) -> None:
         self._sample_ids_by_batch: dict[str, list[str]] = {}
         self._processing_steps_by_batch: dict[str, list[dict]] = {}
+        self._experiment_info_source_by_batch: dict[str, dict | None] = {}
         self._batch_ids: list[str] | None = None
         self._uploads: list[dict] | None = None
 
     def clear(self) -> None:
         self._sample_ids_by_batch.clear()
         self._processing_steps_by_batch.clear()
+        self._experiment_info_source_by_batch.clear()
         self._batch_ids = None
         self._uploads = None
 
@@ -663,6 +790,95 @@ class NomadSessionCache:
         not been fetched yet this session. Used for live preview placeholders, which must
         never trigger a fetch merely by rendering a field row."""
         return self._processing_steps_by_batch.get(batch_id)
+
+    def get_experiment_info_source(self, url: str, token: str, batch_id: str) -> dict | None:
+        """See fetch_experiment_info_source - cached per batch since both the real
+        autofill and the debug panel may ask for the same batch's source in one session."""
+        if batch_id not in self._experiment_info_source_by_batch:
+            self._experiment_info_source_by_batch[batch_id] = fetch_experiment_info_source(
+                url, token, self, batch_id
+            )
+        return self._experiment_info_source_by_batch[batch_id]
+
+
+_ARCHIVE_REFERENCE_RE = re.compile(r"archive/([^#]+)#")
+
+
+def _entry_id_from_reference(reference: str) -> str | None:
+    """Extracts the entry_id from an archive reference string, e.g.
+    '../uploads/{upload_id}/archive/{entry_id}#/data' -> '{entry_id}' - verified live
+    against real HySprint_Sample.substrate references on 2026-07-28."""
+    match = _ARCHIVE_REFERENCE_RE.search(reference)
+    return match.group(1) if match else None
+
+
+def fetch_experiment_info_source(
+    url: str, token: str, cache: NomadSessionCache, batch_id: str
+) -> dict | None:
+    """{"sample": <HySprint_Sample data>, "substrate": <HySprint_Substrate data>} for
+    batch_id's first sample (same 'first occurrence wins' convention as
+    fetch_process_field_values) - the archive source for Experiment Info fields that live
+    on the sample/substrate entities rather than a process step (Substrate material,
+    Sample area, Number of junctions, ...; see field_mappings.json's "Experiment Info"
+    entry). Two extra network hops beyond get_processing_steps: the sample's own entry
+    data, then following its 'substrate' reference to that entry's own data. Returns None
+    if the batch has no samples. Verified live against real batch
+    'HZB_IJP_Green Ink_6_1' on 2026-07-28."""
+    sample_ids = cache.get_sample_ids(url, token, batch_id)
+    if not sample_ids:
+        return None
+    entry_id = get_entryid(url, token, sample_ids[0])
+    sample_data = get_entry_data(url, token, entry_id)
+    substrate_data: dict = {}
+    substrate_ref = sample_data.get("substrate")
+    if substrate_ref:
+        substrate_entry_id = _entry_id_from_reference(substrate_ref)
+        if substrate_entry_id:
+            substrate_data = get_entry_data(url, token, substrate_entry_id)
+    return {"sample": sample_data, "substrate": substrate_data}
+
+
+def autofill_experiment_info_from_batch(
+    state: ExperimentState, url: str, token: str, cache: NomadSessionCache, batch_id: str
+) -> int:
+    """Writes every mapped "Experiment Info" field found in batch_id's sample/substrate
+    data via set_field_if_empty (no-clobber) - mirrors autofill_process_from_batch but
+    sources from fetch_experiment_info_source instead of a process step. Skips every key
+    in EXPERIMENT_INFO_NEVER_AUTOFILLED even if a mapping exists for it. Returns how many
+    fields were actually written.
+
+    Network/lookup failures here (e.g. a sample with no resolvable substrate reference)
+    are caught and logged rather than raised - this is an incremental enhancement on top
+    of the main per-process autofill loop in apply_whole_experiment_template, and
+    shouldn't turn a working "Replicate Experiment" action into a hard failure just
+    because this one extra sample/substrate fetch had a problem."""
+    field_paths = PROCESS_TYPE_FIELD_PATHS.get("Experiment Info")
+    if not field_paths:
+        return 0
+    try:
+        source = cache.get_experiment_info_source(url, token, batch_id)
+    except Exception:
+        logger.warning(
+            "Could not fetch Experiment Info source for batch %s", batch_id, exc_info=True
+        )
+        return 0
+    if source is None:
+        return 0
+    written = 0
+    for field_key, (paths, _unit_verified) in field_paths.items():
+        if field_key in EXPERIMENT_INFO_NEVER_AUTOFILLED:
+            continue
+        spec = state.experiment_info_fields.get(field_key)
+        if spec is None:
+            continue
+        value = _get_path_any(source, paths)
+        if value is None:
+            continue
+        value = _apply_multiplier("Experiment Info", field_key, value)
+        provenance = FieldProvenance(source="batch_template", source_batch_id=batch_id)
+        if set_field_if_empty(spec, value, provenance):
+            written += 1
+    return written
 
 
 # Real NOMAD archive 'method' strings that don't match this app's AVAILABLE_PROCESSES
@@ -715,6 +931,15 @@ def steps_for_process_type(steps: list[dict], process_type: str) -> list[dict]:
     return [s for s in steps if resolve_process_type(s) == process_type]
 
 
+def _apply_multiplier(process_type: str, field_key: str, value: Any) -> Any:
+    """Applies FIELD_VALUE_MULTIPLIERS' confirmed unit-conversion factor, if any, to a raw
+    archive value before it's written/previewed - see load_field_value_multipliers."""
+    multiplier = FIELD_VALUE_MULTIPLIERS.get(process_type, {}).get(field_key)
+    if multiplier is not None and isinstance(value, int | float):
+        return value * multiplier
+    return value
+
+
 def fetch_process_field_values(
     url: str,
     token: str,
@@ -737,7 +962,7 @@ def fetch_process_field_values(
     for field_key, (paths, _unit_verified) in field_paths.items():
         value = _get_path_any(step, paths)
         if value is not None:
-            values[field_key] = value
+            values[field_key] = _apply_multiplier(process_type, field_key, value)
     samples = step.get("samples") or []
     source_sample_id = samples[0]["lab_id"] if samples else None
     return values, source_sample_id
@@ -843,7 +1068,87 @@ def preview_value_for_field(
     occurrence = occurrence_index_for_process(state, process)
     if occurrence >= len(matching):
         return None
-    return _get_path_any(matching[occurrence], path_info[0])
+    value = _get_path_any(matching[occurrence], path_info[0])
+    if value is None:
+        return None
+    return _apply_multiplier(process.process_type, field_key, value)
+
+
+# ---------------------------------------------------------------------------
+# Field-mapping debug report - powers the in-app "Debug: Batch Field Mapping" panel.
+# Answers "what does this app actually take from a real batch, and what's left over on
+# the raw archive step that no mapping claims" directly against real data, instead of
+# guessing from field_mappings.json alone (which only shows what's configured, not what
+# the archive actually contains for a specific real step). Read-only: never writes into
+# ExperimentState.
+# ---------------------------------------------------------------------------
+
+
+def _flatten_leaf_paths(data: Any, prefix: list) -> list[tuple[list, Any]]:
+    """[(path, value), ...] for every non-empty scalar leaf reachable from data, with path
+    as a list of str/int segments in the exact same format field_mappings.json's own
+    'path'/'path_template' entries use - so a raw archive field can be directly compared
+    against configured mapping paths by value equality, not string matching."""
+    leaves: list[tuple[list, Any]] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            leaves.extend(_flatten_leaf_paths(value, [*prefix, key]))
+    elif isinstance(data, list):
+        for index, item in enumerate(data):
+            leaves.extend(_flatten_leaf_paths(item, [*prefix, index]))
+    elif _is_filled(data):
+        leaves.append((prefix, data))
+    return leaves
+
+
+def _path_to_label(path: list) -> str:
+    parts: list[str] = []
+    for segment in path:
+        if isinstance(segment, int):
+            parts[-1] = f"{parts[-1]}[{segment}]"
+        else:
+            parts.append(str(segment))
+    return ".".join(parts)
+
+
+def build_field_mapping_debug_report(process_type: str, raw_source: dict) -> dict:
+    """For one real archive step/source dict (a processing step for a real process type,
+    or the {"sample":..., "substrate":...} dict for "Experiment Info" - see
+    fetch_experiment_info_source), returns:
+    {"mapped": [{"excel_key", "value", "unit_verified", "paths"}, ...],
+     "ignored": [{"path", "value"}, ...]}
+    "mapped" covers EVERY configured field_mappings.json entry for process_type,
+    including ones with no match on this particular step (value=None) - unlike
+    fetch_process_field_values, which only returns fields it actually found. Values have
+    any configured "multiply" conversion already applied (see _apply_multiplier), so what
+    this reports matches what autofill would actually write, not the raw archive number.
+    "ignored" is every raw leaf field on raw_source not claimed by any configured path -
+    real gaps (mismatched process-type disambiguation, genuinely unmapped fields, config
+    ranges too narrow for this step's actual data) show up here directly."""
+    field_paths = PROCESS_TYPE_FIELD_PATHS.get(process_type, {})
+    mapped_rows = []
+    claimed_paths: set[tuple] = set()
+    for excel_key, (paths, unit_verified) in field_paths.items():
+        value = _get_path_any(raw_source, paths)
+        if value is not None:
+            value = _apply_multiplier(process_type, excel_key, value)
+        mapped_rows.append(
+            {
+                "excel_key": excel_key,
+                "value": value,
+                "unit_verified": unit_verified,
+                "paths": [_path_to_label(path) for path in paths],
+            }
+        )
+        for path in paths:
+            claimed_paths.add(tuple(path))
+
+    ignored_rows = [
+        {"path": _path_to_label(path), "value": value}
+        for path, value in _flatten_leaf_paths(raw_source, [])
+        if tuple(path) not in claimed_paths
+    ]
+    return {"mapped": mapped_rows, "ignored": ignored_rows}
 
 
 def expand_process_config_for_source(
@@ -951,7 +1256,10 @@ def apply_whole_experiment_template(
     accident: replicating a whole experiment (a batch with 10 steps becomes a 10-step
     sequence), not just filling values into whatever the user had already built - so any
     processes/overrides/manual edits the user had before picking a template are
-    discarded, same as re-picking a different template batch.
+    discarded, same as re-picking a different template batch. Also autofills "Experiment
+    Info" fields (Substrate material, Sample area, ...) from the same batch - see
+    autofill_experiment_info_from_batch - except Date/Project_Name/Batch/Subbatch, which
+    are never touched (EXPERIMENT_INFO_NEVER_AUTOFILLED).
 
     `progress_callback`, if given, is called as progress_callback(done, total) after each
     process is autofilled - this is the only widget-adjacent hook in this module (still
@@ -975,6 +1283,7 @@ def apply_whole_experiment_template(
             written_by_process[process.sequence_index] = written
         if progress_callback is not None:
             progress_callback(done, total)
+    autofill_experiment_info_from_batch(state, url, token, cache, batch_id)
     state.whole_experiment_template_batch_id = batch_id
     return written_by_process
 
@@ -1106,17 +1415,84 @@ def iter_varying_fields(state: ExperimentState) -> list[tuple[str, ProcessFieldS
     return fields
 
 
+_UNIT_BRACKET_RE = re.compile(r"\s*\[[^\]]*\]\s*")
+_SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _field_slug(field_key: str) -> str:
+    """Short, stable slug for one field's name - e.g. 'Substrate temperature [°C]' ->
+    'substrate-temperature', 'Solvent 1 name' -> 'solvent-1-name'. Strips a trailing
+    bracketed unit, lowercases, and collapses everything else to hyphens. Deliberately
+    mechanical (no hand-maintained per-field shortenings) so it never goes stale as
+    fields are added."""
+    without_unit = _UNIT_BRACKET_RE.sub("", field_key)
+    return _SLUG_NON_ALNUM_RE.sub("-", without_unit.strip().lower()).strip("-")
+
+
+def _variation_field_key(display_label: str) -> str:
+    """iter_varying_fields() labels are always '<process label> - <field key>' - see its
+    docstring (process labels never contain ' - ' themselves)."""
+    _prefix, _sep, field_key = display_label.partition(" - ")
+    return field_key or display_label
+
+
+_VARIATION_PLACEHOLDER_RE = re.compile(r"\\(\d+)")
+
+
+def render_variation_template(template: str, values: list) -> str:
+    """Renders a custom Variation template like 'Den=\\1_Sol-\\2_SubTemp=\\3' -
+    '\\N' (1-based, familiar regex-backreference syntax) is replaced by values[N-1] (the
+    Nth varying field's value for this sample, in the same column order shown in the
+    Varying Fields matrix). Not every varying column has to be referenced - the template
+    only outputs what it references. If \\N's index is out of range, or that sample has
+    no value for it, it's simply replaced with an empty string (per product decision:
+    'if a column value is not used, then it is not used' - a template is never blocked
+    from rendering just because one referenced field happens to be unfilled for one
+    sample)."""
+
+    def _substitute(match: re.Match) -> str:
+        index = int(match.group(1)) - 1
+        if 0 <= index < len(values) and _is_filled(values[index]):
+            return str(values[index])
+        return ""
+
+    return _VARIATION_PLACEHOLDER_RE.sub(_substitute, template)
+
+
 def compute_variation_label(
     state: ExperimentState, sample_number: int, delimiter: str = "_"
 ) -> str:
-    """Concatenates every checked-varying field's value for this sample, in column order,
-    joined with a fixed delimiter (v1 - simple join, no per-field suffix/group-break)."""
-    parts = [
-        str(spec.per_sample_values.get(sample_number))
-        for _label, spec in iter_varying_fields(state)
-        if _is_filled(spec.per_sample_values.get(sample_number))
-    ]
+    """If state.variation_template is set, renders it via render_variation_template.
+    Otherwise builds a self-describing Variation string from every checked-varying
+    field's value for this sample, in column order - e.g. 'density-1_solvent-1-name-ipa'
+    rather than a bare '1_ipa', so the Variation column reads sensibly without
+    cross-referencing the process sequence. Each part is '<field-slug>-<value>' (see
+    _field_slug), joined with delimiter."""
+    varying_fields = iter_varying_fields(state)
+    values = [spec.per_sample_values.get(sample_number) for _label, spec in varying_fields]
+    if state.variation_template:
+        return render_variation_template(state.variation_template, values)
+    parts = []
+    for (label, _spec), value in zip(varying_fields, values, strict=True):
+        if not _is_filled(value):
+            continue
+        parts.append(f"{_field_slug(_variation_field_key(label))}-{value}")
     return delimiter.join(parts)
+
+
+def apply_variation_template(state: ExperimentState, template: str | None) -> int:
+    """Sets state.variation_template (None/blank reverts to the automatic field-slug
+    label) and clears every "computed"-sourced per-sample Variation value (never a
+    manually-typed one) so update_variation_column regenerates them under the new
+    template - mirrors clear_autofilled_value's "re-picking a source discards only what
+    that source itself previously wrote" pattern. Returns update_variation_column's
+    written count. Caller (gui_components' VariationTemplatePanel) still needs to trigger
+    its own refresh_all afterward, same as every other cross-widget state mutation."""
+    state.variation_template = template.strip() if template and template.strip() else None
+    variation_spec = state.experiment_info_fields.get("Variation")
+    if variation_spec is not None:
+        clear_autofilled_value(variation_spec, {"computed"})
+    return update_variation_column(state)
 
 
 def update_variation_column(state: ExperimentState, delimiter: str = "_") -> int:
@@ -1321,9 +1697,23 @@ def enumerate_sample_rows(state: ExperimentState) -> list[tuple[int, int | None]
     return rows
 
 
+def subbatch_for_sample(state: ExperimentState, sample_number: int) -> str | None:
+    """Subbatch is never manually typed - it always equals the sample's variation
+    Subbatch (Sample Setup panel's SamplePlan.variation_group_index), 1-based, per the
+    product decision that Subbatch numbers should just match the Subbatch a sample was
+    set up under. Returns None if sample_number isn't in state.samples (defensive -
+    shouldn't happen via normal flows)."""
+    for sample in state.samples:
+        if sample.sample_number == sample_number:
+            return str(sample.variation_group_index + 1)
+    return None
+
+
 def compute_nomad_id(state: ExperimentState, sample_number: int, child_index: int | None) -> str:
     """Best-effort ID scheme built only from fields this model tracks (Project_Name,
-    Batch, Subbatch, Sample) plus a '_C-{child_index}' suffix for child rows.
+    Batch, Subbatch, Sample) plus a '_C-{child_index}' suffix for child rows. Subbatch is
+    computed via subbatch_for_sample, not read from experiment_info_fields (see
+    EXPERIMENT_INFO_COMPUTED_KEYS).
 
     UNVERIFIED against the real NOMAD parser's exact expected format: the one real
     historical file inspected during planning (20260603_Batch2028.xlsx) embeds an extra
@@ -1333,10 +1723,13 @@ def compute_nomad_id(state: ExperimentState, sample_number: int, child_index: in
     this scheme with a Data Steward before relying on it in production, same as the
     Parent ID column-position assumption."""
     parts = []
-    for key in ("Project_Name", "Batch", "Subbatch"):
+    for key in ("Project_Name", "Batch"):
         spec = state.experiment_info_fields.get(key)
         if spec is not None and _is_filled(spec.value):
             parts.append(str(spec.value))
+    subbatch = subbatch_for_sample(state, sample_number)
+    if subbatch is not None:
+        parts.append(subbatch)
     parts.append(str(sample_number))
     nomad_id = "HZB_" + "_".join(parts)
     if child_index is not None:
@@ -1418,8 +1811,8 @@ def append_parent_id_column(worksheet: Worksheet) -> int:
 def generate_full_workbook(state: ExperimentState) -> Workbook:
     """Full 3-sheet workbook (Experiment Data + Data Entry Guide + How to Cite) via
     Excel_creator's own ExperimentExcelBuilder, then real mother+child data rows written
-    by smart_databaser itself. Nomad ID, "Sample", and Parent ID are always freshly
-    computed at write time from sample_number/child_index (never sourced from
+    by smart_databaser itself. Nomad ID, "Sample", "Subbatch", and Parent ID are always
+    freshly computed at write time from sample_number/child_index (never sourced from
     field_specs, never no-clobbered) - they're derived identifiers, not user data, so
     requiring the user to manually mark them varying and re-enter the same numbers per
     row would be redundant."""
@@ -1431,6 +1824,7 @@ def generate_full_workbook(state: ExperimentState) -> Workbook:
     parent_id_col = append_parent_id_column(worksheet)
     nomad_id_col = column_map.get((0, "Nomad ID"))
     sample_col = column_map.get((0, "Sample"))
+    subbatch_col = column_map.get((0, "Subbatch"))
 
     mother_nomad_ids: dict[int, str] = {}
     for row_offset, (sample_number, child_index) in enumerate(enumerate_sample_rows(state)):
@@ -1440,7 +1834,7 @@ def generate_full_workbook(state: ExperimentState) -> Workbook:
             mother_nomad_ids[sample_number] = nomad_id
 
         for (sequence_index, field_key), col in column_map.items():
-            if sequence_index == 0 and field_key in ("Nomad ID", "Sample"):
+            if sequence_index == 0 and field_key in ("Nomad ID", "Sample", "Subbatch"):
                 continue
             value = resolve_cell_value(state, sequence_index, field_key, sample_number, child_index)
             if value is not None:
@@ -1450,6 +1844,10 @@ def generate_full_workbook(state: ExperimentState) -> Workbook:
             worksheet.cell(row=row, column=nomad_id_col, value=nomad_id)
         if sample_col is not None:
             worksheet.cell(row=row, column=sample_col, value=sample_number)
+        if subbatch_col is not None:
+            worksheet.cell(
+                row=row, column=subbatch_col, value=subbatch_for_sample(state, sample_number)
+            )
         if child_index is not None:
             worksheet.cell(row=row, column=parent_id_col, value=mother_nomad_ids.get(sample_number))
 
