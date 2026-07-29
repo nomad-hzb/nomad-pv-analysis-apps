@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -203,17 +204,180 @@ def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
         out[prefix] = obj
 
 
+def _extract_ref_ids(obj: Any, ref_ids: set[str]) -> None:
+    if isinstance(obj, dict):
+        for value in obj.values():
+            _extract_ref_ids(value, ref_ids)
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_ref_ids(item, ref_ids)
+    elif isinstance(obj, str):
+        for match in _REF_PATTERN.finditer(obj):
+            ref_ids.add(match.group(1))
+
+
+def _resolve_sample_entry_ids(
+    url: str, token: str, sample_ids: list[str], chunk_size: int = 200
+) -> list[str]:
+    """Entry ids of the sample entries themselves - a pure function of sample_ids, used
+    by load_generic_data's reference-based fallback strategy. Identical for every
+    entry_type audited in one session, so callers should compute it once and pass it
+    back in via load_generic_data's cache= param rather than recomputing per schema."""
+    headers = {"Authorization": f"Bearer {token}"}
+    chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
+    all_sample_entry_ids: list[str] = []
+    for chunk in chunks:
+        response = requests.post(
+            f"{url}/entries/query",
+            headers=headers,
+            json={
+                "required": {"include": ["entry_id"]},
+                "owner": "visible",
+                "query": {"results.eln.lab_ids:any": chunk},
+                "pagination": {"page_size": 10000},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        all_sample_entry_ids.extend(entry["entry_id"] for entry in response.json()["data"])
+    return all_sample_entry_ids
+
+
+def _resolve_reference_ids(
+    url: str, token: str, sample_ids: list[str], chunk_size: int = 200
+) -> set[str]:
+    """Every archive-reference id reachable from the sample entries' own data - a pure
+    function of sample_ids, used by load_generic_data's last-resort fallback strategy.
+    Identical for every entry_type audited in one session (and by far the most
+    expensive lookup, since it downloads full archive data for every sample), so
+    callers should compute it once and pass it back in via load_generic_data's cache=
+    param rather than recomputing per schema."""
+    headers = {"Authorization": f"Bearer {token}"}
+    chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
+    ref_ids: set[str] = set()
+    for chunk in chunks:
+        response = requests.post(
+            f"{url}/entries/archive/query",
+            headers=headers,
+            json={
+                "required": {"data": "*"},
+                "owner": "visible",
+                "query": {"results.eln.lab_ids:any": chunk},
+                "pagination": {"page_size": 10000},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        for entry in response.json().get("data", []):
+            _extract_ref_ids(entry.get("archive", {}).get("data", {}), ref_ids)
+    return ref_ids
+
+
+def discover_present_entry_types(
+    url: str, token: str, sample_ids: list[str], chunk_size: int = 200
+) -> tuple[list[str], set[str], set[str]]:
+    """Cheap, entry_type-agnostic reconnaissance for EntryAuditSession.load(): finds
+    the set of entry_type values reachable from sample_ids via all three of
+    load_generic_data's matching strategies (direct lab_id match, reference from
+    sample entries, reference-following through sample archive data), using
+    entries/query's lightweight {"include": ["entry_type"]} projection instead of
+    fetching each candidate entry's full archive data and without an entry_type filter
+    (so one pass covers every schema instead of one query set per schema). The
+    dominant cost of auditing ~20 configured entry types is the majority that come
+    back completely empty for a typical batch - this lets EntryAuditSession.load skip
+    load_generic_data entirely for those instead of running its full per-type queries
+    just to learn there's nothing there.
+
+    Returns (sample_entry_ids, ref_ids, entry_types_present) so callers can seed
+    load_generic_data's cache with the first two and avoid recomputing them."""
+    headers = {"Authorization": f"Bearer {token}"}
+    chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
+    sample_entry_ids: list[str] = []
+    entry_types: set[str] = set()
+
+    for chunk in chunks:
+        response = requests.post(
+            f"{url}/entries/query",
+            headers=headers,
+            json={
+                "required": {"include": ["entry_id", "entry_type"]},
+                "owner": "visible",
+                "query": {"results.eln.lab_ids:any": chunk},
+                "pagination": {"page_size": 10000},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        for entry in response.json()["data"]:
+            sample_entry_ids.append(entry["entry_id"])
+            if entry.get("entry_type"):
+                entry_types.add(entry["entry_type"])
+
+    id_chunks = [
+        sample_entry_ids[i : i + chunk_size] for i in range(0, len(sample_entry_ids), chunk_size)
+    ]
+    for id_chunk in id_chunks:
+        response = requests.post(
+            f"{url}/entries/query",
+            headers=headers,
+            json={
+                "required": {"include": ["entry_type"]},
+                "owner": "visible",
+                "query": {"entry_references.target_entry_id:any": id_chunk},
+                "pagination": {"page_size": 10000},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        entry_types.update(
+            entry["entry_type"] for entry in response.json()["data"] if entry.get("entry_type")
+        )
+
+    ref_ids = _resolve_reference_ids(url, token, sample_ids, chunk_size)
+    ref_id_chunks = [list(ref_ids)[i : i + chunk_size] for i in range(0, len(ref_ids), chunk_size)]
+    for ref_chunk in ref_id_chunks:
+        response = requests.post(
+            f"{url}/entries/query",
+            headers=headers,
+            json={
+                "required": {"include": ["entry_type"]},
+                "owner": "visible",
+                "query": {"entry_id:any": ref_chunk},
+                "pagination": {"page_size": 10000},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        entry_types.update(
+            entry["entry_type"] for entry in response.json()["data"] if entry.get("entry_type")
+        )
+
+    return sample_entry_ids, ref_ids, entry_types
+
+
 def load_generic_data(
-    url: str, token: str, sample_ids: list[str], entry_type: str, chunk_size: int = 200
+    url: str,
+    token: str,
+    sample_ids: list[str],
+    entry_type: str,
+    chunk_size: int = 200,
+    cache: dict[str, Any] | None = None,
 ) -> pd.DataFrame | None:
     """Fetch and flatten every entry of entry_type reachable from sample_ids, via three
     fallback strategies (direct lab_id match, reference from sample entries, and
     reference-following through sample archive data). Returns a DataFrame with one row
     per entry: sample_id, correction-mechanism metadata
     (_entry_id/_upload_id/_mainfile/_gui_url), and one column per flattened string leaf
-    in the entry's data (dot-path keys)."""
+    in the entry's data (dot-path keys).
+
+    cache is an optional dict shared across repeated calls for the same sample_ids
+    (EntryAuditSession.load audits ~20 entry types per session.load() call) - the two
+    lookups that only depend on sample_ids, not entry_type, are computed once and
+    reused instead of being repeated for every entry type."""
     if not sample_ids:
         return None
+    if cache is None:
+        cache = {}
     headers = {"Authorization": f"Bearer {token}"}
     base_url = url.split("/api/")[0]
     seen: set[str] = set()
@@ -231,10 +395,17 @@ def load_generic_data(
             upload_id = meta.get("upload_id", "")
             mainfile = meta.get("mainfile", "")
             data = entry.get("archive", {}).get("data", {})
-            lab_ids = (
-                (entry.get("archive", {}).get("results") or {}).get("eln", {}).get("lab_ids", [])
+            raw_samples = data.get("samples", [])
+            if isinstance(raw_samples, dict):
+                raw_samples = [raw_samples]
+            sample_id = next(
+                (
+                    sample.get("lab_id")
+                    for sample in raw_samples
+                    if isinstance(sample, dict) and sample.get("lab_id") in sample_ids
+                ),
+                "N/A",
             )
-            sample_id = next((lab_id for lab_id in lab_ids if lab_id in sample_ids), "N/A")
             row: dict[str, Any] = {
                 "sample_id": sample_id,
                 "_entry_id": entry_id,
@@ -246,17 +417,6 @@ def load_generic_data(
             }
             _flatten(data, "", row)
             rows.append(row)
-
-    def extract_ref_ids(obj: Any, ref_ids: set[str]) -> None:
-        if isinstance(obj, dict):
-            for value in obj.values():
-                extract_ref_ids(value, ref_ids)
-        elif isinstance(obj, list):
-            for item in obj:
-                extract_ref_ids(item, ref_ids)
-        elif isinstance(obj, str):
-            for match in _REF_PATTERN.finditer(obj):
-                ref_ids.add(match.group(1))
 
     def archive_query(query_filter: dict) -> list[dict]:
         response = requests.post(
@@ -273,23 +433,12 @@ def load_generic_data(
         response.raise_for_status()
         return response.json().get("data", [])
 
-    all_sample_entry_ids: list[str] = []
     for chunk in chunks:
         process(archive_query({"results.eln.lab_ids:any": chunk}))
 
-        response = requests.post(
-            f"{url}/entries/query",
-            headers=headers,
-            json={
-                "required": {"include": ["entry_id"]},
-                "owner": "visible",
-                "query": {"results.eln.lab_ids:any": chunk},
-                "pagination": {"page_size": 10000},
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        all_sample_entry_ids.extend(entry["entry_id"] for entry in response.json()["data"])
+    if "sample_entry_ids" not in cache:
+        cache["sample_entry_ids"] = _resolve_sample_entry_ids(url, token, sample_ids, chunk_size)
+    all_sample_entry_ids = cache["sample_entry_ids"]
 
     id_chunks = [
         all_sample_entry_ids[i : i + chunk_size]
@@ -299,22 +448,9 @@ def load_generic_data(
         process(archive_query({"entry_references.target_entry_id:any": id_chunk}))
 
     if not rows:
-        ref_ids: set[str] = set()
-        for chunk in chunks:
-            response = requests.post(
-                f"{url}/entries/archive/query",
-                headers=headers,
-                json={
-                    "required": {"data": "*"},
-                    "owner": "visible",
-                    "query": {"results.eln.lab_ids:any": chunk},
-                    "pagination": {"page_size": 10000},
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-            for entry in response.json().get("data", []):
-                extract_ref_ids(entry.get("archive", {}).get("data", {}), ref_ids)
+        if "ref_ids" not in cache:
+            cache["ref_ids"] = _resolve_reference_ids(url, token, sample_ids, chunk_size)
+        ref_ids = cache["ref_ids"]
 
         ref_chunks = [list(ref_ids)[i : i + chunk_size] for i in range(0, len(ref_ids), chunk_size)]
         for ref_chunk in ref_chunks:
@@ -592,6 +728,7 @@ def apply_correction(
     new_value: str,
     entry_type: str,
     log_path: Path = CORRECTION_LOG_PATH,
+    only_entry_id: str | None = None,
 ) -> CorrectionResult:
     """Corrects every occurrence of old_value in column across df's underlying NOMAD
     entries: downloads each entry's raw file, regex-replaces the value, re-uploads, and
@@ -599,8 +736,14 @@ def apply_correction(
     resolved by load_generic_data); otherwise resolves them via fetch_entry_files from
     the affected rows' sample_ids. Logs successful corrections via
     append_correction_to_log. Never raises on a per-entry failure - failures are counted
-    in the returned CorrectionResult instead, so one bad entry doesn't abort the batch."""
+    in the returned CorrectionResult instead, so one bad entry doesn't abort the batch.
+    If only_entry_id is given, the correction is narrowed to that single entry instead
+    of every row matching old_value - lets a user fix one occurrence without touching
+    other entries that currently happen to share the same (otherwise consistent) value.
+    """
     affected_rows = df[df[column] == old_value]
+    if only_entry_id and "_entry_id" in affected_rows.columns:
+        affected_rows = affected_rows[affected_rows["_entry_id"] == only_entry_id]
 
     if "_entry_id" in df.columns:
         entry_files = [
@@ -664,24 +807,52 @@ class EntryAuditSession:
     def is_loaded(self) -> bool:
         return bool(self.datasets)
 
-    def load(self, url: str, token: str, batch_ids: list[str]) -> dict[str, str]:
+    def load(
+        self,
+        url: str,
+        token: str,
+        batch_ids: list[str],
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, str]:
         """Fetch every ENTRY_TYPES_TO_AUDIT dataset for the samples in batch_ids.
-        Returns {label: status_message} for the caller to display."""
+        Returns {label: status_message} for the caller to display. progress_callback,
+        if given, is invoked as (index, total, label) before each entry type is
+        fetched - gui_components uses it to drive a progress bar without this module
+        importing any widget library.
+
+        Before the per-type loop, discover_present_entry_types finds which configured
+        entry types actually have anything for this sample set - most configured
+        types come back empty for a typical batch, so load_generic_data's full,
+        expensive per-type queries are skipped entirely for those instead of being run
+        just to learn there's nothing there. Its sample_entry_ids/ref_ids results seed
+        load_generic_data's cache so the types that ARE present don't redo that work."""
         self.datasets = {}
         self.sample_ids = get_ids_in_batch_tolerant(url, token, batch_ids)
         self.sample_links = get_sample_links_chunked(url, token, self.sample_ids)
 
+        sample_entry_ids, ref_ids, entry_types_present = discover_present_entry_types(
+            url, token, self.sample_ids
+        )
+        cache: dict[str, Any] = {"sample_entry_ids": sample_entry_ids, "ref_ids": ref_ids}
+
+        total = len(ENTRY_TYPES_TO_AUDIT)
         messages: dict[str, str] = {}
-        for label, entry_type in ENTRY_TYPES_TO_AUDIT.items():
+        for index, (label, entry_type) in enumerate(ENTRY_TYPES_TO_AUDIT.items(), start=1):
+            if progress_callback is not None:
+                progress_callback(index, total, label)
+            if entry_type not in entry_types_present:
+                messages[label] = "No entries"
+                continue
             try:
-                df = load_generic_data(url, token, self.sample_ids, entry_type)
+                df = load_generic_data(url, token, self.sample_ids, entry_type, cache=cache)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Failed to load %s", label)
                 messages[label] = f"Skipped: {exc}"
                 continue
             if df is not None and not df.empty:
                 self.datasets[label] = df
-                messages[label] = f"Loaded {len(df)} entries"
+                auditable = len(get_string_columns(df))
+                messages[label] = f"Loaded {len(df)} entries, {auditable} auditable field(s)"
             else:
                 messages[label] = "No entries"
         return messages
@@ -721,3 +892,12 @@ class EntryAuditSession:
         if df is None:
             return []
         return summarize_field_values(df, column)
+
+    def field_overview(self, label: str) -> list[dict]:
+        """One entry per auditable column, for the always-visible summary table:
+        {"column", "summary" (per-unique-value rows from field_summary), "is_varied"}."""
+        overview = []
+        for column in self.auditable_columns(label):
+            summary = self.field_summary(label, column)
+            overview.append({"column": column, "summary": summary, "is_varied": len(summary) > 1})
+        return overview
