@@ -970,11 +970,47 @@ def _derive_evaporation_organic(step: dict) -> str | None:
     return None
 
 
+def _process_parameter_value(step: dict, param_name: str) -> Any:
+    """Generic Process's Excel columns (other than Notes/Name) don't get their own archive
+    attribute at all: hysprint_batch_parser.py's map_generic_parameters() stores every one
+    of them - confirmed live to include Room temperature/rel. humidity/the 6 GB
+    oxygen-water-temperature columns, and oddly a redundant copy of Datetime/Operator too -
+    as a flat process_parameters list of {'name': <Excel column>, 'value_number' |
+    'value_string': <value>} instead. Searches that list by the Excel column's own string,
+    returning whichever of value_number/value_string is present. Confirmed live against
+    real batches HZB_ThNa_1_1 (populated) and HZB_QuNa_1_1 (left blank, correctly returns
+    None) on 2026-07-29."""
+    for param in step.get("process_parameters") or []:
+        if param.get("name") == param_name:
+            value = param.get("value_number")
+            return value if value is not None else param.get("value_string")
+    return None
+
+
+def _generic_process_parameter_resolver(excel_key: str) -> Callable[[dict], Any]:
+    return lambda step: _process_parameter_value(step, excel_key)
+
+
+# Generic Process Excel columns with no fixed archive path - see _process_parameter_value.
+_GENERIC_PROCESS_PARAMETER_KEYS = [
+    "Room temperature [°C]",
+    "rel. humidity [%]",
+    "GB start oxygen level [ppm]",
+    "GB end oxygen level [ppm]",
+    "GB start water level [ppm]",
+    "GB end water level [ppm]",
+    "GB start temperature [°C]",
+    "GB end temperature [°C]",
+]
+
 # Fields with no direct archive attribute of their own - computed from other fields on
 # the same step instead of a field_mappings.json path. Keep this small; only add an entry
 # here once a plain path is confirmed impossible (see _derive_evaporation_organic).
 _DERIVED_FIELDS: dict[str, dict[str, Callable[[dict], Any]]] = {
     "Evaporation": {"Organic": _derive_evaporation_organic},
+    "Generic Process": {
+        key: _generic_process_parameter_resolver(key) for key in _GENERIC_PROCESS_PARAMETER_KEYS
+    },
 }
 
 

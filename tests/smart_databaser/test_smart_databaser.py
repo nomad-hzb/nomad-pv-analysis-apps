@@ -3408,7 +3408,10 @@ def test_build_field_mapping_debug_report_reports_mapped_and_ignored():
 
 
 def test_build_field_mapping_debug_report_unmapped_process_type_reports_everything_ignored():
-    report = build_field_mapping_debug_report("Generic Process", {"method": "Cleaning"})
+    """Ink Recycling has no field_mappings.json entry at all (separate mapper file, not
+    yet fetched - see field_mappings.json's _readme) and no _DERIVED_FIELDS entry either,
+    unlike Generic Process which now has both."""
+    report = build_field_mapping_debug_report("Ink Recycling", {"method": "Cleaning"})
     assert report["mapped"] == []
     assert {row["path"] for row in report["ignored"]} == {"method"}
 
