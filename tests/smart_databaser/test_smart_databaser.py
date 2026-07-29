@@ -687,7 +687,7 @@ SPIN_COATING_STEP = {
             "solution_volume": 0.12,
             "solution_details": {
                 "solute": [{"name": "Me4PACz", "concentration_mol": 0.003}],
-                "solvent": [{"name": "Ethanol"}],
+                "solvent": [{"name": "Ethanol 0.12 milliliter", "chemical_2": {"name": "Ethanol"}}],
             },
         }
     ],
@@ -1207,7 +1207,10 @@ SPIN_COATING_STEP_TWO_SOLVENTS = {
                     {"name": "A", "concentration_mol": 1},
                     {"name": "B", "concentration_mol": 2},
                 ],
-                "solvent": [{"name": "Ethanol"}, {"name": "Water"}],
+                "solvent": [
+                    {"name": "Ethanol 0.1 milliliter", "chemical_2": {"name": "Ethanol"}},
+                    {"name": "Water 0.1 milliliter", "chemical_2": {"name": "Water"}},
+                ],
             },
         }
     ],
@@ -1829,7 +1832,13 @@ def test_fetch_process_field_values_co_evaporation_indexed_materials():
 SLOT_DIE_COATING_STEP = {
     "method": "Slot Die Coating",
     "layer": [{"layer_material_name": "Perovskite", "layer_type": "Absorber"}],
-    "solution": [{"solution_details": {"solvent": [{"name": "DMF"}]}}],
+    "solution": [
+        {
+            "solution_details": {
+                "solvent": [{"name": "DMF 0.01 milliliter", "chemical_2": {"name": "DMF"}}]
+            }
+        }
+    ],
     "properties": {"flow_rate": 25.0, "slot_die_head_speed": 15.0},
 }
 

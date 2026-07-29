@@ -8,6 +8,7 @@ import logging
 import re
 import statistics
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -886,6 +887,17 @@ def autofill_experiment_info_from_batch(
 # resolver function below) when a new mismatch is found.
 _METHOD_ALIASES: dict[str, str] = {
     "Atomic Layer Deposition": "ALD",
+    "Inkjet printing": "Inkjet Printing",
+}
+
+# m_def suffix for real archive steps whose 'method' is None (no method concept in that
+# NOMAD schema class) - verified against real batch HZB_ThNa_1_1 on 2026-07-29: a "Generic
+# Process" Excel section has no Method column at all, so NOMAD's own HySprint_Process
+# entries never get a method value, and resolve_process_type's normal method-based lookup
+# can never recognize them. Extend this (not resolve_process_type) for future None-method
+# schema classes.
+_M_DEF_PROCESS_TYPES: dict[str, str] = {
+    "HySprint_Process": "Generic Process",
 }
 
 
@@ -900,16 +912,24 @@ def resolve_process_type(step: dict) -> str | None:
     label, so autofill/occurrence-listing/sequence-replication all agree on which app
     process type a given source step maps to. Returns None if unrecognized.
 
-    Two real mismatches verified against batch HZB_JJ_1_A: (1) simple renames, handled
-    via _METHOD_ALIASES (e.g. real "Atomic Layer Deposition" vs this app's "ALD"); (2) a
-    single real "Cleaning" step covers what this app models as two separate process
-    types ("Cleaning O2-Plasma" / "Cleaning UV-Ozone") - disambiguated by which of
-    cleaning_uv/cleaning_plasma actually has data on that step (both empty defaults to
-    "Cleaning UV-Ozone", an arbitrary but documented choice; if both have data,
-    UV-Ozone also wins, since Excel_creator can't represent 'both' as one process
-    instance either)."""
+    Real mismatches verified against real batches: (1) simple renames, handled via
+    _METHOD_ALIASES (e.g. real "Atomic Layer Deposition" vs this app's "ALD", or real
+    "Inkjet printing" vs this app's "Inkjet Printing" - verified against HZB_ThNa_1_1 on
+    2026-07-29); (2) a single real "Cleaning" step covers what this app models as two
+    separate process types ("Cleaning O2-Plasma" / "Cleaning UV-Ozone") - disambiguated
+    by which of cleaning_uv/cleaning_plasma actually has data on that step (both empty
+    defaults to "Cleaning UV-Ozone", an arbitrary but documented choice; if both have
+    data, UV-Ozone also wins, since Excel_creator can't represent 'both' as one process
+    instance either); (3) a None 'method' (no method concept in that step's NOMAD schema
+    class at all, e.g. "Generic Process" - its Excel section has no Method column, so
+    real archive entries never get one) - resolved via _M_DEF_PROCESS_TYPES matching the
+    step's 'm_def' suffix instead."""
     method = step.get("method")
     if method is None:
+        m_def = step.get("m_def", "")
+        for suffix, process_type in _M_DEF_PROCESS_TYPES.items():
+            if m_def.endswith(suffix):
+                return process_type
         return None
     if method in AVAILABLE_PROCESSES:
         return method
@@ -929,6 +949,33 @@ def steps_for_process_type(steps: list[dict], process_type: str) -> list[dict]:
     via resolve_process_type() rather than a raw 'method' comparison, since the archive's
     method string doesn't always match this app's process type labels 1:1."""
     return [s for s in steps if resolve_process_type(s) == process_type]
+
+
+def _derive_evaporation_organic(step: dict) -> str | None:
+    """Evaporation's 'Organic' Excel column (apps/Excel_creator/sheet_experiment.py's
+    make_label("Organic", True) - a literal True/False value in the sheet) is never
+    stored as its own archive attribute: NOMAD's map_evaporation() only uses it to choose
+    which of organic_evaporation/inorganic_evaporation gets populated on the step (see
+    this app's field_mappings.json _readme) - 'co_evaporation' is an unrelated flag
+    (Evaporation-vs-Co-Evaporation section choice, not Organic-vs-Inorganic). Recovers
+    'True'/'False' - matching the Excel column's own literal spelling, not a Python bool,
+    so it round-trips through ProcessFieldSpec/Excel generation like any other string
+    field - from which list is actually non-empty on this step. Returns None if neither
+    is populated (step has no evaporation data at all, or came from Co-Evaporation, whose
+    perovskite_evaporation list this deliberately doesn't check)."""
+    if step.get("organic_evaporation"):
+        return "True"
+    if step.get("inorganic_evaporation"):
+        return "False"
+    return None
+
+
+# Fields with no direct archive attribute of their own - computed from other fields on
+# the same step instead of a field_mappings.json path. Keep this small; only add an entry
+# here once a plain path is confirmed impossible (see _derive_evaporation_organic).
+_DERIVED_FIELDS: dict[str, dict[str, Callable[[dict], Any]]] = {
+    "Evaporation": {"Organic": _derive_evaporation_organic},
+}
 
 
 def _apply_multiplier(process_type: str, field_key: str, value: Any) -> Any:
@@ -952,17 +999,21 @@ def fetch_process_field_values(
     position, matching sort order), plus the lab_id of its first referenced sample for
     provenance tagging. Returns ({}, None) if the batch has no matching step."""
     field_paths = PROCESS_TYPE_FIELD_PATHS.get(process_type)
-    if not field_paths:
+    if not field_paths and process_type not in _DERIVED_FIELDS:
         return {}, None
     steps = steps_for_process_type(cache.get_processing_steps(url, token, batch_id), process_type)
     if occurrence >= len(steps):
         return {}, None
     step = steps[occurrence]
     values = {}
-    for field_key, (paths, _unit_verified) in field_paths.items():
+    for field_key, (paths, _unit_verified) in (field_paths or {}).items():
         value = _get_path_any(step, paths)
         if value is not None:
             values[field_key] = _apply_multiplier(process_type, field_key, value)
+    for field_key, resolver in _DERIVED_FIELDS.get(process_type, {}).items():
+        value = resolver(step)
+        if value is not None:
+            values[field_key] = value
     samples = step.get("samples") or []
     source_sample_id = samples[0]["lab_id"] if samples else None
     return values, source_sample_id
@@ -1124,7 +1175,10 @@ def build_field_mapping_debug_report(process_type: str, raw_source: dict) -> dic
     this reports matches what autofill would actually write, not the raw archive number.
     "ignored" is every raw leaf field on raw_source not claimed by any configured path -
     real gaps (mismatched process-type disambiguation, genuinely unmapped fields, config
-    ranges too narrow for this step's actual data) show up here directly."""
+    ranges too narrow for this step's actual data) show up here directly. Also includes
+    any process_type entries from _DERIVED_FIELDS (fields with no single archive path -
+    computed from other fields on the step instead), tagged with a placeholder paths
+    value rather than a real archive path."""
     field_paths = PROCESS_TYPE_FIELD_PATHS.get(process_type, {})
     mapped_rows = []
     claimed_paths: set[tuple] = set()
@@ -1142,6 +1196,16 @@ def build_field_mapping_debug_report(process_type: str, raw_source: dict) -> dic
         )
         for path in paths:
             claimed_paths.add(tuple(path))
+
+    for excel_key, resolver in _DERIVED_FIELDS.get(process_type, {}).items():
+        mapped_rows.append(
+            {
+                "excel_key": excel_key,
+                "value": resolver(raw_source),
+                "unit_verified": True,
+                "paths": ["<derived, see _DERIVED_FIELDS>"],
+            }
+        )
 
     ignored_rows = [
         {"path": _path_to_label(path), "value": value}
