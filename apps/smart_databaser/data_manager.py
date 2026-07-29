@@ -947,8 +947,39 @@ def resolve_process_type(step: dict) -> str | None:
 def steps_for_process_type(steps: list[dict], process_type: str) -> list[dict]:
     """get_processing_steps() is already sorted by positon_in_experimental_plan; matches
     via resolve_process_type() rather than a raw 'method' comparison, since the archive's
-    method string doesn't always match this app's process type labels 1:1."""
+    method string doesn't always match this app's process type labels 1:1. Returns EVERY
+    matching raw step, including duplicate entries at the same sequence position (one per
+    sample/variation-group sharing that step, e.g. 4 subbatches all annealed at position 3
+    but with per-subbatch values) - correct for compute_field_distribution_for_occurrence's
+    per-position statistics, WRONG for anything that needs to pick a single logical process
+    instance by occurrence number (autofill/preview/config-widening) - see
+    distinct_steps_for_process_type for that."""
     return [s for s in steps if resolve_process_type(s) == process_type]
+
+
+def distinct_steps_for_process_type(steps: list[dict], process_type: str) -> list[dict]:
+    """One representative raw step per distinct sequence position matching process_type,
+    in position order (see _distinct_positions_in_order) - real bug fix, 2026-07-29:
+    build_process_sequence_from_batch builds the TARGET sequence with exactly one
+    ProcessInstance per distinct position, and occurrence_index_for_process counts how
+    many processes of this type precede a given one IN THAT TARGET SEQUENCE - but every
+    caller that turns that count into "the Nth step of this type in the SOURCE batch" was
+    indexing into steps_for_process_type's raw (non-deduplicated) list instead, which
+    still has one entry per sample/variation-group at a position. On a batch where an
+    earlier same-type position has multiple samples (any batch using Subbatches - the
+    normal case), this silently mis-sourced every later same-type occurrence from one of
+    the earlier position's duplicate entries instead of its real target step - live
+    reproduced on batch HZB_ThNa_1_1: the target sequence's 2nd/3rd Spin Coating
+    (sourced from real archive positions 12/13, 5 solutes/5 solvents respectively) were
+    silently sourced from position 11's duplicate entries instead (2 solutes/2 solvents
+    each), so only the first 2 of 5 ever got a value - not a field-mapping gap, an
+    occurrence-indexing bug. Fixed by giving every "pick one logical step by occurrence"
+    caller (fetch_process_field_values, list_process_occurrences, preview_value_for_field,
+    expand_process_config_for_source, compute_field_distribution_for_occurrence's target
+    step resolution) this deduplicated view instead of the raw steps_for_process_type
+    list, so occurrence N means the same thing everywhere: the Nth distinct sequence
+    position of this type."""
+    return _distinct_positions_in_order(steps_for_process_type(steps, process_type))
 
 
 def _derive_evaporation_organic(step: dict) -> str | None:
@@ -1037,7 +1068,9 @@ def fetch_process_field_values(
     field_paths = PROCESS_TYPE_FIELD_PATHS.get(process_type)
     if not field_paths and process_type not in _DERIVED_FIELDS:
         return {}, None
-    steps = steps_for_process_type(cache.get_processing_steps(url, token, batch_id), process_type)
+    steps = distinct_steps_for_process_type(
+        cache.get_processing_steps(url, token, batch_id), process_type
+    )
     if occurrence >= len(steps):
         return {}, None
     step = steps[occurrence]
@@ -1058,13 +1091,19 @@ def fetch_process_field_values(
 def list_process_occurrences(
     url: str, token: str, cache: NomadSessionCache, batch_id: str, process_type: str
 ) -> list[tuple[int, str]]:
-    """(occurrence_index, label) for every step of process_type in batch_id, in the same
-    order autofill_process_from_batch's `occurrence` parameter indexes into. Label is the
-    step's Material name when process_type has that field mapped (the material-gated
-    process types), else a generic 'Occurrence N' fallback - lets the 'adopt from
-    template batch' picker distinguish multiple same-type steps (e.g. several Spin
-    Coating layers) by what they actually deposited."""
-    steps = steps_for_process_type(cache.get_processing_steps(url, token, batch_id), process_type)
+    """(occurrence_index, label) for every DISTINCT sequence position of process_type in
+    batch_id, in the same order autofill_process_from_batch's `occurrence` parameter
+    indexes into. Label is the step's Material name when process_type has that field
+    mapped (the material-gated process types), else a generic 'Occurrence N' fallback -
+    lets the 'adopt from template batch' picker distinguish multiple same-type steps
+    (e.g. several Spin Coating layers) by what they actually deposited. Uses
+    distinct_steps_for_process_type, not the raw per-sample step list - a batch with
+    Subbatches has one raw step per sample at each position, which would otherwise list
+    the same logical step several times over before ever reaching a later, genuinely
+    different occurrence."""
+    steps = distinct_steps_for_process_type(
+        cache.get_processing_steps(url, token, batch_id), process_type
+    )
     material_path_info = PROCESS_TYPE_FIELD_PATHS.get(process_type, {}).get(MATERIAL_FIELD_KEY)
     occurrences = []
     for index, step in enumerate(steps):
@@ -1151,7 +1190,7 @@ def preview_value_for_field(
     path_info = PROCESS_TYPE_FIELD_PATHS.get(process.process_type, {}).get(field_key)
     if path_info is None:
         return None
-    matching = steps_for_process_type(steps, process.process_type)
+    matching = distinct_steps_for_process_type(steps, process.process_type)
     occurrence = occurrence_index_for_process(state, process)
     if occurrence >= len(matching):
         return None
@@ -1266,7 +1305,7 @@ def expand_process_config_for_source(
     has a slot to write every value the source can supply. Never shrinks an
     already-larger config. No-op if the occurrence doesn't exist in the source batch."""
     all_steps = cache.get_processing_steps(url, token, batch_id)
-    steps = steps_for_process_type(all_steps, process.process_type)
+    steps = distinct_steps_for_process_type(all_steps, process.process_type)
     if occurrence >= len(steps):
         return
     inferred = infer_config_from_source_step(process.process_type, steps[occurrence])
@@ -1459,11 +1498,16 @@ def compute_field_distribution_for_occurrence(
     if path_info is None:
         return []
     paths, _ = path_info
-    steps = steps_for_process_type(cache.get_processing_steps(url, token, batch_id), process_type)
-    if occurrence >= len(steps):
+    all_steps = cache.get_processing_steps(url, token, batch_id)
+    distinct_steps = distinct_steps_for_process_type(all_steps, process_type)
+    if occurrence >= len(distinct_steps):
         return []
-    target_step = steps[occurrence]
+    target_step = distinct_steps[occurrence]
     target_position = target_step.get("positon_in_experimental_plan")
+    # Deliberately the RAW (non-deduplicated) list here, not distinct_steps - this
+    # function wants every sample/variation-group sharing target_position, which is
+    # exactly what distinct_steps_for_process_type collapses away.
+    steps = steps_for_process_type(all_steps, process_type)
     values = []
     for step in steps:
         if step.get("positon_in_experimental_plan") != target_position:

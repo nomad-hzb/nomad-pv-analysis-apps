@@ -652,7 +652,12 @@ def test_process_sequence_builder_adopt_section_multiple_occurrences_shows_mater
 ):
     fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
-    second_step = {**SPIN_COATING_STEP, "layer": [{"layer_material_name": "SecondLayerMaterial"}]}
+    # Distinct positon_in_experimental_plan required - see distinct_steps_for_process_type.
+    second_step = {
+        **SPIN_COATING_STEP,
+        "positon_in_experimental_plan": 9.0,
+        "layer": [{"layer_material_name": "SecondLayerMaterial"}],
+    }
     cache = _cache_with("B1", [SPIN_COATING_STEP, second_step])
     fresh_state.whole_experiment_template_batch_id = "B1"
     builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
@@ -850,6 +855,12 @@ def test_compute_field_distribution_for_occurrence_excludes_different_position()
 
 
 def test_compute_field_distribution_for_occurrence_exclude_occurrence_drops_own_step():
+    """SPIN_COATING_STEP/_CLOSE/_EXTREME_OUTLIER all share one positon_in_experimental_plan
+    (representing different samples at the same sequence position), so this is a single
+    distinct occurrence (0) - occurrence indexes into DISTINCT positions, see
+    distinct_steps_for_process_type; the "own step" that exclude_occurrence drops is
+    whichever raw step distinct_steps_for_process_type picked as that position's
+    representative (the first-listed one, SPIN_COATING_STEP itself, temp 100.0)."""
     cache = NomadSessionCache()
     cache._processing_steps_by_batch["B1"] = [
         SPIN_COATING_STEP,
@@ -858,7 +869,7 @@ def test_compute_field_distribution_for_occurrence_exclude_occurrence_drops_own_
     ]
 
     with_self = compute_field_distribution_for_occurrence(
-        "url", "token", cache, "B1", "Spin Coating", "Annealing temperature [°C]", occurrence=2
+        "url", "token", cache, "B1", "Spin Coating", "Annealing temperature [°C]", occurrence=0
     )
     without_self = compute_field_distribution_for_occurrence(
         "url",
@@ -867,12 +878,12 @@ def test_compute_field_distribution_for_occurrence_exclude_occurrence_drops_own_
         "B1",
         "Spin Coating",
         "Annealing temperature [°C]",
-        occurrence=2,
+        occurrence=0,
         exclude_occurrence=True,
     )
 
     assert with_self == [100.0, 102.0, 99999.0]
-    assert without_self == [100.0, 102.0]
+    assert without_self == [102.0, 99999.0]
 
 
 def test_self_inclusive_distribution_masks_extreme_outlier_regression():
@@ -1299,7 +1310,13 @@ def test_apply_process_override_explicit_occurrence_overrides_positional_default
     (e.g. by material) rather than always taking the positionally-matched one."""
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
-    second_step = {**SPIN_COATING_STEP, "layer": [{"layer_material_name": "SecondLayerMaterial"}]}
+    # A distinct positon_in_experimental_plan is required - occurrence indexes into
+    # DISTINCT sequence positions (see distinct_steps_for_process_type), not raw steps.
+    second_step = {
+        **SPIN_COATING_STEP,
+        "positon_in_experimental_plan": 9.0,
+        "layer": [{"layer_material_name": "SecondLayerMaterial"}],
+    }
     cache = _cache_with("B1", [SPIN_COATING_STEP, second_step])
 
     apply_process_override(fresh_state, process, "url", "token", cache, "B1", occurrence=1)
@@ -1314,7 +1331,12 @@ def test_apply_process_override_explicit_occurrence_overrides_positional_default
 
 
 def test_list_process_occurrences_labels_by_material_when_mapped():
-    cache = _cache_with("B1", [SPIN_COATING_STEP, SPIN_COATING_STEP_VARIATION])
+    # SPIN_COATING_STEP_VARIATION shares SPIN_COATING_STEP's positon_in_experimental_plan
+    # (representing another sample at the SAME sequence position) so is not a second
+    # occurrence here - occurrences are distinct sequence positions, see
+    # distinct_steps_for_process_type. Use a genuinely later position instead.
+    other_position_step = {**SPIN_COATING_STEP_VARIATION, "positon_in_experimental_plan": 9.0}
+    cache = _cache_with("B1", [SPIN_COATING_STEP, other_position_step])
     occurrences = list_process_occurrences("url", "token", cache, "B1", "Spin Coating")
     assert occurrences == [(0, "Me4PACz"), (1, "Me4PACz")]
 
@@ -2363,19 +2385,25 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
 
 
 def test_autofill_flags_outlier_far_from_distribution(fresh_state):
+    """All 4 steps share one positon_in_experimental_plan (same sequence position, 4
+    different samples) - occurrence 0 always autofills from whichever is FIRST in the
+    list (distinct_steps_for_process_type's representative pick), so the extreme value
+    is listed first here specifically to be the one fetched+written, with the other 3
+    providing its comparison distribution (100/130/102 - not outliers relative to each
+    other, but 99999 clearly is)."""
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
     cache = _cache_with(
         "B1",
         [
+            SPIN_COATING_STEP_EXTREME_OUTLIER,
             SPIN_COATING_STEP,
             SPIN_COATING_STEP_VARIATION,
             SPIN_COATING_STEP_CLOSE,
-            SPIN_COATING_STEP_EXTREME_OUTLIER,
         ],
     )
 
-    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=3)
+    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=0)
 
     assert process.field_specs["Annealing temperature [°C]"].value == 99999.0
     assert process.field_specs["Annealing temperature [°C]"].is_outlier is True
@@ -2401,13 +2429,16 @@ def test_autofill_does_not_flag_value_within_distribution(fresh_state):
 
 
 def test_autofill_outlier_flag_cleared_by_manual_edit(fresh_state):
+    # Extreme value listed first so occurrence 0 (the shared position's representative,
+    # see distinct_steps_for_process_type) fetches+writes it, with the other two as its
+    # comparison distribution.
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
     cache = _cache_with(
         "B1",
-        [SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE, SPIN_COATING_STEP_EXTREME_OUTLIER],
+        [SPIN_COATING_STEP_EXTREME_OUTLIER, SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE],
     )
-    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=2)
+    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=0)
     assert process.field_specs["Annealing temperature [°C]"].is_outlier is True
 
     set_field_manual(process.field_specs["Annealing temperature [°C]"], 105)
@@ -2448,9 +2479,9 @@ def test_build_nudge_queue_missing_items_come_before_outlier_items(fresh_state):
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
     cache = _cache_with(
-        "B1", [SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE, SPIN_COATING_STEP_EXTREME_OUTLIER]
+        "B1", [SPIN_COATING_STEP_EXTREME_OUTLIER, SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE]
     )
-    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=2)
+    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=0)
     process.field_specs["Layer type"].value = ""  # still missing
 
     queue = build_nudge_queue(fresh_state)
@@ -2513,9 +2544,9 @@ def test_build_nudge_queue_excludes_not_required_outlier_fields(fresh_state):
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
     cache = _cache_with(
-        "B1", [SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE, SPIN_COATING_STEP_EXTREME_OUTLIER]
+        "B1", [SPIN_COATING_STEP_EXTREME_OUTLIER, SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE]
     )
-    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=2)
+    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=0)
     outlier_field = next(
         key for key, spec in process.field_specs.items() if spec.is_outlier and spec.is_filled()
     )
@@ -2592,9 +2623,9 @@ def test_nudge_popup_flow_confirming_outlier_clears_flag_and_sets_manual(fresh_s
     process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     rebuild_field_specs(fresh_state)
     cache = _cache_with(
-        "B1", [SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE, SPIN_COATING_STEP_EXTREME_OUTLIER]
+        "B1", [SPIN_COATING_STEP_EXTREME_OUTLIER, SPIN_COATING_STEP, SPIN_COATING_STEP_CLOSE]
     )
-    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=2)
+    autofill_process_from_batch(process, "url", "token", cache, "B1", occurrence=0)
     spec = process.field_specs["Annealing temperature [°C]"]
     assert spec.is_outlier is True
 
