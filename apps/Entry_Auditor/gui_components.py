@@ -42,59 +42,17 @@ def _log_html(text: str) -> str:
     )
 
 
-def _render_detail_table_html(session: EntryAuditSession, label: str, show_links: bool) -> str:
-    """One row per (parameter, entry) - the full, untruncated detail view behind the
-    'Expand' toggle. Rows belonging to a varied parameter are colored to match the
-    summary table. show_links controls whether each value is wrapped in a hyperlink to
-    its NOMAD GUI entry (opt-in, since resolving/rendering a link for every row adds up
-    on large batches)."""
-    df = session.datasets[label]
-    overview = session.field_overview(label)
-
-    rows = [
-        "<table style='border-collapse:collapse;font-size:12px'>",
-        "<tr style='background:#f0f0f0'>"
-        "<th style='text-align:left;padding:4px 12px'>Parameter</th>"
-        "<th style='text-align:left;padding:4px 12px'>Sample</th>"
-        "<th style='text-align:left;padding:4px 12px'>Value</th></tr>",
-    ]
-    for entry in overview:
-        column = entry["column"]
-        color = "#c0392b" if entry["is_varied"] else "#1a1a1a"
-        for value_row in entry["summary"]:
-            value = value_row["value"]
-            for row_index in value_row["row_indices"]:
-                row = df.loc[row_index]
-                sample_id = row.get("sample_id", "") or "N/A"
-                # A sample can carry several entries of the same schema (e.g. multiple
-                # Spin Coating steps) - the mainfile tag is what tells them apart.
-                mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
-                sample_cell = f"{sample_id} <span style='color:#888'>({mainfile_label})</span>"
-                value_cell = str(value)
-                if show_links:
-                    gui_url = row.get("_gui_url", "") or session.sample_links.get(sample_id, "")
-                    if gui_url:
-                        value_cell = f"<a href='{gui_url}' target='_blank'>{value_cell}</a>"
-                rows.append(
-                    "<tr>"
-                    f"<td style='padding:2px 12px;color:{color}'>{column}</td>"
-                    f"<td style='padding:2px 12px'>{sample_cell}</td>"
-                    f"<td style='padding:2px 12px;color:{color}'>{value_cell}</td>"
-                    "</tr>"
-                )
-    rows.append("</table>")
-    table_html = "".join(rows)
-    return (
-        "<div style='max-height:420px;overflow-y:auto;border:1px solid #ddd;padding:4px'>"
-        f"{table_html}</div>"
-    )
-
-
 class FieldAuditPanel(widgets.VBox):
-    """Always-visible parameter/value/variations summary, an opt-in detailed per-entry
-    table, and a correction section for one entry-type dataset. The correction section
-    is only shown when url/token are both given - offline/demo data has no NOMAD entries
-    to write back to."""
+    """One row per auditable parameter, one column per entry (numbered, with the
+    sample/mainfile shown on hover) - every value is spelled out, and a varied
+    parameter's whole row is colored. Cell count is bounded by (auditable columns) x
+    (entries) for one schema, which stays small even for large batches (a few hundred
+    cells at most in practice), so this is rendered directly rather than gated behind
+    an extra expand step. The correction section is only shown when url/token are both
+    given - offline/demo data has no NOMAD entries to write back to."""
+
+    _VALUE_CELL_WIDTH = "200px"
+    _NAME_CELL_WIDTH = "240px"
 
     def __init__(
         self,
@@ -110,9 +68,12 @@ class FieldAuditPanel(widgets.VBox):
         self.entry_type = ENTRY_TYPES_TO_AUDIT[label]
         self._can_correct = url is not None and token is not None
 
-        df = session.datasets[label]
-        entries = len(df)
-        unique_samples = df["sample_id"].nunique() if "sample_id" in df.columns else 0
+        self.entries_df = session.datasets[label]
+        self.entry_indices = list(self.entries_df.index)
+        entries = len(self.entries_df)
+        unique_samples = (
+            self.entries_df["sample_id"].nunique() if "sample_id" in self.entries_df.columns else 0
+        )
         overview = session.field_overview(label)
         header = widgets.HTML(
             value=(
@@ -123,13 +84,13 @@ class FieldAuditPanel(widgets.VBox):
             )
         )
 
-        self.expand_toggle = widgets.ToggleButton(value=False, description="Expand", icon="expand")
         self.links_toggle = widgets.ToggleButton(
             value=False, description="Add NOMAD links", icon="link"
         )
-        self.detail_out = widgets.HTML(value="")
-        self.expand_toggle.observe(self._on_expand_change, names="value")
         self.links_toggle.observe(self._on_links_change, names="value")
+        # column -> its values-row HTML widget, so the links toggle can refresh every
+        # row in place without rebuilding the whole table.
+        self._value_row_widgets: dict[str, widgets.HTML] = {}
 
         self.dropdown: widgets.Dropdown | None = None
         correct_section: widgets.Widget = widgets.VBox([])
@@ -175,57 +136,91 @@ class FieldAuditPanel(widgets.VBox):
             if self.dropdown.options:
                 self._refresh_from_options(self.dropdown.options[0])
 
-        summary_grid = self._build_summary_grid(overview)
-        toolbar = widgets.HBox([self.expand_toggle, self.links_toggle])
+        pivot_table = self._build_pivot_table(overview)
 
-        super().__init__([header, summary_grid, toolbar, self.detail_out, correct_section])
+        super().__init__([header, self.links_toggle, pivot_table, correct_section])
 
-    def _build_summary_grid(self, overview: list[dict]) -> widgets.VBox:
-        # Plain HBox/VBox rows rather than GridBox - GridBox leans on CSS grid support
-        # that has been unreliable in some embedded ipywidgets renderers (e.g. VS
-        # Code's Jupyter webview), whereas nested HBox/VBox is the oldest and most
-        # broadly-supported ipywidgets layout pattern.
-        name_width, value_width, variations_width = "240px", "200px", "100px"
+    def _build_pivot_table(self, overview: list[dict]) -> widgets.VBox:
+        # Plain HBox/VBox rows (not GridBox) for the same reason as before - broadly
+        # supported ipywidgets layout, no CSS-grid dependency. Rows are one per
+        # auditable parameter (bounded, small); each row's value section is one HTML
+        # widget holding a flex row of per-entry cells, so the column count (entries)
+        # never turns into one widget per cell.
         header_row = widgets.HBox(
             [
-                widgets.HTML("<b>Parameter</b>", layout=widgets.Layout(width=name_width)),
-                widgets.HTML("<b>Value</b>", layout=widgets.Layout(width=value_width)),
-                widgets.HTML("<b>Variations</b>", layout=widgets.Layout(width=variations_width)),
+                widgets.HTML(
+                    "<b>Parameter</b>",
+                    layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
+                ),
+                widgets.HTML(self._header_html()),
             ]
         )
         rows: list[widgets.Widget] = [header_row]
         for entry in overview:
-            column = entry["column"]
-            summary = entry["summary"]
-            is_varied = entry["is_varied"]
-            color = "#c0392b" if is_varied else "#1a1a1a"
-            value_display = "varied" if is_varied else (summary[0]["value"] if summary else "-")
+            rows.append(self._build_parameter_row(entry))
 
-            if self._can_correct:
-                name_widget = widgets.Button(
-                    description=column,
-                    layout=widgets.Layout(width=name_width),
-                    tooltip="Select this field in the correction controls below",
-                )
-                if is_varied:
-                    name_widget.style.button_color = "#f5b7b1"
-                name_widget.on_click(lambda _button, col=column: self._select_field(col))
+        return widgets.VBox(rows, layout=widgets.Layout(max_height="480px", overflow="auto"))
+
+    def _header_html(self) -> str:
+        cells = []
+        for position, row_index in enumerate(self.entry_indices, start=1):
+            row = self.entries_df.loc[row_index]
+            sample_id = row.get("sample_id", "") or "N/A"
+            mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
+            tooltip = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
+            cells.append(
+                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;"
+                f'text-align:center;font-weight:bold\' title="{tooltip}">{position}</div>'
+            )
+        return f"<div style='display:flex'>{''.join(cells)}</div>"
+
+    def _row_values_html(self, column: str, is_varied: bool) -> str:
+        text_color = "#c0392b" if is_varied else "#1a1a1a"
+        row_bg = "#fdecea" if is_varied else "#ffffff"
+        show_links = self.links_toggle.value
+        cells = []
+        for row_index in self.entry_indices:
+            row = self.entries_df.loc[row_index]
+            value = row.get(column)
+            if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
+                text = "-"
             else:
-                name_widget = widgets.HTML(
-                    f"<code>{column}</code>", layout=widgets.Layout(width=name_width)
-                )
-
-            value_widget = widgets.HTML(
-                f"<span style='color:{color}'>{value_display}</span>",
-                layout=widgets.Layout(width=value_width),
+                text = str(value)
+                if show_links:
+                    sample_id = row.get("sample_id", "") or ""
+                    gui_url = row.get("_gui_url", "") or self.session.sample_links.get(
+                        sample_id, ""
+                    )
+                    if gui_url:
+                        text = f"<a href='{gui_url}' target='_blank'>{text}</a>"
+            cells.append(
+                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;overflow:auto;"
+                f"white-space:nowrap;padding:0 4px;color:{text_color}'>{text}</div>"
             )
-            variations_widget = widgets.HTML(
-                f"<span style='color:{color}'>{len(summary)}</span>",
-                layout=widgets.Layout(width=variations_width),
-            )
-            rows.append(widgets.HBox([name_widget, value_widget, variations_widget]))
+        return f"<div style='background:{row_bg};display:flex'>{''.join(cells)}</div>"
 
-        return widgets.VBox(rows, layout=widgets.Layout(max_height="360px", overflow_y="auto"))
+    def _build_parameter_row(self, entry: dict) -> widgets.HBox:
+        column = entry["column"]
+        is_varied = entry["is_varied"]
+
+        if self._can_correct:
+            name_widget = widgets.Button(
+                description=column,
+                layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
+                tooltip="Select this field in the correction controls below",
+            )
+            if is_varied:
+                name_widget.style.button_color = "#f5b7b1"
+            name_widget.on_click(lambda _button, col=column: self._select_field(col))
+        else:
+            name_widget = widgets.HTML(
+                f"<code>{column}</code>",
+                layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
+            )
+
+        values_widget = widgets.HTML(self._row_values_html(column, is_varied))
+        self._value_row_widgets[column] = values_widget
+        return widgets.HBox([name_widget, values_widget])
 
     def _select_field(self, column: str) -> None:
         if self.dropdown is None:
@@ -235,20 +230,11 @@ class FieldAuditPanel(widgets.VBox):
         else:
             self.dropdown.value = column
 
-    def _on_expand_change(self, change) -> None:
-        if change["new"]:
-            self._render_detail_table()
-        else:
-            self.detail_out.value = ""
-
     def _on_links_change(self, _change) -> None:
-        if self.expand_toggle.value:
-            self._render_detail_table()
-
-    def _render_detail_table(self) -> None:
-        self.detail_out.value = _render_detail_table_html(
-            self.session, self.label, self.links_toggle.value
-        )
+        for entry in self.session.field_overview(self.label):
+            widget = self._value_row_widgets.get(entry["column"])
+            if widget is not None:
+                widget.value = self._row_values_html(entry["column"], entry["is_varied"])
 
     def _on_field_change(self, change) -> None:
         column = change["new"]
@@ -272,6 +258,7 @@ class FieldAuditPanel(widgets.VBox):
         old_value = change["new"]
         if old_value is None or self.dropdown is None:
             self.sample_dropdown.options = [("All", None)]
+            self.sample_dropdown.value = None
             return
         self._refresh_sample_options(self.dropdown.value, old_value)
 
@@ -280,9 +267,11 @@ class FieldAuditPanel(widgets.VBox):
         matched = next((row for row in summary if row["value"] == old_value), None)
         if not matched:
             self.sample_dropdown.options = [("All", None)]
+            self.sample_dropdown.value = None
             return
         df = self.session.datasets[self.label]
-        options = [(f"All matching entries ({len(matched['row_indices'])})", None)]
+        sample_count = df.loc[matched["row_indices"], "sample_id"].nunique()
+        options = [(f"All matching entries ({sample_count})", None)]
         for row_index in matched["row_indices"]:
             row = df.loc[row_index]
             sample_id = row.get("sample_id", "") or "N/A"
@@ -294,6 +283,11 @@ class FieldAuditPanel(widgets.VBox):
             label = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
             options.append((label, entry_id))
         self.sample_dropdown.options = options
+        # Setting .options does NOT reselect a default value (confirmed ipywidgets
+        # quirk) - without this, picking a new "change name" value would silently keep
+        # whatever specific sample was selected for the PREVIOUS value, which is almost
+        # never what's wanted. Always reset to the bulk "All" default instead.
+        self.sample_dropdown.value = None
 
     def _on_correct_click(self, _button) -> None:
         self.correct_out.value = "<i>Working...</i>"
