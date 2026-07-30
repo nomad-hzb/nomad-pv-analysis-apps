@@ -20,11 +20,7 @@ import requests
 from pydantic import BaseModel
 
 from hysprint_utils.api_calls import get_sample_entry_links
-from hysprint_utils.consistency import (
-    DEFAULT_EXCLUDE_COLUMNS,
-    get_string_columns,
-    summarize_field_values,
-)
+from hysprint_utils.consistency import get_string_columns, summarize_field_values
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -73,13 +69,26 @@ ENTRY_TYPES_TO_AUDIT: dict[str, str] = {
     "Substrate": "HySprint_Substrate",
 }
 
-# App-local extension of hysprint_utils.consistency.DEFAULT_EXCLUDE_COLUMNS (not a
-# shared-code change - per-app callers of get_string_columns are meant to pass their
-# own exclude set). "m_def"/"m_def_id" are NOMAD's own schema-definition reference
-# (the archiving Python class path and its hash) - identical for every entry of a
-# given entry_type, never meaningful data a user would audit or correct, and pure
-# noise in an audit table meant to surface actual wrong/inconsistent values.
-AUDIT_EXCLUDE_COLUMNS = DEFAULT_EXCLUDE_COLUMNS | {"m_def", "m_def_id"}
+# App-local noise filters for auditable_columns, applied on top of
+# hysprint_utils.consistency.get_string_columns/DEFAULT_EXCLUDE_COLUMNS (not a shared-
+# code change - callers are meant to layer their own filtering on that generic base).
+# Regex-based rather than an exact-name set, because the columns _flatten actually
+# produces depend on how deeply an entry's data nests and how many list items it has -
+# a fixed set of names can't anticipate every numbered variant.
+_NOISE_COLUMN_PATTERNS = (
+    # NOMAD's own schema-definition reference (the archiving Python class path and its
+    # hash) at ANY nesting depth - identical for every entry of a type, and identical
+    # again for every item for the same reason if it's inside a list (e.g. a Batch
+    # entry's "entities.3.m_def"). Never meaningful data a user would audit/correct.
+    re.compile(r"(^|\.)m_def(_id)?$"),
+    # "samples.name"/"samples.lab_id" (and, for an entry linking >1 sample at once -
+    # e.g. a batch-level cleaning record, or a Batch entry's own "entities" list - the
+    # numbered variants "samples.1.name", "entities.16.lab_id", ...). This is just
+    # restating which sample(s) an entry belongs to, already shown via each column's
+    # own header/tooltip; for a many-sample entry it also explodes into dozens of
+    # columns that are blank for every other (normal, single-sample) entry.
+    re.compile(r"^(samples|entities)(\.\d+)?\."),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -908,7 +917,12 @@ class EntryAuditSession:
         df = self.datasets.get(label)
         if df is None:
             return []
-        return get_string_columns(df, exclude_columns=AUDIT_EXCLUDE_COLUMNS)
+        columns = get_string_columns(df)
+        return [
+            column
+            for column in columns
+            if not any(pattern.search(column) for pattern in _NOISE_COLUMN_PATTERNS)
+        ]
 
     def field_summary(self, label: str, column: str) -> list[dict]:
         df = self.datasets.get(label)
