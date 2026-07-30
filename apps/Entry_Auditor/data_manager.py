@@ -194,12 +194,23 @@ _REF_PATTERN = re.compile(r"archive/([A-Za-z0-9_\-]+)(?:#|$)")
 
 
 def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
+    """Recursively flattens dicts to dot-path keys and unwraps single-item lists onto
+    the same path (e.g. NOMAD's common "0-or-1 items" repeatable subsections). A list
+    with more than one item (e.g. a solution with two solvents) is numbered 1-based
+    per item instead of sharing one path - matching the "Solvent 1"/"Solvent 2"
+    convention Excel_creator/smart_databaser already use for these same NOMAD list
+    fields - so every item survives as its own column instead of later items silently
+    overwriting earlier ones at an identical key."""
     if isinstance(obj, dict):
         for key, value in obj.items():
             _flatten(value, f"{prefix}.{key}" if prefix else key, out)
     elif isinstance(obj, list):
-        for item in obj:
-            _flatten(item, prefix, out)
+        if len(obj) <= 1:
+            for item in obj:
+                _flatten(item, prefix, out)
+        else:
+            for index, item in enumerate(obj, start=1):
+                _flatten(item, f"{prefix}.{index}", out)
     elif isinstance(obj, str) and obj.strip():
         out[prefix] = obj
 

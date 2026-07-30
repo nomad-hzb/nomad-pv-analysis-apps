@@ -159,7 +159,13 @@ class FieldAuditPanel(widgets.VBox):
         for entry in overview:
             rows.append(self._build_parameter_row(entry))
 
-        return widgets.VBox(rows, layout=widgets.Layout(max_height="480px", overflow="auto"))
+        # No max_height/vertical scroll here - the table should grow to fit every
+        # parameter row at full height (a capped height was squeezing rows thin on
+        # schemas with many parameters). Only horizontal scrolling is wanted, for
+        # schemas with many entries/columns - "auto visible" is the two-value CSS
+        # overflow shorthand (overflow-x overflow-y); ipywidgets' Layout only exposes
+        # a single combined `overflow` trait, not separate x/y ones.
+        return widgets.VBox(rows, layout=widgets.Layout(overflow="auto visible"))
 
     def _header_html(self) -> str:
         cells = []
@@ -194,8 +200,9 @@ class FieldAuditPanel(widgets.VBox):
                     if gui_url:
                         text = f"<a href='{gui_url}' target='_blank'>{text}</a>"
             cells.append(
-                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;overflow:auto;"
-                f"white-space:nowrap;padding:0 4px;color:{text_color}'>{text}</div>"
+                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;"
+                "overflow-x:auto;overflow-y:hidden;white-space:nowrap;padding:0 4px;"
+                f"color:{text_color}'>{text}</div>"
             )
         return f"<div style='background:{row_bg};display:flex'>{''.join(cells)}</div>"
 
@@ -270,8 +277,7 @@ class FieldAuditPanel(widgets.VBox):
             self.sample_dropdown.value = None
             return
         df = self.session.datasets[self.label]
-        sample_count = df.loc[matched["row_indices"], "sample_id"].nunique()
-        options = [(f"All matching entries ({sample_count})", None)]
+        options = [(f"All matching entries ({len(matched['row_indices'])})", None)]
         for row_index in matched["row_indices"]:
             row = df.loc[row_index]
             sample_id = row.get("sample_id", "") or "N/A"

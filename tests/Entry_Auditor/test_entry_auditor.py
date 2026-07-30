@@ -73,6 +73,34 @@ def test_flatten_skips_blank_and_non_string_leaves():
     assert out == {"d": "kept"}
 
 
+def test_flatten_multi_item_list_numbers_each_item_instead_of_overwriting():
+    out: dict = {}
+    dm._flatten(
+        {
+            "solvent": [
+                {"name": "DMF 0.01 milliliter"},
+                {"name": "DMF 0.02 milliliter"},
+            ]
+        },
+        "",
+        out,
+    )
+    assert out == {
+        "solvent.1.name": "DMF 0.01 milliliter",
+        "solvent.2.name": "DMF 0.02 milliliter",
+    }
+
+
+def test_flatten_three_item_list_numbers_all_three():
+    out: dict = {}
+    dm._flatten({"layer": [{"layer_type": "A"}, {"layer_type": "B"}, {"layer_type": "C"}]}, "", out)
+    assert out == {
+        "layer.1.layer_type": "A",
+        "layer.2.layer_type": "B",
+        "layer.3.layer_type": "C",
+    }
+
+
 # ---------------------------------------------------------------------------
 # get_ids_in_batch_tolerant -- duplicate-tolerant replacement for the shared,
 # asserting hysprint_utils.api_calls.get_ids_in_batch
