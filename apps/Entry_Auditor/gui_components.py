@@ -56,7 +56,6 @@ class FieldAuditPanel(widgets.VBox):
 
     _VALUE_CELL_WIDTH = "200px"
     _NAME_CELL_WIDTH = "240px"
-    _ROW_HEIGHT = "30px"
 
     def __init__(
         self,
@@ -161,104 +160,105 @@ class FieldAuditPanel(widgets.VBox):
 
         pivot_table = self._build_pivot_table(overview)
 
-        super().__init__([header, self.links_toggle, pivot_table, correct_section])
+        # Collapsed by default - a batch audits ~10 schemas at once and showing every
+        # table immediately is overwhelming; the caller's "Expand all"/"Collapse all"
+        # buttons (in create_audit_tab) drive set_expanded on every panel at once.
+        self.show_toggle = widgets.ToggleButton(
+            value=False, description="Show table", icon="chevron-down"
+        )
+        self.show_toggle.observe(self._on_show_toggle_change, names="value")
+        self.content_box = widgets.VBox([self.links_toggle, pivot_table, correct_section])
+        self.content_box.layout.display = "none"
 
-    def _build_pivot_table(self, overview: list[dict]) -> widgets.HBox:
-        # Two side-by-side pieces sharing one row height, not N independently-scrolling
-        # per-row widgets: a frozen left column of native ipywidgets Buttons (needed for
-        # reliable click-to-select - can't embed a real click handler in a raw HTML
-        # string), and a single HTML <table> on the right holding every parameter row's
-        # values. Because it's one <table> in one widget, the whole thing scrolls
-        # horizontally together via ONE outer scrollbar; each cell additionally gets
-        # its own inner overflow-x for a value too long to fit its column width.
-        name_column: list[widgets.Widget] = [
-            widgets.HTML(
-                "<b>Parameter</b>",
-                layout=widgets.Layout(
-                    width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
-                ),
+        super().__init__([header, self.show_toggle, self.content_box])
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.show_toggle.value = expanded
+
+    def _on_show_toggle_change(self, change) -> None:
+        expanded = change["new"]
+        self.content_box.layout.display = None if expanded else "none"
+        self.show_toggle.description = "Hide table" if expanded else "Show table"
+        self.show_toggle.icon = "chevron-up" if expanded else "chevron-down"
+
+    def _build_pivot_table(self, overview: list[dict]) -> widgets.GridBox:
+        # A single GridBox, one child per cell - not a native-Button column sitting
+        # next to a separate HTML <table>. Two independent widget trees can't be made
+        # to agree on row height (confirmed: they visibly drifted out of alignment),
+        # whereas CSS grid natively aligns every cell in a row, mixed content types
+        # included, with no manual height-matching. It also structurally rules out
+        # per-row independent scrolling, since there are no per-row wrapper widgets at
+        # all anymore - every cell is a direct grid child, and the ONE grid container
+        # is the only scrollable element.
+        children: list[widgets.Widget] = [widgets.HTML("<b>Parameter</b>")]
+        for position, row_index in enumerate(self.entry_indices, start=1):
+            row = self.entries_df.loc[row_index]
+            sample_id = row.get("sample_id", "") or "N/A"
+            mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
+            tooltip = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
+            children.append(
+                widgets.HTML(
+                    f"<div style='text-align:center;font-weight:bold' "
+                    f'title="{tooltip}">{position}</div>'
+                )
             )
-        ]
+
+        self._value_cells: dict[str, list[widgets.HTML]] = {}
         for entry in overview:
             column = entry["column"]
             is_varied = entry["is_varied"]
+
             if self._can_correct:
-                name_widget = widgets.Button(
+                name_widget: widgets.Widget = widgets.Button(
                     description=column,
-                    layout=widgets.Layout(
-                        width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
-                    ),
+                    layout=widgets.Layout(width=self._NAME_CELL_WIDTH),
                     tooltip="Select this field in the correction controls below",
                 )
                 if is_varied:
                     name_widget.style.button_color = "#f5b7b1"
                 name_widget.on_click(lambda _button, col=column: self._select_field(col))
             else:
-                name_widget = widgets.HTML(
-                    f"<code>{column}</code>",
-                    layout=widgets.Layout(
-                        width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
-                    ),
-                )
-            name_column.append(name_widget)
+                name_widget = widgets.HTML(f"<code>{column}</code>")
+            children.append(name_widget)
 
-        self._values_widget = widgets.HTML(self._values_table_html(overview))
-        values_scroller = widgets.Box(
-            [self._values_widget], layout=widgets.Layout(overflow="auto visible", flex="1 1 auto")
-        )
-
-        return widgets.HBox(
-            [widgets.VBox(name_column, layout=widgets.Layout(flex="0 0 auto")), values_scroller],
-            layout=widgets.Layout(align_items="flex-start"),
-        )
-
-    def _values_table_html(self, overview: list[dict]) -> str:
-        col_tags = "".join(
-            f"<col style='width:{self._VALUE_CELL_WIDTH}'>" for _ in self.entry_indices
-        )
-        header_cells = []
-        for position, row_index in enumerate(self.entry_indices, start=1):
-            row = self.entries_df.loc[row_index]
-            sample_id = row.get("sample_id", "") or "N/A"
-            mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
-            tooltip = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
-            header_cells.append(
-                f"<th style='height:{self._ROW_HEIGHT};box-sizing:border-box;"
-                f'text-align:center\' title="{tooltip}">{position}</th>'
-            )
-        rows_html = [f"<tr>{''.join(header_cells)}</tr>"]
-
-        show_links = self.links_toggle.value
-        for entry in overview:
-            column = entry["column"]
-            is_varied = entry["is_varied"]
-            text_color = "#c0392b" if is_varied else "#1a1a1a"
-            row_bg = "#fdecea" if is_varied else "#ffffff"
-            cells = []
+            row_cells = []
             for row_index in self.entry_indices:
-                row = self.entries_df.loc[row_index]
-                value = row.get(column)
-                if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
-                    text = "-"
-                else:
-                    text = str(value)
-                    if show_links:
-                        sample_id = row.get("sample_id", "") or ""
-                        gui_url = row.get("_gui_url", "") or self.session.sample_links.get(
-                            sample_id, ""
-                        )
-                        if gui_url:
-                            text = f"<a href='{gui_url}' target='_blank'>{text}</a>"
-                cells.append(
-                    f"<td style='height:{self._ROW_HEIGHT};box-sizing:border-box;padding:0'>"
-                    "<div style='overflow-x:auto;white-space:nowrap;padding:0 4px;"
-                    f"color:{text_color}'>{text}</div></td>"
-                )
-            rows_html.append(f"<tr style='background:{row_bg}'>{''.join(cells)}</tr>")
+                cell = widgets.HTML(self._cell_html(row_index, column, is_varied))
+                row_cells.append(cell)
+                children.append(cell)
+            self._value_cells[column] = row_cells
 
+        columns = f"{self._NAME_CELL_WIDTH} " + " ".join(
+            [self._VALUE_CELL_WIDTH] * len(self.entry_indices)
+        )
+        return widgets.GridBox(
+            children=children,
+            layout=widgets.Layout(grid_template_columns=columns, overflow="auto visible"),
+        )
+
+    def _cell_html(self, row_index, column: str, is_varied: bool) -> str:
+        text_color = "#c0392b" if is_varied else "#1a1a1a"
+        row_bg = "#fdecea" if is_varied else "#ffffff"
+        row = self.entries_df.loc[row_index]
+        value = row.get(column)
+        if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
+            text = "-"
+        else:
+            text = str(value)
+            if self.links_toggle.value:
+                sample_id = row.get("sample_id", "") or ""
+                gui_url = row.get("_gui_url", "") or self.session.sample_links.get(sample_id, "")
+                if gui_url:
+                    # Explicit color/underline, not inherited - Jupyter/Voila's own base
+                    # styles often reset link appearance, which made "Add NOMAD links"
+                    # look like it did nothing even though the <a> tag was there.
+                    text = (
+                        f"<a href='{gui_url}' target='_blank' "
+                        f"style='color:#1a73e8;text-decoration:underline'>{text}</a>"
+                    )
         return (
-            "<table style='border-collapse:collapse;font-size:12px;table-layout:fixed'>"
-            f"<colgroup>{col_tags}</colgroup>{''.join(rows_html)}</table>"
+            f"<div style='background:{row_bg};overflow-x:auto;white-space:nowrap;"
+            f"color:{text_color}'>{text}</div>"
         )
 
     def _select_field(self, column: str) -> None:
@@ -270,7 +270,10 @@ class FieldAuditPanel(widgets.VBox):
             self.dropdown.value = column
 
     def _on_links_change(self, _change) -> None:
-        self._values_widget.value = self._values_table_html(self._overview)
+        for entry in self._overview:
+            column = entry["column"]
+            for row_index, cell in zip(self.entry_indices, self._value_cells[column]):
+                cell.value = self._cell_html(row_index, column, entry["is_varied"])
 
     def _on_field_change(self, change) -> None:
         column = change["new"]
@@ -400,6 +403,19 @@ def create_audit_tab(
             for label in session.datasets
         ]
 
+    def _on_expand_all(_button) -> None:
+        for panel in results_out.children:
+            panel.set_expanded(True)
+
+    def _on_collapse_all(_button) -> None:
+        for panel in results_out.children:
+            panel.set_expanded(False)
+
+    expand_all_button = widgets.Button(description="Expand all", icon="chevron-down")
+    collapse_all_button = widgets.Button(description="Collapse all", icon="chevron-up")
+    expand_all_button.on_click(_on_expand_all)
+    collapse_all_button.on_click(_on_collapse_all)
+
     def _on_load_progress(index: int, total: int, label: str) -> None:
         progress_bar.max = total
         progress_bar.value = index - 1
@@ -462,6 +478,7 @@ def create_audit_tab(
             progress_bar,
             log_accordion,
             widgets.HTML("<h3 style='margin:10px 0 4px 0'>Audit Results</h3>"),
+            widgets.HBox([expand_all_button, collapse_all_button]),
             results_out,
         ]
     )
