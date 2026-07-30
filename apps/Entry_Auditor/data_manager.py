@@ -761,6 +761,7 @@ def apply_correction(
     entry_type: str,
     log_path: Path = CORRECTION_LOG_PATH,
     only_entry_id: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> CorrectionResult:
     """Corrects every occurrence of old_value in column across df's underlying NOMAD
     entries: downloads each entry's raw file, regex-replaces the value, re-uploads, and
@@ -772,7 +773,9 @@ def apply_correction(
     If only_entry_id is given, the correction is narrowed to that single entry instead
     of every row matching old_value - lets a user fix one occurrence without touching
     other entries that currently happen to share the same (otherwise consistent) value.
-    """
+    progress_callback, if given, is invoked as (index, total) before each entry is
+    processed - gui_components uses it to drive a progress bar without this module
+    importing any widget library."""
     affected_rows = df[df[column] == old_value]
     if only_entry_id and "_entry_id" in affected_rows.columns:
         affected_rows = affected_rows[affected_rows["_entry_id"] == only_entry_id]
@@ -788,7 +791,10 @@ def apply_correction(
         entry_files = fetch_entry_files(url, token, affected_sample_ids, entry_type)
 
     result = CorrectionResult()
-    for entry_id, upload_id, mainfile in entry_files:
+    total = len(entry_files)
+    for index, (entry_id, upload_id, mainfile) in enumerate(entry_files, start=1):
+        if progress_callback is not None:
+            progress_callback(index, total)
         try:
             file_text = download_file(url, token, upload_id, mainfile)
             modified_text, n_replacements = modify_file_field(

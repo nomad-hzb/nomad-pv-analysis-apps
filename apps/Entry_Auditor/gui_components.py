@@ -56,6 +56,7 @@ class FieldAuditPanel(widgets.VBox):
 
     _VALUE_CELL_WIDTH = "200px"
     _NAME_CELL_WIDTH = "240px"
+    _ROW_HEIGHT = "30px"
 
     def __init__(
         self,
@@ -94,7 +95,8 @@ class FieldAuditPanel(widgets.VBox):
         overview = sorted(session.field_overview(label), key=lambda e: not e["is_varied"])
         header = widgets.HTML(
             value=(
-                f"<h4 style='margin-bottom:2px'>{label}</h4>"
+                "<hr style='margin:28px 0 10px 0;border:none;border-top:2px solid #ccc'>"
+                f"<h2 style='margin:0 0 2px 0;font-size:22px'>&#9679;&nbsp;{label}</h2>"
                 f"<p style='margin-top:0;color:#555'>Entries: {entries} &nbsp;|&nbsp; "
                 f"Unique samples: {unique_samples} &nbsp;|&nbsp; "
                 f"Auditable fields: {len(overview)}</p>"
@@ -105,9 +107,7 @@ class FieldAuditPanel(widgets.VBox):
             value=False, description="Add NOMAD links", icon="link"
         )
         self.links_toggle.observe(self._on_links_change, names="value")
-        # column -> its values-row HTML widget, so the links toggle can refresh every
-        # row in place without rebuilding the whole table.
-        self._value_row_widgets: dict[str, widgets.HTML] = {}
+        self._overview = overview  # kept for _on_links_change to rebuild the table
 
         self.dropdown: widgets.Dropdown | None = None
         correct_section: widgets.Widget = widgets.VBox([])
@@ -132,6 +132,9 @@ class FieldAuditPanel(widgets.VBox):
                 description="Correct value(s)", button_style="warning", icon="pencil"
             )
             self.correct_out = widgets.HTML(value="")
+            self.correct_progress = widgets.IntProgress(
+                min=0, max=1, value=0, layout=widgets.Layout(width="380px", display="none")
+            )
 
             self.dropdown.observe(self._on_field_change, names="value")
             self.from_dropdown.observe(self._on_from_change, names="value")
@@ -149,6 +152,7 @@ class FieldAuditPanel(widgets.VBox):
                             self.correct_button,
                         ]
                     ),
+                    self.correct_progress,
                     self.correct_out,
                 ]
             )
@@ -159,94 +163,103 @@ class FieldAuditPanel(widgets.VBox):
 
         super().__init__([header, self.links_toggle, pivot_table, correct_section])
 
-    def _build_pivot_table(self, overview: list[dict]) -> widgets.VBox:
-        # Plain HBox/VBox rows (not GridBox) for the same reason as before - broadly
-        # supported ipywidgets layout, no CSS-grid dependency. Rows are one per
-        # auditable parameter (bounded, small); each row's value section is one HTML
-        # widget holding a flex row of per-entry cells, so the column count (entries)
-        # never turns into one widget per cell.
-        header_row = widgets.HBox(
-            [
-                widgets.HTML(
-                    "<b>Parameter</b>",
-                    layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
+    def _build_pivot_table(self, overview: list[dict]) -> widgets.HBox:
+        # Two side-by-side pieces sharing one row height, not N independently-scrolling
+        # per-row widgets: a frozen left column of native ipywidgets Buttons (needed for
+        # reliable click-to-select - can't embed a real click handler in a raw HTML
+        # string), and a single HTML <table> on the right holding every parameter row's
+        # values. Because it's one <table> in one widget, the whole thing scrolls
+        # horizontally together via ONE outer scrollbar; each cell additionally gets
+        # its own inner overflow-x for a value too long to fit its column width.
+        name_column: list[widgets.Widget] = [
+            widgets.HTML(
+                "<b>Parameter</b>",
+                layout=widgets.Layout(
+                    width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
                 ),
-                widgets.HTML(self._header_html()),
-            ]
-        )
-        rows: list[widgets.Widget] = [header_row]
+            )
+        ]
         for entry in overview:
-            rows.append(self._build_parameter_row(entry))
+            column = entry["column"]
+            is_varied = entry["is_varied"]
+            if self._can_correct:
+                name_widget = widgets.Button(
+                    description=column,
+                    layout=widgets.Layout(
+                        width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
+                    ),
+                    tooltip="Select this field in the correction controls below",
+                )
+                if is_varied:
+                    name_widget.style.button_color = "#f5b7b1"
+                name_widget.on_click(lambda _button, col=column: self._select_field(col))
+            else:
+                name_widget = widgets.HTML(
+                    f"<code>{column}</code>",
+                    layout=widgets.Layout(
+                        width=self._NAME_CELL_WIDTH, height=self._ROW_HEIGHT, flex="0 0 auto"
+                    ),
+                )
+            name_column.append(name_widget)
 
-        # No max_height/vertical scroll here - the table should grow to fit every
-        # parameter row at full height (a capped height was squeezing rows thin on
-        # schemas with many parameters). Only horizontal scrolling is wanted, for
-        # schemas with many entries/columns - "auto visible" is the two-value CSS
-        # overflow shorthand (overflow-x overflow-y); ipywidgets' Layout only exposes
-        # a single combined `overflow` trait, not separate x/y ones.
-        return widgets.VBox(rows, layout=widgets.Layout(overflow="auto visible"))
+        self._values_widget = widgets.HTML(self._values_table_html(overview))
+        values_scroller = widgets.Box(
+            [self._values_widget], layout=widgets.Layout(overflow="auto visible", flex="1 1 auto")
+        )
 
-    def _header_html(self) -> str:
-        cells = []
+        return widgets.HBox(
+            [widgets.VBox(name_column, layout=widgets.Layout(flex="0 0 auto")), values_scroller],
+            layout=widgets.Layout(align_items="flex-start"),
+        )
+
+    def _values_table_html(self, overview: list[dict]) -> str:
+        col_tags = "".join(
+            f"<col style='width:{self._VALUE_CELL_WIDTH}'>" for _ in self.entry_indices
+        )
+        header_cells = []
         for position, row_index in enumerate(self.entry_indices, start=1):
             row = self.entries_df.loc[row_index]
             sample_id = row.get("sample_id", "") or "N/A"
             mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
             tooltip = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
-            cells.append(
-                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;"
-                f'text-align:center;font-weight:bold\' title="{tooltip}">{position}</div>'
+            header_cells.append(
+                f"<th style='height:{self._ROW_HEIGHT};box-sizing:border-box;"
+                f'text-align:center\' title="{tooltip}">{position}</th>'
             )
-        return f"<div style='display:flex'>{''.join(cells)}</div>"
+        rows_html = [f"<tr>{''.join(header_cells)}</tr>"]
 
-    def _row_values_html(self, column: str, is_varied: bool) -> str:
-        text_color = "#c0392b" if is_varied else "#1a1a1a"
-        row_bg = "#fdecea" if is_varied else "#ffffff"
         show_links = self.links_toggle.value
-        cells = []
-        for row_index in self.entry_indices:
-            row = self.entries_df.loc[row_index]
-            value = row.get(column)
-            if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
-                text = "-"
-            else:
-                text = str(value)
-                if show_links:
-                    sample_id = row.get("sample_id", "") or ""
-                    gui_url = row.get("_gui_url", "") or self.session.sample_links.get(
-                        sample_id, ""
-                    )
-                    if gui_url:
-                        text = f"<a href='{gui_url}' target='_blank'>{text}</a>"
-            cells.append(
-                f"<div style='width:{self._VALUE_CELL_WIDTH};flex:0 0 auto;"
-                "overflow-x:auto;overflow-y:hidden;white-space:nowrap;padding:0 4px;"
-                f"color:{text_color}'>{text}</div>"
-            )
-        return f"<div style='background:{row_bg};display:flex'>{''.join(cells)}</div>"
+        for entry in overview:
+            column = entry["column"]
+            is_varied = entry["is_varied"]
+            text_color = "#c0392b" if is_varied else "#1a1a1a"
+            row_bg = "#fdecea" if is_varied else "#ffffff"
+            cells = []
+            for row_index in self.entry_indices:
+                row = self.entries_df.loc[row_index]
+                value = row.get(column)
+                if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
+                    text = "-"
+                else:
+                    text = str(value)
+                    if show_links:
+                        sample_id = row.get("sample_id", "") or ""
+                        gui_url = row.get("_gui_url", "") or self.session.sample_links.get(
+                            sample_id, ""
+                        )
+                        if gui_url:
+                            text = f"<a href='{gui_url}' target='_blank'>{text}</a>"
+                cells.append(
+                    f"<td style='height:{self._ROW_HEIGHT};box-sizing:border-box;padding:0'>"
+                    "<div style='overflow-x:auto;white-space:nowrap;padding:0 4px;"
+                    f"color:{text_color}'>{text}</div></td>"
+                )
+            rows_html.append(f"<tr style='background:{row_bg}'>{''.join(cells)}</tr>")
 
-    def _build_parameter_row(self, entry: dict) -> widgets.HBox:
-        column = entry["column"]
-        is_varied = entry["is_varied"]
-
-        if self._can_correct:
-            name_widget = widgets.Button(
-                description=column,
-                layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
-                tooltip="Select this field in the correction controls below",
-            )
-            if is_varied:
-                name_widget.style.button_color = "#f5b7b1"
-            name_widget.on_click(lambda _button, col=column: self._select_field(col))
-        else:
-            name_widget = widgets.HTML(
-                f"<code>{column}</code>",
-                layout=widgets.Layout(width=self._NAME_CELL_WIDTH, flex="0 0 auto"),
-            )
-
-        values_widget = widgets.HTML(self._row_values_html(column, is_varied))
-        self._value_row_widgets[column] = values_widget
-        return widgets.HBox([name_widget, values_widget])
+        return (
+            "<table style='border-collapse:collapse;font-size:12px;table-layout:fixed'>"
+            f"<colgroup>{col_tags}</colgroup>{''.join(rows_html)}</table>"
+        )
 
     def _select_field(self, column: str) -> None:
         if self.dropdown is None:
@@ -257,10 +270,7 @@ class FieldAuditPanel(widgets.VBox):
             self.dropdown.value = column
 
     def _on_links_change(self, _change) -> None:
-        for entry in self.session.field_overview(self.label):
-            widget = self._value_row_widgets.get(entry["column"])
-            if widget is not None:
-                widget.value = self._row_values_html(entry["column"], entry["is_varied"])
+        self._values_widget.value = self._values_table_html(self._overview)
 
     def _on_field_change(self, change) -> None:
         column = change["new"]
@@ -314,8 +324,15 @@ class FieldAuditPanel(widgets.VBox):
         # never what's wanted. Always reset to the bulk "All" default instead.
         self.sample_dropdown.value = None
 
+    def _on_correct_progress(self, index: int, total: int) -> None:
+        self.correct_progress.max = total
+        self.correct_progress.value = index
+        self.correct_out.value = (
+            f"<span style='color:#b9770e'><b>Working...</b> ({index}/{total})</span>"
+        )
+
     def _on_correct_click(self, _button) -> None:
-        self.correct_out.value = "<i>Working...</i>"
+        self.correct_out.value = "<span style='color:#b9770e'><b>Working...</b></span>"
         column = self.dropdown.value
         old_value = self.from_dropdown.value
         new_value = self.to_input.value.strip()
@@ -330,6 +347,8 @@ class FieldAuditPanel(widgets.VBox):
             )
             return
 
+        self.correct_progress.value = 0
+        self.correct_progress.layout.display = None
         try:
             result = apply_correction(
                 self.url,
@@ -340,14 +359,18 @@ class FieldAuditPanel(widgets.VBox):
                 new_value,
                 self.entry_type,
                 only_entry_id=only_entry_id,
+                progress_callback=self._on_correct_progress,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Correction failed for %s.%s", self.label, column)
             self.correct_out.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
             return
+        finally:
+            self.correct_progress.layout.display = "none"
 
         self.correct_out.value = (
-            f"Done - {result.success} updated, {result.skipped} skipped, {result.failed} failed."
+            f"<b>Done</b> - {result.success} updated, {result.skipped} skipped, "
+            f"{result.failed} failed."
         )
 
 

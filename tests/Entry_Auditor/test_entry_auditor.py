@@ -307,6 +307,30 @@ def test_apply_correction_success_logs_and_counts(monkeypatch, tmp_path):
     assert dm.build_corrections_dict(log_path=log_path) == {"HySpinBox": ["HySpinbox"]}
 
 
+def test_apply_correction_reports_progress_per_entry(monkeypatch, tmp_path):
+    df = _cleaning_df()
+    log_path = tmp_path / "log.txt"
+
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinbox"}')
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: True)
+    monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
+
+    events = []
+    dm.apply_correction(
+        "https://example.test/api/v1",
+        "tok",
+        df,
+        "location",
+        "HySpinbox",
+        "HySpinBox",
+        "HySprint_Cleaning",
+        log_path=log_path,
+        progress_callback=lambda index, total: events.append((index, total)),
+    )
+
+    assert events == [(1, 1)]
+
+
 def test_apply_correction_skips_when_value_not_found_in_file(monkeypatch, tmp_path):
     df = _cleaning_df()
     log_path = tmp_path / "log.txt"
