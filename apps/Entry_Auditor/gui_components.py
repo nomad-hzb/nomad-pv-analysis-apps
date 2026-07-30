@@ -18,10 +18,13 @@ from data_manager import (
     apply_correction,
     build_corrections_dict,
 )
+from natsort import natsort_keygen
 
 from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
+
+_natsort_key = natsort_keygen()
 
 
 _MAINFILE_SUFFIX = re.compile(r"\.archive\.(json|yaml)$")
@@ -69,12 +72,26 @@ class FieldAuditPanel(widgets.VBox):
         self._can_correct = url is not None and token is not None
 
         self.entries_df = session.datasets[label]
-        self.entry_indices = list(self.entries_df.index)
+        # Entries arrive in whatever order the API happened to return them in, which
+        # is not stable/meaningful - sort by sample then mainfile so column 1 in the
+        # table is genuinely "this batch's first sample" instead of appearing random.
+        self.entry_indices = sorted(
+            self.entries_df.index,
+            key=lambda i: _natsort_key(
+                (
+                    str(self.entries_df.loc[i].get("sample_id", "") or ""),
+                    str(self.entries_df.loc[i].get("_mainfile", "") or ""),
+                )
+            ),
+        )
         entries = len(self.entries_df)
         unique_samples = (
             self.entries_df["sample_id"].nunique() if "sample_id" in self.entries_df.columns else 0
         )
-        overview = session.field_overview(label)
+        # Varied parameters are what someone is actually looking for ("this value is
+        # wrong") - put them first so they don't have to scroll past every consistent
+        # field first. Stable sort keeps each group in its original column order.
+        overview = sorted(session.field_overview(label), key=lambda e: not e["is_varied"])
         header = widgets.HTML(
             value=(
                 f"<h4 style='margin-bottom:2px'>{label}</h4>"
@@ -96,7 +113,9 @@ class FieldAuditPanel(widgets.VBox):
         correct_section: widgets.Widget = widgets.VBox([])
         if self._can_correct:
             self.dropdown = widgets.Dropdown(
-                options=list(session.auditable_columns(label)),
+                # Same varied-first order as the pivot table below, so the two stay
+                # consistent instead of the dropdown looking arbitrarily ordered.
+                options=[entry["column"] for entry in overview],
                 description="Field:",
                 layout=widgets.Layout(width="380px"),
             )

@@ -20,7 +20,11 @@ import requests
 from pydantic import BaseModel
 
 from hysprint_utils.api_calls import get_sample_entry_links
-from hysprint_utils.consistency import get_string_columns, summarize_field_values
+from hysprint_utils.consistency import (
+    DEFAULT_EXCLUDE_COLUMNS,
+    get_string_columns,
+    summarize_field_values,
+)
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -68,6 +72,14 @@ ENTRY_TYPES_TO_AUDIT: dict[str, str] = {
     "Storage": "HySprint_Storage",
     "Substrate": "HySprint_Substrate",
 }
+
+# App-local extension of hysprint_utils.consistency.DEFAULT_EXCLUDE_COLUMNS (not a
+# shared-code change - per-app callers of get_string_columns are meant to pass their
+# own exclude set). "m_def"/"m_def_id" are NOMAD's own schema-definition reference
+# (the archiving Python class path and its hash) - identical for every entry of a
+# given entry_type, never meaningful data a user would audit or correct, and pure
+# noise in an audit table meant to surface actual wrong/inconsistent values.
+AUDIT_EXCLUDE_COLUMNS = DEFAULT_EXCLUDE_COLUMNS | {"m_def", "m_def_id"}
 
 
 # ---------------------------------------------------------------------------
@@ -896,7 +908,7 @@ class EntryAuditSession:
         df = self.datasets.get(label)
         if df is None:
             return []
-        return get_string_columns(df)
+        return get_string_columns(df, exclude_columns=AUDIT_EXCLUDE_COLUMNS)
 
     def field_summary(self, label: str, column: str) -> list[dict]:
         df = self.datasets.get(label)
