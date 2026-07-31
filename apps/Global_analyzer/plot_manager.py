@@ -32,7 +32,14 @@ logger = logging.getLogger(__name__)
 class PlotManager:
     """Manages plot creation and data preparation."""
 
-    def __init__(self, plot_widget: go.FigureWidget, stats_output, correlation_widget=None):
+    def __init__(
+        self,
+        plot_widget: go.FigureWidget,
+        stats_output,
+        correlation_widget=None,
+        rf_widget=None,
+        bo_widget=None,
+    ):
         """
         Initialize plot manager.
 
@@ -40,10 +47,14 @@ class PlotManager:
             plot_widget: Plotly FigureWidget for rendering plots
             stats_output: Output widget for statistics display
             correlation_widget: Plotly FigureWidget for the correlation matrix heatmap
+            rf_widget: Plotly FigureWidget for the Random Forest feature-importance chart
+            bo_widget: Plotly FigureWidget for the Bayesian Optimization suggestions chart
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
         self.correlation_widget = correlation_widget
+        self.rf_widget = rf_widget
+        self.bo_widget = bo_widget
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
@@ -519,6 +530,55 @@ class PlotManager:
             margin=dict(l=150, b=150),
         )
         return varying_cols
+
+    def create_feature_importance_plot(self, importances: list, target: str):
+        """Render Random Forest feature importances as a horizontal bar chart, most
+        important parameter on top. Caps at the top 15 for readability."""
+        if self.rf_widget is None:
+            raise ValueError("PlotManager has no rf_widget configured")
+
+        top = importances[:15]
+        names = [name for name, _ in top][::-1]
+        values = [value for _, value in top][::-1]
+
+        self.rf_widget.data = []
+        self.rf_widget.add_trace(
+            go.Bar(x=values, y=names, orientation="h", marker=dict(color="#2E86AB"))
+        )
+        self.rf_widget.update_layout(
+            title=f"Feature importance for {target}",
+            xaxis_title="Importance",
+            template="plotly_white",
+            height=max(400, 30 * len(top)),
+            margin=dict(l=200),
+        )
+
+    def create_bo_suggestions_plot(self, suggestions: pd.DataFrame, target_col: str):
+        """Render suggested next-experiment predictions (mean ± std) as a bar chart,
+        ranked left-to-right by expected improvement (the suggestions DataFrame's own
+        row order, set by the caller)."""
+        if self.bo_widget is None:
+            raise ValueError("PlotManager has no bo_widget configured")
+
+        pred_col = f"predicted_{target_col}"
+        labels = [f"#{i + 1}" for i in range(len(suggestions))]
+
+        self.bo_widget.data = []
+        self.bo_widget.add_trace(
+            go.Bar(
+                x=labels,
+                y=suggestions[pred_col],
+                error_y=dict(type="data", array=suggestions["predicted_std"]),
+                marker=dict(color="#7B2D8B"),
+            )
+        )
+        self.bo_widget.update_layout(
+            title=f"Predicted {target_col} for suggested next experiments",
+            xaxis_title="Suggestion (ranked by expected improvement)",
+            yaxis_title=target_col,
+            template="plotly_white",
+            height=450,
+        )
 
     def display_statistics(
         self, df: pd.DataFrame, x_col: str, y_col: str, x_label: str, y_label: str

@@ -841,87 +841,99 @@ class DataManager:
         # Sort alphabetically
         return sorted(filtered)
 
-    def generate_parameter_summary(self, summary_output):
-        """Generate parameter summary table in the output widget."""
-        with summary_output:
-            if not self.current_metadata and not self.current_results:
-                print("No data loaded yet.")
-                return
+    def build_parameter_summary_markdown(self) -> str:
+        """
+        Build a Markdown-formatted parameter summary (headings + tables) for the
+        currently loaded dataset. Returns a plain string - rendering it (e.g. via
+        IPython's ``display(Markdown(...))``) is the caller's job, since this module
+        has zero widget/IPython.display imports by convention.
+        """
+        if not self.current_metadata and not self.current_results:
+            return "_No data loaded yet._"
 
-            # Track available result types
-            result_types = set()
-            for result_type, result_df in self.current_results.items():
-                if result_df is not None and not result_df.empty:
-                    if result_type == "jv_measurement":
-                        result_types.add("JV")
-                    elif result_type == "eqe_measurement":
-                        result_types.add("EQE")
-                    elif result_type == "mpp_tracking":
-                        result_types.add("MPP Tracking")
-                    elif result_type == "simple_mpp_tracking":
-                        result_types.add("Simple MPP")
-                    elif result_type == "sem":
-                        result_types.add("SEM")
-                    elif result_type == "abspl_measurement":
-                        result_types.add("AbsPL")
-                    elif result_type == "xrd":
-                        result_types.add("XRD")
+        # Track available result types
+        result_types = set()
+        for result_type, result_df in self.current_results.items():
+            if result_df is not None and not result_df.empty:
+                if result_type == "jv_measurement":
+                    result_types.add("JV")
+                elif result_type == "eqe_measurement":
+                    result_types.add("EQE")
+                elif result_type == "mpp_tracking":
+                    result_types.add("MPP Tracking")
+                elif result_type == "simple_mpp_tracking":
+                    result_types.add("Simple MPP")
+                elif result_type == "sem":
+                    result_types.add("SEM")
+                elif result_type == "abspl_measurement":
+                    result_types.add("AbsPL")
+                elif result_type == "xrd":
+                    result_types.add("XRD")
 
-            # Display results
-            print("=" * 80)
-            print("AVAILABLE RESULT TYPES")
-            print("=" * 80)
-            if result_types:
-                result_list = sorted(result_types)
-                print(f"  {', '.join(result_list)}")
-            else:
-                print("  None")
+        sections = [
+            "## Available Result Types",
+            "",
+            ", ".join(sorted(result_types)) if result_types else "_None_",
+            "",
+        ]
 
-            # Group parameters by source
-            exclude_cols = self.COMMON_COLUMNS[:8]
+        exclude_cols = self.COMMON_COLUMNS[:8]
 
-            # Process each metadata source
-            for measurement_type, metadata_df in self.current_metadata.items():
-                display_name = measurement_type.replace("_", " ").title()
+        # Process each metadata source
+        for measurement_type, metadata_df in self.current_metadata.items():
+            display_name = measurement_type.replace("_", " ").title()
 
-                # Check if this process has a material column
-                material_col = self.get_material_column(metadata_df)
+            # Check if this process has a material column
+            material_col = self.get_material_column(metadata_df)
 
-                if material_col and material_col in metadata_df.columns:
-                    # Check if layer_type column exists
-                    if "layer_type" in metadata_df.columns:
-                        # Split by both layer_type and material
-                        for (layer_type, material_name), group_df in metadata_df.groupby(
-                            ["layer_type", material_col]
-                        ):
-                            if pd.isna(material_name):
-                                continue
+            if material_col and material_col in metadata_df.columns:
+                # Check if layer_type column exists
+                if "layer_type" in metadata_df.columns:
+                    # Split by both layer_type and material
+                    for (layer_type, material_name), group_df in metadata_df.groupby(
+                        ["layer_type", material_col]
+                    ):
+                        if pd.isna(material_name):
+                            continue
 
-                            # Build section name with layer type
-                            section_name = (
-                                f"{display_name} - {layer_type} - {material_name}"
-                                if not pd.isna(layer_type)
-                                else f"{display_name} - {material_name}"
-                            )
+                        # Build section name with layer type
+                        section_name = (
+                            f"{display_name} - {layer_type} - {material_name}"
+                            if not pd.isna(layer_type)
+                            else f"{display_name} - {material_name}"
+                        )
 
-                            self._display_param_table(group_df, section_name, exclude_cols)
-                    else:
-                        # Split by material only (no layer_type column)
-                        for material_name, material_df in metadata_df.groupby(material_col):
-                            if pd.isna(material_name):
-                                continue
-
-                            self._display_param_table(
-                                material_df, f"{display_name} - {material_name}", exclude_cols
-                            )
+                        table = self._build_param_table_markdown(
+                            group_df, section_name, exclude_cols
+                        )
+                        if table:
+                            sections.append(table)
                 else:
-                    # No material split
-                    self._display_param_table(metadata_df, display_name, exclude_cols)
+                    # Split by material only (no layer_type column)
+                    for material_name, material_df in metadata_df.groupby(material_col):
+                        if pd.isna(material_name):
+                            continue
 
-            print("\n" + "=" * 80)
+                        table = self._build_param_table_markdown(
+                            material_df, f"{display_name} - {material_name}", exclude_cols
+                        )
+                        if table:
+                            sections.append(table)
+            else:
+                # No material split
+                table = self._build_param_table_markdown(metadata_df, display_name, exclude_cols)
+                if table:
+                    sections.append(table)
 
-    def _display_param_table(self, df, section_name, exclude_cols):
-        """Display parameter summary table for a single section."""
+        return "\n".join(sections)
+
+    def _build_param_table_markdown(
+        self, df: pd.DataFrame, section_name: str, exclude_cols: List[str]
+    ) -> Optional[str]:
+        """Build one Markdown section (heading + table) for a single source.
+        Returns None if the section has no varying parameters, so the caller can skip
+        it entirely (mirrors the old text-based summary's "only show if varying").
+        """
         # Collect varying parameters
         source_params = []
         for col in df.columns:
@@ -971,25 +983,25 @@ class DataManager:
             except Exception:
                 continue
 
-        # Display ONLY if has varying parameters
-        if source_params:
-            source_params.sort(
-                key=lambda x: (x["unique_count"], x["variation_ratio"]), reverse=True
+        if not source_params:
+            return None
+
+        source_params.sort(key=lambda x: (x["unique_count"], x["variation_ratio"]), reverse=True)
+
+        lines = [
+            f"### {section_name}",
+            "",
+            "| Parameter | Unique | Samples | Var % | Values |",
+            "|---|---:|---:|---:|---|",
+        ]
+        for param in source_params:
+            variation_pct = f"{param['variation_ratio'] * 100:.1f}%"
+            # Escape pipes so a stray '|' in a value can't break the table row.
+            value_range = param["value_range"].replace("|", "/")
+            lines.append(
+                f"| {param['parameter']} | {param['unique_count']} | "
+                f"{param['total_count']} | {variation_pct} | {value_range} |"
             )
+        lines.append("")
 
-            print("\n" + "=" * 80)
-            print(f"{section_name.upper()}")
-            print("=" * 80)
-            print(f"{'Parameter':<30} {'Unique':<8} {'Samples':<8} {'Var%':<8} {'Values'}")
-            print("-" * 80)
-
-            for param in source_params:
-                variation_pct = f"{param['variation_ratio'] * 100:.1f}%"
-                param_name = param["parameter"][:28]
-                if len(param["parameter"]) > 28:
-                    param_name += ".."
-
-                print(
-                    f"{param_name:<30} {param['unique_count']:<8} "
-                    f"{param['total_count']:<8} {variation_pct:<8} {param['value_range']}"
-                )
+        return "\n".join(lines)

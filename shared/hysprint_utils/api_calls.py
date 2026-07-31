@@ -120,11 +120,12 @@ def _resolve_user_names(url, token, user_ids):
 def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
     """Like get_batch_ids, but also resolves each batch's author display name.
 
-    Requesting 'metadata' (not just 'data') is what makes 'main_author' available at
-    all. Its shape varies by NOMAD version/deployment - sometimes a nested user object
-    ({'name': ..., 'username': ..., 'user_id': ...}), sometimes just the bare user_id
-    string (seen live on this HZB oasis) - the latter needs a follow-up /users lookup
-    to turn into an actual name instead of a random-looking id.
+    Requesting 'metadata' (not just 'data') is what makes author info available at
+    all. Confirmed live against this HZB oasis: metadata.authors is a list of user
+    objects with a usable 'name' field - that's the primary source used below.
+    metadata.main_author is kept only as a fallback for entries with no resolved
+    'authors' entry, since its own shape varies (a nested user object on some
+    deployments, a bare user_id string needing a /users lookup on others).
     """
     query = {
         'required': {
@@ -149,14 +150,26 @@ def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
         lab_id = (archive.get("data") or {}).get("lab_id")
         if not lab_id:
             continue
-        main_author = (archive.get("metadata") or {}).get("main_author")
+
+        metadata = archive.get("metadata") or {}
         author_name = None
         user_id = None
-        if isinstance(main_author, dict):
-            author_name = main_author.get("name") or main_author.get("username")
-            user_id = main_author.get("user_id")
-        elif isinstance(main_author, str) and main_author.strip():
-            user_id = main_author.strip()
+
+        authors = metadata.get("authors") or []
+        first_author = authors[0] if authors else None
+        if isinstance(first_author, dict):
+            author_name = first_author.get("name") or first_author.get("username")
+        elif isinstance(first_author, str) and first_author.strip():
+            author_name = first_author.strip()
+
+        if not author_name:
+            main_author = metadata.get("main_author")
+            if isinstance(main_author, dict):
+                author_name = main_author.get("name") or main_author.get("username")
+                user_id = main_author.get("user_id")
+            elif isinstance(main_author, str) and main_author.strip():
+                user_id = main_author.strip()
+
         if not author_name and user_id:
             unresolved_user_ids.add(user_id)
         records.append({"lab_id": lab_id, "author_name": author_name, "user_id": user_id})

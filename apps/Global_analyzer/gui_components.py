@@ -242,13 +242,64 @@ class GUIManager:
         )
 
         # ====================================================================
-        # RANDOM FOREST / BAYESIAN OPTIMIZATION PLACEHOLDER TABS
+        # RANDOM FOREST
         # ====================================================================
-        # No analysis logic lives here yet - these Output widgets are the hook
-        # point for that future code, which should read from
-        # self.data_manager.merged_data (the same dataset the Plotting tab uses).
+        self.rf_target_selector = widgets.Dropdown(
+            description="Target:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+            disabled=True,
+        )
+
+        self.run_rf_button = widgets.Button(
+            description="Run Random Forest",
+            button_style="success",
+            icon="tree",
+            layout={"width": "200px"},
+        )
+
         self.rf_output = widgets.Output()
+
+        self.rf_widget = go.FigureWidget()
+        self.rf_widget.update_layout(
+            height=450,
+            template="plotly_white",
+            title='Pick a target and click "Run Random Forest"',
+        )
+
+        # ====================================================================
+        # BAYESIAN OPTIMIZATION
+        # ====================================================================
+        self.bo_target_selector = widgets.Dropdown(
+            description="Target:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+            disabled=True,
+        )
+
+        self.bo_direction_selector = widgets.Dropdown(
+            options=["Maximize", "Minimize"],
+            value="Maximize",
+            description="Goal:",
+            style={"description_width": "100px"},
+            layout={"width": "200px"},
+        )
+
+        self.suggest_experiments_button = widgets.Button(
+            description="Suggest Next Experiments",
+            button_style="success",
+            icon="lightbulb-o",
+            layout={"width": "220px"},
+        )
+
         self.bo_output = widgets.Output()
+
+        self.bo_widget = go.FigureWidget()
+        self.bo_widget.update_layout(
+            height=450,
+            template="plotly_white",
+            title='Pick a target and click "Suggest Next Experiments"',
+        )
 
         # ====================================================================
         # PLOT WIDGET
@@ -300,6 +351,11 @@ class GUIManager:
 
         if "find_correlations" in callbacks:
             self.find_correlations_button.on_click(callbacks["find_correlations"])
+
+        if "run_random_forest" in callbacks:
+            self.run_rf_button.on_click(callbacks["run_random_forest"])
+        if "suggest_experiments" in callbacks:
+            self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
 
     def setup_batch_selection(self, url, token, load_data_function):
         """
@@ -460,11 +516,13 @@ class GUIManager:
         random_forest_tab = widgets.VBox(
             [
                 widgets.HTML(
-                    "<p style='color:#666;'><i>Random Forest analysis is not wired up yet. "
-                    "It will read from the same dataset loaded in Step 1/2 "
-                    "(<code>data_manager.merged_data</code>).</i></p>"
+                    "<p style='color:#666;'>Fits a Random Forest to predict the chosen "
+                    "target from every other numeric parameter in the currently loaded "
+                    "dataset, and reports which parameters matter most.</p>"
                 ),
+                widgets.HBox([self.rf_target_selector, self.run_rf_button]),
                 self.rf_output,
+                self.rf_widget,
             ],
             layout={"padding": "20px"},
         )
@@ -472,11 +530,19 @@ class GUIManager:
         bayesian_optimization_tab = widgets.VBox(
             [
                 widgets.HTML(
-                    "<p style='color:#666;'><i>Bayesian Optimization is not wired up yet. "
-                    "It will read from the same dataset loaded in Step 1/2 "
-                    "(<code>data_manager.merged_data</code>).</i></p>"
+                    "<p style='color:#666;'>Fits a Gaussian Process surrogate model on "
+                    "the currently loaded dataset and suggests parameter combinations "
+                    "most likely to improve the chosen target next.</p>"
+                ),
+                widgets.HBox(
+                    [
+                        self.bo_target_selector,
+                        self.bo_direction_selector,
+                        self.suggest_experiments_button,
+                    ]
                 ),
                 self.bo_output,
+                self.bo_widget,
             ],
             layout={"padding": "20px"},
         )

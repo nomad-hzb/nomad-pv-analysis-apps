@@ -30,11 +30,12 @@ import traceback
 from datetime import datetime
 from typing import List
 
+import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
 from data_manager import DataManager
 from gui_components import GUIManager
-from IPython.display import Javascript, clear_output
+from IPython.display import Javascript, Markdown, clear_output
 from IPython.display import display as ipy_display
 from natsort import natsorted
 from plot_manager import PlotManager
@@ -77,7 +78,11 @@ class SampleDataExplorer:
         self.data_loader = HySprintDataLoader(url, token, get_all_eqe)
         self.data_manager = DataManager(self.data_loader, self.param_manager)
         self.plot_manager = PlotManager(
-            self.gui.plot_widget, self.gui.stats_output, self.gui.correlation_widget
+            self.gui.plot_widget,
+            self.gui.stats_output,
+            self.gui.correlation_widget,
+            self.gui.rf_widget,
+            self.gui.bo_widget,
         )
 
         # Application state
@@ -104,6 +109,8 @@ class SampleDataExplorer:
                 "toggle_varying": self._on_toggle_varying_only,
                 "download": self._on_download_data,
                 "find_correlations": self._on_find_correlations,
+                "run_random_forest": self._on_run_random_forest,
+                "suggest_experiments": self._on_suggest_experiments,
             }
         )
 
@@ -112,6 +119,41 @@ class SampleDataExplorer:
         with self.gui.status_output:
             clear_output()
             print(message)
+
+    def _refresh_parameter_summary(self):
+        """Rebuild and re-render the Parameter Summary tab as Markdown.
+
+        Always clears first - this is called once explicitly after a batch load and
+        again from every data-source/material selection change (each of which can
+        itself trigger more than one of these calls via ipywidgets' auto-select-first-
+        option behavior), so without clearing the summary would render 2-3x in a row.
+        """
+        markdown_text = self.data_manager.build_parameter_summary_markdown()
+        with self.gui.param_summary_output:
+            clear_output(wait=True)
+            ipy_display(Markdown(markdown_text))
+
+    def _refresh_ml_target_options(self):
+        """Keep the Random Forest / Bayesian Optimization target dropdowns in sync
+        with whatever numeric parameters are available in the currently merged
+        dataset, preferring an efficiency-like column as the default target."""
+        merged_data = self.data_manager.merged_data
+        if merged_data is None or merged_data.empty:
+            numeric_cols = []
+        else:
+            numeric_cols = sorted(merged_data.select_dtypes(include="number").columns)
+
+        for selector in (self.gui.rf_target_selector, self.gui.bo_target_selector):
+            previous_value = selector.value
+            selector.options = numeric_cols
+            selector.disabled = not numeric_cols
+            if not numeric_cols:
+                continue
+            if previous_value in numeric_cols:
+                selector.value = previous_value
+            else:
+                default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
+                selector.value = default if default else numeric_cols[0]
 
     def _initialize_batch_options(self):
         """Initialize batch options from API."""
@@ -214,7 +256,7 @@ class SampleDataExplorer:
             self.gui.y_data_source_selector.value = "Results"
 
             # Generate parameter summary
-            self.data_manager.generate_parameter_summary(self.gui.param_summary_output)
+            self._refresh_parameter_summary()
 
             self._update_status(
                 f"✓ Loaded {len(self.current_sample_ids)} samples with "
@@ -705,7 +747,8 @@ class SampleDataExplorer:
                 print(f"⚠️  {len(invalid_samples)} samples excluded (non-standard ID pattern)")
 
         # Update parameter summary
-        self.data_manager.generate_parameter_summary(self.gui.param_summary_output)
+        self._refresh_parameter_summary()
+        self._refresh_ml_target_options()
 
     def _on_toggle_varying_only(self, change):
         """Handle toggle for showing only varying parameters."""
@@ -953,13 +996,118 @@ class SampleDataExplorer:
                 if len(used_cols) < 2:
                     print(
                         f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
-                        f"{min_unique} unique values — need at least 2 for a correlation matrix."
+                        f"{min_unique} unique values - need at least 2 for a correlation matrix."
                     )
                 else:
                     print(f"✓ Correlation matrix computed for {len(used_cols)} parameters.")
             except Exception as e:
                 print(f"❌ Error computing correlations: {e}")
                 logger.exception("Error computing correlations")
+
+    def _on_run_random_forest(self, button):
+        """Fit a Random Forest to predict the chosen target from the currently merged
+        dataset, and report which other parameters matter most."""
+        with self.gui.rf_output:
+            clear_output(wait=True)
+
+            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+                print("⚠️ No data available. Load batches and select data sources first.")
+                return
+
+            target = self.gui.rf_target_selector.value
+            if not target:
+                print("⚠️ Pick a target parameter first.")
+                return
+
+            try:
+                result = ml.run_random_forest(self.data_manager.merged_data, target)
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error running Random Forest: {e}")
+                logger.exception("Error running Random Forest")
+                return
+
+            held_out_note = (
+                ""
+                if result["held_out"]
+                else " _(evaluated on training data - too few samples for a held-out test set)_"
+            )
+            top_features = "\n".join(
+                f"- **{name}**: {importance:.1%}" for name, importance in result["importances"][:10]
+            )
+            summary = (
+                f"### Random Forest results for `{target}`\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Features used: **{result['n_features']}**\n"
+                f"- R²: **{result['r2']:.3f}**{held_out_note}\n"
+                f"- RMSE: **{result['rmse']:.3g}**\n\n"
+                f"**Top parameters by importance:**\n\n{top_features}"
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_feature_importance_plot(result["importances"], target)
+
+    def _on_suggest_experiments(self, button):
+        """Suggest next parameter combinations most likely to improve the chosen
+        target, using a Gaussian Process surrogate fit on the currently merged
+        dataset."""
+        with self.gui.bo_output:
+            clear_output(wait=True)
+
+            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+                print("⚠️ No data available. Load batches and select data sources first.")
+                return
+
+            target = self.gui.bo_target_selector.value
+            if not target:
+                print("⚠️ Pick a target parameter first.")
+                return
+
+            direction = self.gui.bo_direction_selector.value.lower()
+
+            try:
+                result = ml.suggest_next_experiments(
+                    self.data_manager.merged_data, target, direction=direction
+                )
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error suggesting experiments: {e}")
+                logger.exception("Error suggesting experiments")
+                return
+
+            suggestions = result["suggestions"]
+            pred_col = f"predicted_{target}"
+            feature_cols = [
+                c
+                for c in suggestions.columns
+                if c not in (pred_col, "predicted_std", "expected_improvement")
+            ]
+
+            header_cols = [*feature_cols, f"{target} (predicted)", "± std", "Expected improvement"]
+            table_lines = [
+                "| " + " | ".join(header_cols) + " |",
+                "|" + "---|" * len(header_cols),
+            ]
+            for _, row in suggestions.iterrows():
+                values = [f"{row[c]:.3g}" for c in feature_cols]
+                table_lines.append(
+                    "| "
+                    + " | ".join(values)
+                    + f" | {row[pred_col]:.4g} | {row['predicted_std']:.2g} "
+                    f"| {row['expected_improvement']:.3g} |"
+                )
+
+            summary = (
+                f"### Suggested next experiments to {result['direction']} `{target}`\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Best observed so far: **{result['best_observed']:.4g}**\n\n"
+                + "\n".join(table_lines)
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_bo_suggestions_plot(suggestions, target)
 
     def create_interface(self):
         """Create and return the complete interface."""
