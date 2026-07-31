@@ -221,6 +221,9 @@ class SampleDataExplorer:
                 f"{len(display_names)} process types. Select data sources."
             )
 
+            # Collapse Step 1 now that batches are loaded, to free up space.
+            self.gui.step1_accordion.selected_index = None
+
         except Exception as e:
             self._update_status(f"❌ Error loading batches: {str(e)}")
             logger.exception("Error loading batches")

@@ -93,13 +93,38 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
     data = response.json()["data"]
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
 
+def _resolve_user_names(url, token, user_ids):
+    """Resolve raw NOMAD user_ids to display names via the /users endpoint - the same
+    one /users/me (see auth_manager.APIClient.get_user_verification_url) uses for the
+    current user, just parameterized by id instead of "me". Best-effort: an id that
+    can't be resolved is simply left out of the returned dict rather than raising, so
+    one bad/renamed id doesn't break the whole batch list.
+    """
+    headers = {'Authorization': f'Bearer {token}'}
+    names = {}
+    for user_id in user_ids:
+        try:
+            response = requests.get(
+                f'{url}/users', headers=headers, params={'user_id': user_id})
+            response.raise_for_status()
+            matches = response.json().get('data') or []
+            if matches:
+                user = matches[0]
+                name = user.get('name') or user.get('username')
+                if name:
+                    names[user_id] = name
+        except requests.RequestException:
+            continue
+    return names
+
 def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
     """Like get_batch_ids, but also resolves each batch's author display name.
 
     Requesting 'metadata' (not just 'data') is what makes 'main_author' available at
     all. Its shape varies by NOMAD version/deployment - sometimes a nested user object
-    ({'name': ..., 'username': ..., 'user_id': ...}), sometimes already a plain display
-    name string - so both are handled below rather than assuming one shape.
+    ({'name': ..., 'username': ..., 'user_id': ...}), sometimes just the bare user_id
+    string (seen live on this HZB oasis) - the latter needs a follow-up /users lookup
+    to turn into an actual name instead of a random-looking id.
     """
     query = {
         'required': {
@@ -116,25 +141,36 @@ def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
         f'{url}/entries/archive/query', headers={'Authorization': f'Bearer {token}'}, json=query)
     response.raise_for_status()
     data = response.json()["data"]
-    results = []
+
+    records = []
+    unresolved_user_ids = set()
     for d in data:
         archive = d["archive"]
         lab_id = (archive.get("data") or {}).get("lab_id")
         if not lab_id:
             continue
         main_author = (archive.get("metadata") or {}).get("main_author")
+        author_name = None
+        user_id = None
         if isinstance(main_author, dict):
-            author_name = (
-                main_author.get("name")
-                or main_author.get("username")
-                or (str(main_author["user_id"]) if main_author.get("user_id") else None)
-                or "Unknown"
-            )
+            author_name = main_author.get("name") or main_author.get("username")
+            user_id = main_author.get("user_id")
         elif isinstance(main_author, str) and main_author.strip():
-            author_name = main_author.strip()
-        else:
-            author_name = "Unknown"
-        results.append({"lab_id": lab_id, "author_name": author_name})
+            user_id = main_author.strip()
+        if not author_name and user_id:
+            unresolved_user_ids.add(user_id)
+        records.append({"lab_id": lab_id, "author_name": author_name, "user_id": user_id})
+
+    resolved_names = (
+        _resolve_user_names(url, token, unresolved_user_ids) if unresolved_user_ids else {}
+    )
+
+    results = []
+    for record in records:
+        author_name = record["author_name"]
+        if not author_name and record["user_id"]:
+            author_name = resolved_names.get(record["user_id"])
+        results.append({"lab_id": record["lab_id"], "author_name": author_name or "Unknown"})
     return results
 
 def get_ids_in_batch(url, token, batch_ids, batch_type=ENTRY_TYPES["batch"]):
