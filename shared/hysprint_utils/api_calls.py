@@ -96,9 +96,10 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
 def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
     """Like get_batch_ids, but also resolves each batch's author display name.
 
-    Requesting 'metadata' (not just 'data') makes NOMAD resolve 'main_author' as an
-    embedded user object with 'name'/'username' fields, not just the opaque numeric
-    'user_id' - that's the only way to show a human-readable name in a filter dropdown.
+    Requesting 'metadata' (not just 'data') is what makes 'main_author' available at
+    all. Its shape varies by NOMAD version/deployment - sometimes a nested user object
+    ({'name': ..., 'username': ..., 'user_id': ...}), sometimes already a plain display
+    name string - so both are handled below rather than assuming one shape.
     """
     query = {
         'required': {
@@ -118,16 +119,21 @@ def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
     results = []
     for d in data:
         archive = d["archive"]
-        lab_id = archive.get("data", {}).get("lab_id")
+        lab_id = (archive.get("data") or {}).get("lab_id")
         if not lab_id:
             continue
-        main_author = archive.get("metadata", {}).get("main_author") or {}
-        author_name = (
-            main_author.get("name")
-            or main_author.get("username")
-            or (str(main_author["user_id"]) if main_author.get("user_id") else None)
-            or "Unknown"
-        )
+        main_author = (archive.get("metadata") or {}).get("main_author")
+        if isinstance(main_author, dict):
+            author_name = (
+                main_author.get("name")
+                or main_author.get("username")
+                or (str(main_author["user_id"]) if main_author.get("user_id") else None)
+                or "Unknown"
+            )
+        elif isinstance(main_author, str) and main_author.strip():
+            author_name = main_author.strip()
+        else:
+            author_name = "Unknown"
         results.append({"lab_id": lab_id, "author_name": author_name})
     return results
 
