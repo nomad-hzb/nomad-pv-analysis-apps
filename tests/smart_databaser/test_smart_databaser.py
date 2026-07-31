@@ -47,6 +47,7 @@ from data_manager import (
     expand_process_config_for_source,
     fetch_experiment_info_source,
     fetch_process_field_values,
+    fill_all_date_and_operator_fields,
     find_forbidden_characters,
     generate_full_workbook,
     generate_header_workbook,
@@ -58,6 +59,7 @@ from data_manager import (
     load_field_mappings,
     load_field_value_multipliers,
     load_required_field_exceptions,
+    missing_critical_fields,
     occurrence_index_for_process,
     populate_column_from_first,
     preview_value_for_field,
@@ -90,6 +92,7 @@ from gui_components import (
     VaryingFieldsMatrix,
     create_download_button,
     create_finish_section,
+    create_quick_fill_all_button,
     create_whole_experiment_template_picker,
 )
 
@@ -205,7 +208,7 @@ def test_set_field_manual_on_varying_field_overwrites_per_sample():
 # ---------------------------------------------------------------------------
 
 
-def test_set_field_varies_seeds_empty_sample_slots_from_constant_value():
+def test_set_field_varies_seeds_only_first_sample_from_constant_value():
     spec = ProcessFieldSpec(
         key="Annealing temperature [C]",
         value=120,
@@ -214,19 +217,23 @@ def test_set_field_varies_seeds_empty_sample_slots_from_constant_value():
     set_field_varies(spec, True, sample_numbers=[1, 2, 3])
 
     assert spec.varies is True
-    assert spec.per_sample_values == {1: 120, 2: 120, 3: 120}
+    # Only the first row (matrix row order) is pre-filled - the rest start blank, per
+    # the product decision that the table shouldn't look "already filled in" beyond the
+    # one row that already had a value before "varies" was checked. The populate-down
+    # button (populate_column_from_first) is the explicit way to copy it into the rest.
+    assert spec.per_sample_values == {1: 120}
     assert spec.per_sample_provenance[1].source == "batch_template"
 
 
-def test_set_field_varies_does_not_clobber_existing_per_sample_values():
+def test_set_field_varies_does_not_clobber_existing_first_sample_value():
     spec = ProcessFieldSpec(
         key="Annealing temperature [C]",
         value=120,
-        per_sample_values={2: 150},
+        per_sample_values={1: 150},
     )
     set_field_varies(spec, True, sample_numbers=[1, 2, 3])
 
-    assert spec.per_sample_values == {1: 120, 2: 150, 3: 120}
+    assert spec.per_sample_values == {1: 150}
 
 
 def test_set_field_varies_off_preserves_per_sample_values():
@@ -2209,6 +2216,57 @@ def test_populate_column_from_first_noop_when_first_sample_empty(fresh_state):
     assert spec.per_sample_values.get(2) is None
 
 
+def test_fill_all_date_and_operator_fields_fills_experiment_info_and_processes(fresh_state):
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+
+    date_count, operator_count = fill_all_date_and_operator_fields(fresh_state, "Jane Doe")
+
+    assert fresh_state.experiment_info_fields["Date"].value  # Experiment Info has no time
+    assert process.field_specs["Datetime"].value
+    assert process.field_specs["Operator"].value == "Jane Doe"
+    assert date_count >= 2  # Experiment Info's Date + the process's Datetime
+    assert operator_count >= 1
+
+
+def test_fill_all_date_and_operator_fields_fills_every_varying_sample(fresh_state):
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=2)
+    spec = process.field_specs["Operator"]
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+
+    fill_all_date_and_operator_fields(fresh_state, "Jane Doe")
+
+    assert spec.per_sample_values == {1: "Jane Doe", 2: "Jane Doe"}
+
+
+def test_fill_all_date_and_operator_fields_overwrites_existing_values(fresh_state):
+    rebuild_field_specs(fresh_state)
+    fresh_state.experiment_info_fields["Date"].value = "01-01-2020"
+
+    fill_all_date_and_operator_fields(fresh_state, "Jane Doe")
+
+    assert fresh_state.experiment_info_fields["Date"].value != "01-01-2020"
+
+
+def test_missing_critical_fields_lists_both_when_empty(fresh_state):
+    rebuild_field_specs(fresh_state)
+    assert missing_critical_fields(fresh_state) == ["Batch", "Project_Name"]
+
+
+def test_missing_critical_fields_narrows_as_fields_are_filled(fresh_state):
+    rebuild_field_specs(fresh_state)
+    fresh_state.experiment_info_fields["Batch"].value = "1"
+    assert missing_critical_fields(fresh_state) == ["Project_Name"]
+
+    fresh_state.experiment_info_fields["Project_Name"].value = "Test"
+    assert missing_critical_fields(fresh_state) == []
+
+
 def test_progress_bar_widget_reflects_compute_experiment_progress(fresh_state):
     fresh_state.add_process("Laser Scribing")  # not material-gated, always counts
     rebuild_field_specs(fresh_state)
@@ -2413,10 +2471,10 @@ def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
     ):
         main_interface = initialize_ui("url", "token")
         # app.py's main_interface.children order: h2, h4, sample_setup, template_picker,
-        # h4, sequence_builder, ... (progress_bar now lives inside finish_section, not
-        # at the top level)
+        # quick_fill_all_button, h4, sequence_builder, ... (progress_bar now lives inside
+        # finish_section, not at the top level)
         template_picker = main_interface.children[3]
-        sequence_builder = main_interface.children[5]
+        sequence_builder = main_interface.children[6]
         assert len(sequence_builder.rows_box.children) == 0
 
         batch_picker = template_picker.children[2]
@@ -2437,8 +2495,8 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
     ):
         main_interface = initialize_ui("url", "token")
         # ... h4 Varying Fields, caption, refresh_matrix_button, refresh_matrix_status, matrix
-        refresh_matrix_button = main_interface.children[8]
-        matrix = main_interface.children[10]
+        refresh_matrix_button = main_interface.children[9]
+        matrix = main_interface.children[11]
         assert refresh_matrix_button.description == "Refresh Table"
         assert len(matrix.children) == 1  # placeholder, nothing varies yet
 
@@ -3134,6 +3192,27 @@ def test_create_download_button_click_produces_download_link(fresh_state):
 
 
 # ---------------------------------------------------------------------------
+# create_quick_fill_all_button
+# ---------------------------------------------------------------------------
+
+
+def test_create_quick_fill_all_button_fills_and_calls_on_change(fresh_state):
+    rebuild_field_specs(fresh_state)
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    calls = []
+
+    section = create_quick_fill_all_button(fresh_state, on_change=lambda: calls.append(1))
+    button, status = section.children
+    button.click()
+
+    assert fresh_state.experiment_info_fields["Date"].value
+    assert process.field_specs["Operator"].value
+    assert "date field" in status.value.lower()
+    assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
 # upload_experiment_excel -- mocked request-shape tests only. NOT verified against the
 # real API by this suite - see tests/live/test_smart_databaser_upload.py, which must be
 # run manually against a disposable upload before this is trusted in production.
@@ -3261,9 +3340,19 @@ def test_upload_experiment_excel_raises_timeout_if_never_finishes():
 # ---------------------------------------------------------------------------
 
 
+def _fill_critical_fields(state):
+    """Batch/Project_Name are hard-required for every create_finish_section action (see
+    missing_critical_fields) - tests exercising OTHER mechanics (nudge gate, upload
+    call, ...) need these filled first or every action is blocked before it even starts.
+    See test_create_finish_section_blocks_* below for tests of the block itself."""
+    state.experiment_info_fields["Batch"].value = "1"
+    state.experiment_info_fields["Project_Name"].value = "Test"
+
+
 def test_create_finish_section_download_only_produces_link(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with patch(
@@ -3284,6 +3373,7 @@ def test_create_finish_section_download_only_produces_link(fresh_state):
 def test_create_finish_section_upload_only_without_target_shows_error(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
@@ -3301,6 +3391,7 @@ def test_create_finish_section_upload_only_without_target_shows_error(fresh_stat
 def test_create_finish_section_upload_only_calls_upload_experiment_excel(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with (
@@ -3324,6 +3415,7 @@ def test_create_finish_section_upload_only_calls_upload_experiment_excel(fresh_s
 def test_create_finish_section_download_and_upload_does_both(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with (
@@ -3347,6 +3439,7 @@ def test_create_finish_section_download_and_upload_does_both(fresh_state):
 def test_create_finish_section_download_and_upload_reports_upload_failure(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with (
@@ -3369,6 +3462,7 @@ def test_create_finish_section_download_and_upload_reports_upload_failure(fresh_
 def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
@@ -3394,6 +3488,7 @@ def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh
 def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
@@ -3407,6 +3502,67 @@ def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
 
     assert nudge_area.children == ()
     assert "base64," in status_output.value
+
+
+def test_create_finish_section_blocks_download_when_batch_missing(fresh_state):
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.experiment_info_fields["Project_Name"].value = "Test"  # Batch left empty
+    cache = NomadSessionCache()
+
+    with patch("data_manager.get_all_uploads", return_value=[]):
+        section = create_finish_section(fresh_state, "url", "token", cache)
+        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
+            section.children
+        )
+        skip_checkbox.value = True  # must block even with the nudge gate skipped
+        download_button, _upload_button, _combo_button = buttons_row.children
+        download_button.click()
+
+    assert "Batch" in status_output.value
+    assert "base64," not in status_output.value
+    assert nudge_area.children == ()
+
+
+def test_create_finish_section_blocks_upload_when_project_name_missing(fresh_state):
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.experiment_info_fields["Batch"].value = "1"  # Project_Name left empty
+    cache = NomadSessionCache()
+
+    with (
+        patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]),
+        patch("gui_components.upload_experiment_excel") as mock_upload,
+    ):
+        section = create_finish_section(fresh_state, "url", "token", cache)
+        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
+            section.children
+        )
+        skip_checkbox.value = True
+        upload_dropdown.value = "UP1"
+        _download_button, upload_button, _combo_button = buttons_row.children
+        upload_button.click()
+
+    assert "Project_Name" in status_output.value
+    mock_upload.assert_not_called()
+
+
+def test_create_finish_section_blocks_both_missing_lists_both_fields(fresh_state):
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    cache = NomadSessionCache()
+
+    with patch("data_manager.get_all_uploads", return_value=[]):
+        section = create_finish_section(fresh_state, "url", "token", cache)
+        skip_checkbox, _caption, _upload_dropdown, buttons_row, _nudge_area, status_output = (
+            section.children
+        )
+        skip_checkbox.value = True
+        download_button, _upload_button, _combo_button = buttons_row.children
+        download_button.click()
+
+    assert "Batch" in status_output.value
+    assert "Project_Name" in status_output.value
 
 
 # ---------------------------------------------------------------------------
@@ -3718,6 +3874,25 @@ def test_variation_template_panel_apply_updates_state_and_legend(fresh_state):
     assert fresh_state.variation_template == r"Mat=\1"
     assert fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "Mat=PCBM"
     assert calls == [1]
+
+
+def test_variation_template_panel_buttons_are_labeled_positioned_and_colored(fresh_state):
+    """Product ask: 'Apply Formula' (not just 'Apply', to make clear it's formula-based)
+    sits right next to 'Automatically fill up Variation' (the pre-established/default
+    fill), and both are color-coded so they're easy to tell apart at a glance."""
+    panel = VariationTemplatePanel(fresh_state)
+
+    assert panel.apply_button.description == "Apply Formula"
+    assert panel.apply_button.button_style == "primary"
+    assert panel.autofill_button.description == "Automatically fill up Variation"
+    assert panel.autofill_button.button_style == "success"
+
+    button_row = panel.children[1]
+    assert list(button_row.children) == [
+        panel.template_input,
+        panel.apply_button,
+        panel.autofill_button,
+    ]
 
 
 def test_variation_template_panel_hides_when_no_matrix_table(fresh_state):

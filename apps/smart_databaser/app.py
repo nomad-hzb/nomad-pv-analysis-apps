@@ -15,6 +15,7 @@ from gui_components import (
     VariationTemplatePanel,
     VaryingFieldsMatrix,
     create_finish_section,
+    create_quick_fill_all_button,
     create_whole_experiment_template_picker,
 )
 
@@ -70,6 +71,7 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
     template_picker = create_whole_experiment_template_picker(
         state, url, token, cache, on_change=refresh_all
     )
+    quick_fill_all_button = create_quick_fill_all_button(state, on_change=refresh_all)
 
     refresh_matrix_button = widgets.Button(description="Refresh Table", icon="refresh")
     refresh_matrix_status = widgets.HTML(value="")
@@ -108,6 +110,7 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
             # Right after "Apply Sample Setup", per the product ask - copying a template
             # batch's processes/values is the natural next step once samples exist.
             template_picker,
+            quick_fill_all_button,
             widgets.HTML(value="<h4>Process Sequence</h4>"),
             sequence_builder,
             widgets.HTML(value="<h4>Varying Fields</h4>"),

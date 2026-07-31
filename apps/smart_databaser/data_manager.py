@@ -63,6 +63,18 @@ EXPERIMENT_INFO_COMPUTED_KEYS = {"Variation", "Nomad ID", "Sample", "Subbatch"}
 # EXPERIMENT_INFO_COMPUTED_KEYS above), never a field_specs value sourced from anywhere.
 EXPERIMENT_INFO_NEVER_AUTOFILLED = {"Date", "Project_Name", "Batch", "Subbatch"}
 
+# Field keys that get a quick-fill "Today"/"Me" button in gui_components (single source
+# of truth for both the per-field row button and the bulk fill_all_date_and_operator_
+# fields action below - format matches sheet_experiment.py's own make_label examples for
+# each key).
+DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
+
+# Batch/Project_Name are baked directly into every sample's Nomad ID (see
+# compute_nomad_id) - if either is empty, the ID scheme embedded in every row of the
+# exported Excel is already broken, whether the file is downloaded or uploaded. See
+# missing_critical_fields / gui_components.create_finish_section's hard gate.
+CRITICAL_EXPERIMENT_INFO_KEYS = ("Batch", "Project_Name")
+
 # Process catalog - mirrors Excel_creator's voila_experiment_app.py MinimalistExperimentBuilder
 # (available_processes / configurable_processes / _get_default_config), reimplemented here as
 # plain data since Excel_creator does not export these as importable module-level constants
@@ -392,16 +404,74 @@ def set_field_manual(
 
 
 def set_field_varies(spec: ProcessFieldSpec, varies: bool, sample_numbers: list[int]) -> None:
-    """Toggle a field's scope. Turning varies on seeds any currently-empty per-sample
-    slots from the existing constant value (no-clobber). Turning it off never destroys
-    per_sample_values, so re-enabling later restores prior entries."""
-    if varies and not spec.varies and _is_filled(spec.value):
-        for sample_number in sample_numbers:
-            if not _is_filled(spec.per_sample_values.get(sample_number)):
-                spec.per_sample_values[sample_number] = spec.value
-                if spec.provenance is not None:
-                    spec.per_sample_provenance[sample_number] = spec.provenance
+    """Toggle a field's scope. Turning varies on seeds ONLY THE FIRST sample's slot (in
+    sample_numbers order - the matrix's own row order) from the existing constant value,
+    no-clobber - product decision: pre-filling every row read as the matrix having
+    already been filled in behind the user's back, when it was meant to start blank
+    beyond the first row (see VaryingFieldsMatrix's "populate down" button /
+    populate_column_from_first for the deliberate, explicit way to copy that first value
+    into the rest). Turning it off never destroys per_sample_values, so re-enabling later
+    restores prior entries."""
+    if varies and not spec.varies and _is_filled(spec.value) and sample_numbers:
+        first_sample = sample_numbers[0]
+        if not _is_filled(spec.per_sample_values.get(first_sample)):
+            spec.per_sample_values[first_sample] = spec.value
+            if spec.provenance is not None:
+                spec.per_sample_provenance[first_sample] = spec.provenance
     spec.varies = varies
+
+
+def fill_all_date_and_operator_fields(
+    state: ExperimentState, operator_name: str
+) -> tuple[int, int]:
+    """Bulk quick-fill, one timestamp/name reused everywhere: every Date/Datetime field
+    (Experiment Info and every process in the sequence) gets today's date in that key's
+    own format (DATE_FIELD_FORMATS), every Operator field gets operator_name - including
+    every sample's slot for a field already marked varying. Mirrors the per-field
+    "Today"/"Me" quick-fill buttons' always-overwrite behavior (a deliberate bulk action,
+    not a no-clobber autofill - same reasoning as populate_column_from_first). Returns
+    (date_fields_filled, operator_fields_filled), counting DISTINCT FIELDS touched (not
+    per-sample writes), for a simple status message."""
+    now = datetime.now()
+    date_fields_filled = 0
+    operator_fields_filled = 0
+
+    def _apply(spec: ProcessFieldSpec) -> None:
+        nonlocal date_fields_filled, operator_fields_filled
+        date_format = DATE_FIELD_FORMATS.get(spec.key)
+        if date_format is not None:
+            value = now.strftime(date_format)
+            date_fields_filled += 1
+        elif spec.key == "Operator":
+            value = operator_name
+            operator_fields_filled += 1
+        else:
+            return
+        if spec.varies:
+            for sample_number in state.sample_numbers():
+                set_field_manual(spec, value, sample_number=sample_number)
+        else:
+            set_field_manual(spec, value)
+
+    for spec in state.experiment_info_fields.values():
+        _apply(spec)
+    for process in state.process_sequence:
+        for spec in process.field_specs.values():
+            _apply(spec)
+
+    return date_fields_filled, operator_fields_filled
+
+
+def missing_critical_fields(state: ExperimentState) -> list[str]:
+    """CRITICAL_EXPERIMENT_INFO_KEYS (Batch/Project_Name) that are still empty, in a
+    fixed order - empty list if both are filled. See gui_components.create_finish_
+    section, which hard-blocks Download/Upload/Download+Upload on a non-empty result."""
+    missing = []
+    for key in CRITICAL_EXPERIMENT_INFO_KEYS:
+        spec = state.experiment_info_fields.get(key)
+        if spec is None or not _is_filled(spec.value):
+            missing.append(key)
+    return missing
 
 
 def set_field_required_for_progress(spec: ProcessFieldSpec, required: bool) -> None:

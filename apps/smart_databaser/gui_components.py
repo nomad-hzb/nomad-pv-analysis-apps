@@ -15,6 +15,7 @@ from data_manager import (
     AVAILABLE_PROCESSES,
     BOOLEAN_CONFIG_FIELDS,
     CONFIGURABLE_PROCESS_TYPES,
+    DATE_FIELD_FORMATS,
     EXPERIMENT_INFO_COMPUTED_KEYS,
     NUMERIC_CONFIG_FIELDS,
     ExperimentState,
@@ -36,10 +37,12 @@ from data_manager import (
     compute_process_progress,
     compute_sample_set_split,
     default_config_for,
+    fill_all_date_and_operator_fields,
     find_forbidden_characters,
     generate_full_workbook,
     iter_varying_fields,
     list_process_occurrences,
+    missing_critical_fields,
     populate_column_from_first,
     preview_value_for_field,
     progress_band,
@@ -54,13 +57,6 @@ from data_manager import (
 
 logger = logging.getLogger(__name__)
 
-# Field keys that get a quick-fill button in _build_field_row - "Today"/"Now" for
-# date-like fields (format matches sheet_experiment.py's own make_label examples for each
-# key), "Me" for Operator (reads the same NOMAD_CLIENT_USER env var
-# hysprint_utils.access_token.log_notebook_usage() already uses to attribute app usage,
-# rather than an extra NOMAD /users/me API round trip this app doesn't otherwise need).
-_DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
-
 
 def _current_user_name() -> str:
     return os.environ.get("NOMAD_CLIENT_USER", "").strip() or "Unknown User"
@@ -69,11 +65,11 @@ def _current_user_name() -> str:
 def _quick_fill_button_for(field_key: str, value_widget: widgets.Text) -> widgets.Button | None:
     """Shared by _build_field_row (non-varying fields) and VaryingFieldsMatrix's
     per-sample cells (varying fields moved into the matrix) - a "Today" button for
-    Date/Datetime fields (see _DATE_FIELD_FORMATS), a "Me" button for Operator. Writes
-    straight into value_widget.value, which fires the same observe chain a real keystroke
-    would (forbidden-character guard, on_value_change, ...). Returns None (no button) for
-    every other field key."""
-    date_format = _DATE_FIELD_FORMATS.get(field_key)
+    Date/Datetime fields (see data_manager.DATE_FIELD_FORMATS), a "Me" button for
+    Operator. Writes straight into value_widget.value, which fires the same observe chain
+    a real keystroke would (forbidden-character guard, on_value_change, ...). Returns
+    None (no button) for every other field key."""
+    date_format = DATE_FIELD_FORMATS.get(field_key)
     if date_format is not None:
 
         def _fill_today(_button, widget=value_widget, fmt=date_format):
@@ -93,6 +89,34 @@ def _quick_fill_button_for(field_key: str, value_widget: widgets.Text) -> widget
         return button
 
     return None
+
+
+def create_quick_fill_all_button(state: ExperimentState, on_change=None) -> widgets.VBox:
+    """One bulk action covering every 'Today'/'Me' quick-fill button in the whole
+    experiment at once - product ask: filling each Date/Datetime/Operator field one row
+    at a time was tedious once there were several processes. Calls
+    data_manager.fill_all_date_and_operator_fields with a single shared timestamp/name so
+    every field ends up consistent, including per-sample slots on fields already marked
+    varying. Always overwrites (same as the individual per-field buttons) - not a
+    no-clobber autofill."""
+    button = widgets.Button(
+        description="Fill all Date/Operator fields",
+        button_style="info",
+        layout=widgets.Layout(width="220px"),
+    )
+    status = widgets.HTML(value="")
+
+    def on_click(_button):
+        date_count, operator_count = fill_all_date_and_operator_fields(state, _current_user_name())
+        status.value = (
+            f"<span style='color:#2c7a4b'>Filled {date_count} date field(s) and "
+            f"{operator_count} operator field(s).</span>"
+        )
+        if on_change:
+            on_change()
+
+    button.on_click(on_click)
+    return widgets.VBox([button, status])
 
 
 def _provenance_summary_html(specs) -> widgets.HTML:
@@ -133,7 +157,7 @@ def _forbidden_chars_message(forbidden: list) -> str:
 def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets.HTML, on_valid):
     """Shared by every data-value Text widget in this app (field rows, matrix cells) -
     NOT the Variation template pattern (needs a backslash) and NOT Date/Datetime fields
-    (see _DATE_FIELD_FORMATS - "%d.%m.%Y %H:%M:%S" legitimately needs colons, and neither
+    (see DATE_FIELD_FORMATS - "%d.%m.%Y %H:%M:%S" legitimately needs colons, and neither
     field ever feeds into compute_nomad_id/build_experiment_filename anyway, so there's
     nothing downstream for a colon to break here). Rejects (does not persist) any value
     containing a data_manager.FORBIDDEN_VALUE_CHARACTERS character: shows a red border +
@@ -207,7 +231,7 @@ def _build_field_row(
             # mid-keystroke rebuild entirely.
             continuous_update=False,
         )
-        if field_key in _DATE_FIELD_FORMATS:
+        if field_key in DATE_FIELD_FORMATS:
             # Exempt: colons in "HH:MM:SS" are legitimate here, and this field never
             # feeds into an ID/filename - see _guard_forbidden_characters' docstring.
             value_widget.observe(
@@ -510,6 +534,12 @@ def create_finish_section(
     nudge review' checkbox (unchecked by default) is a testing-only escape hatch back to
     the old immediate behavior.
 
+    Batch/Project_Name are checked BEFORE any of that (data_manager.
+    missing_critical_fields) and hard-block all three actions, unconditionally - not
+    skippable via the nudge checkbox, since they're baked into every sample's Nomad ID
+    (compute_nomad_id) and a missing one means the exported file's own ID scheme is
+    already broken, whether it's downloaded or uploaded.
+
     IMPORTANT: upload_experiment_excel has not been verified against the real NOMAD API
     as of this writing - see tests/live/test_smart_databaser_upload.py, which must be run
     manually against a disposable upload before trusting this against a real one."""
@@ -571,7 +601,24 @@ def create_finish_section(
         do_upload(data, filename)
 
     def start_action(action_name: str, run) -> None:
-        """Gate `run` behind the nudge flow unless skip_nudge_checkbox is checked."""
+        """Gate `run` behind the critical-fields check (always, cannot be skipped), then
+        the nudge flow unless skip_nudge_checkbox is checked."""
+        missing = missing_critical_fields(state)
+        if missing:
+            nudge_area.children = []
+            fields = " and ".join(missing)
+            verb = "is" if len(missing) == 1 else "are"
+            pronoun = "it" if len(missing) == 1 else "them"
+            status_output.value = (
+                f"<div style='color:#c0392b; font-weight:bold; border:2px solid "
+                f"#c0392b; padding:8px; margin:4px 0;'>&#9888; Cannot {action_name.lower()} "
+                f"- {fields} {verb} missing from Experiment Info. {fields} {verb} baked "
+                f"into every sample's Nomad ID, so the exported file would already be "
+                f"broken - fill {pronoun} in above first.</div>"
+            )
+            return
+        status_output.value = ""
+
         if skip_nudge_checkbox.value:
             nudge_area.children = []
             run()
@@ -959,61 +1006,56 @@ class VariationTemplatePanel(widgets.VBox):
     placeholder) whenever there's no actual matrix table to apply a Variation format
     to.
 
-    Also hosts the "Auto-fill Variation" button, ABOVE the custom-template part per the
-    product ask - Variation is a plain, directly-editable matrix column now (see
-    update_variation_column's docstring), so this button is the only way to (re)compute
-    it in bulk from the current varying-field values; it uses whatever format is active
-    (automatic field-slug label, or this panel's own custom template if one is set)."""
+    Hosts two buttons side by side, color-coded to keep them visually distinct since
+    they're easy to conflate: "Apply Formula" (blue/primary) SWITCHES the active format
+    (the custom pattern typed above, or automatic if left blank) and refills under it;
+    "Automatically fill up Variation" (green/success) just (re)computes under WHATEVER
+    format is already active, without changing it - the one to reach for after editing
+    varying-field values, since Variation is a plain, directly-editable matrix column now
+    and is no longer filled in live as you type (see update_variation_column's
+    docstring)."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
-
-        self.autofill_button = widgets.Button(description="Automatically fill up Variation")
-        self.autofill_button.on_click(self._on_autofill)
-        self.autofill_status = widgets.HTML(value="")
-        autofill_caption = widgets.HTML(
-            value=(
-                "<i style='color:#7f8c8d; font-size:11px;'>Variation is a plain entry "
-                "column - it is no longer filled in automatically as you type. Click "
-                "this to (re)generate it for every sample from the varying fields below "
-                "(using the custom format if one is set) - a manually-typed Variation "
-                "value is never overwritten.</i>"
-            )
-        )
 
         self.template_input = widgets.Text(
             value=state.variation_template or "",
             placeholder=r"e.g. Den=\1_Sol-\2_SubTemp=\3 - leave blank for the automatic label",
             layout=widgets.Layout(width="420px"),
         )
-        self.apply_button = widgets.Button(description="Apply", button_style="primary")
+        self.apply_button = widgets.Button(description="Apply Formula", button_style="primary")
         self.apply_button.on_click(self._on_apply)
+        self.autofill_button = widgets.Button(
+            description="Automatically fill up Variation", button_style="success"
+        )
+        self.autofill_button.on_click(self._on_autofill)
         self.status = widgets.HTML(value="")
+        self.autofill_status = widgets.HTML(value="")
         self.legend = widgets.HTML(value="")
 
         caption = widgets.HTML(
             value=(
-                "<i style='color:#7f8c8d; font-size:11px;'>Custom Variation format "
-                "(optional). Reference a varying column by position with "
+                "<i style='color:#7f8c8d; font-size:11px;'>Variation is a plain entry "
+                "column - it is not filled in automatically as you type. Custom Variation "
+                "format (optional): reference a varying column by position with "
                 "<code>\\1</code>, <code>\\2</code>, <code>\\3</code>... in the same order "
-                "as the legend below - you don't have to use every column. If a "
-                "referenced column has no value for a given sample, it's simply left "
-                "blank for that sample, not an error. Click Apply to switch the format "
-                "and immediately (re)generate the Variation column under it; leave the "
-                "box empty and click Apply to go back to the automatic label and refill "
-                "under that instead.</i>"
+                "as the legend below - you don't have to use every column, and a "
+                "referenced column with no value for a given sample is simply left blank "
+                "for that sample, not an error. <b>Apply Formula</b> switches to this "
+                "format (or back to the automatic label if left blank) and refills "
+                "immediately; <b>Automatically fill up Variation</b> just (re)fills under "
+                "whichever format is already active, without changing it - a manually-"
+                "typed Variation value is never overwritten by either.</i>"
             )
         )
 
         super().__init__(
             [
-                self.autofill_button,
-                autofill_caption,
-                self.autofill_status,
                 caption,
-                widgets.HBox([self.template_input, self.apply_button]),
+                widgets.HBox([self.template_input, self.apply_button, self.autofill_button]),
                 self.status,
+                self.autofill_status,
                 self.legend,
             ]
         )
