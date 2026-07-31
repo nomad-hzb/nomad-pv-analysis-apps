@@ -19,7 +19,7 @@ snapshot, not a live view.
 
 | Process type | Excel columns | Covered | Unmapped |
 |---|---:|---:|---:|
-| Experiment Info | 17 | 7 | 10 |
+| Experiment Info | 17 | 9 | 8 |
 | ALD | 27 | 16 | 11 |
 | Annealing | 15 | 4 | 11 |
 | Blade Coating | 76 | 63 | 13 |
@@ -84,12 +84,13 @@ look; don't assume they're mappable there without checking first.
   identical solvent/solute block gap was deliberately left unfixed per the readme
   ("pending a real batch to verify against") - the same edit pattern (and probably the
   same `Layer thickness [nm]` path) likely applies here too.
-- **Experiment Info: `Number of pixels`, `Pixel area [cm^2]`** - newly exposed as
-  ordinary per-sample Experiment Info fields (previously gated behind an unreachable
-  per-child-row UI that was removed in an earlier round - see data_manager.py git
-  history around `PixelFieldSpec`'s removal). No `field_mappings.json` entry exists for
-  either yet. Worth mapping once there's a real batch to verify the archive path
-  against, following this file's live-verification discipline.
+## Recently closed
+
+- **Experiment Info: `Number of pixels`, `Pixel area [cm^2]`** - mapped 2026-07-31 to
+  `substrate.number_of_pixels`/`substrate.pixel_area` (confirmed via `map_substrate()`
+  in `solar_cell_batch_mapping.py`) and live-verified the same day against real batch
+  HZB_ThNa_1_1 (resolved to `6.0`/`0.16`, matching a real exported file). No longer a
+  gap - Experiment Info's covered count in the summary table above reflects this.
 
 ## Not real gaps (already explained by design, listed here so they don't get "fixed" by mistake)
 

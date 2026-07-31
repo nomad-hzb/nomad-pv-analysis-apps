@@ -2167,8 +2167,17 @@ def upload_experiment_excel(
     max_poll_seconds: float = 120.0,
 ) -> None:
     """PUTs the Excel's raw bytes into upload_id's /raw/ endpoint, triggers processing,
-    then polls until data.process_running is False. Raises requests.HTTPError on any
-    failed call, or TimeoutError if processing doesn't finish within max_poll_seconds."""
+    then polls until data.process_running is False. Raises requests.HTTPError if the PUT
+    itself fails, or TimeoutError if processing doesn't finish within max_poll_seconds.
+
+    The POST to /action/process deliberately does NOT raise_for_status(): live-reported
+    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that this call can return 400 even
+    though the upload proceeds and finishes processing normally - most likely because
+    PUTting the file already triggers processing automatically on this NOMAD version,
+    making the explicit trigger redundant/rejected. apps/File_Uploader/gui_components.py's
+    _process_upload (a real, working upload flow, live-verified independently) already
+    established this exact tolerant pattern - fire the POST, ignore its response, and
+    treat the polling loop below as the actual source of truth for success/failure."""
     put_response = requests.put(
         f"{url}/uploads/{upload_id}/raw/",
         data={"wait_for_processing": False},
@@ -2177,11 +2186,10 @@ def upload_experiment_excel(
     )
     put_response.raise_for_status()
 
-    process_response = requests.post(
+    requests.post(
         f"{url}/uploads/{upload_id}/action/process",
         headers={"Authorization": f"Bearer {token}"},
     )
-    process_response.raise_for_status()
 
     elapsed = 0.0
     while elapsed < max_poll_seconds:

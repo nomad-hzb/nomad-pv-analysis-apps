@@ -3302,15 +3302,24 @@ def test_upload_experiment_excel_raises_on_put_failure():
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
 
-def test_upload_experiment_excel_raises_on_process_action_failure():
+def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls():
+    """Live-reported (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q): POST .../action/
+    process can return 400 even though the upload proceeds and finishes normally -
+    likely because PUTting the file already triggers processing automatically on this
+    NOMAD version. Must not raise here (matches apps/File_Uploader/gui_components.py's
+    proven _process_upload pattern) - the polling loop is the real source of truth."""
     with (
         patch("data_manager.requests.put", return_value=_mock_response()),
         patch("data_manager.requests.post", return_value=_mock_response(raise_error=True)),
-        patch("data_manager.requests.get"),
+        patch(
+            "data_manager.requests.get",
+            return_value=_mock_response({"data": {"process_running": False}}),
+        ) as mock_get,
         patch("data_manager.time.sleep"),
-        pytest.raises(requests.HTTPError),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
+
+    mock_get.assert_called()
 
 
 def test_upload_experiment_excel_raises_timeout_if_never_finishes():
