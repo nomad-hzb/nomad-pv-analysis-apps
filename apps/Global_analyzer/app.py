@@ -136,13 +136,22 @@ class SampleDataExplorer:
 
     def _refresh_ml_target_options(self):
         """Keep the Random Forest / Bayesian Optimization target dropdowns in sync
-        with whatever numeric parameters are available in the currently merged
-        dataset, preferring an efficiency-like column as the default target."""
-        merged_data = self.data_manager.merged_data
-        if merged_data is None or merged_data.empty:
-            numeric_cols = []
-        else:
-            numeric_cols = sorted(merged_data.select_dtypes(include="number").columns)
+        with every numeric result parameter currently loaded across ALL measurement
+        types (data_manager.current_results), preferring an efficiency-like column as
+        the default target.
+
+        Deliberately reads current_results directly rather than merged_data: results
+        are loaded eagerly for every measurement type present in the batch (JV, EQE,
+        MPP, ...), independent of which one is picked as a Plotting-tab data source,
+        so e.g. EQE parameters should be selectable here even if the Plotting tab's
+        X/Y/Color are all set to JV-derived columns (or vice versa).
+        """
+        numeric_cols = set()
+        for result_df in self.data_manager.current_results.values():
+            if result_df is None or result_df.empty:
+                continue
+            numeric_cols.update(result_df.select_dtypes(include="number").columns)
+        numeric_cols = sorted(numeric_cols)
 
         for selector in (self.gui.rf_target_selector, self.gui.bo_target_selector):
             previous_value = selector.value
@@ -156,41 +165,75 @@ class SampleDataExplorer:
                 default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
                 selector.value = default if default else numeric_cols[0]
 
-    def _get_optimizable_feature_columns(self, target_col: str) -> list:
-        """Restrict Random Forest / Bayesian Optimization features to process/
-        preparation parameters (data_manager.current_metadata), never measurement
-        results (data_manager.current_results).
+    def _get_target_series(self, target_col: str):
+        """Locate target_col in whichever current_results dataframe has it (results
+        are loaded eagerly for every measurement type present in the batch,
+        independent of the Plotting tab's X/Y/Color choices - see
+        _refresh_ml_target_options), and return one row per sample_id (averaged if a
+        measurement type reports multiple rows per sample, e.g. multiple pixels)."""
+        for result_df in self.data_manager.current_results.values():
+            if result_df is None or "sample_id" not in result_df.columns:
+                continue
+            if target_col not in result_df.columns:
+                continue
+            candidate = result_df[["sample_id", target_col]].dropna(subset=[target_col])
+            if candidate.empty:
+                continue
+            return candidate.groupby("sample_id", as_index=False)[target_col].mean()
+        return None
 
-        Results like Voc/Jsc/FF/etc. are computed alongside a target such as
-        efficiency (they come from the same JV measurement) - including them as
-        "features" trivially "explains" the target without being anything a lab
-        scientist can actually tune for the next batch. current_metadata vs
-        current_results is exactly the process-vs-measurement distinction the rest of
-        this app already tracks, so no new bookkeeping is needed here.
+    def _build_optimization_dataframe(self, target_col: str):
+        """Build the dataframe Random Forest / Bayesian Optimization actually train
+        on: every numeric process/preparation parameter across ALL loaded process
+        types (data_manager.current_metadata), joined on sample_id with the chosen
+        target column (data_manager.current_results).
+
+        Deliberately independent of data_manager.merged_data / the Plotting tab's
+        X/Y/Color selections - a common plotting workflow (e.g. Voc vs efficiency,
+        both "Results") never selects a metadata data source for any axis, which
+        would leave merged_data with zero process parameters even though
+        current_metadata is already fully loaded. Returns (combined_df, feature_cols)
+        - feature_cols already excludes the target and any near-constant column
+        (<=1 unique value), so the caller doesn't need to filter further.
         """
-        merged_data = self.data_manager.merged_data
-        if merged_data is None or merged_data.empty:
-            return []
+        if not self.data_manager.current_metadata:
+            return None, []
 
-        numeric_cols = set(merged_data.select_dtypes(include="number").columns)
-
-        result_columns = set()
-        for result_type, result_df in self.data_manager.current_results.items():
-            if result_df is None:
+        process_df = None
+        for metadata_type, metadata_df in self.data_manager.current_metadata.items():
+            if metadata_df is None or metadata_df.empty or "sample_id" not in metadata_df.columns:
                 continue
-            result_columns.update(result_df.columns)
-            # Merge conflicts between two result types are suffixed "<col>_<result_type>"
-            # (see DataManager.rebuild_merged_data) - exclude those variants too.
-            result_columns.update(f"{col}_{result_type}" for col in result_df.columns)
+            if process_df is None:
+                process_df = metadata_df.copy()
+            else:
+                # Suffix by process type (not a generic "_dup") - the same column name
+                # (e.g. layer_material_name) means something different per process
+                # type (ETL vs HTL material), so it must survive as a distinct feature,
+                # matching the suffixing DataManager.rebuild_merged_data already uses.
+                process_df = pd.merge(
+                    process_df,
+                    metadata_df,
+                    on="sample_id",
+                    how="outer",
+                    suffixes=("", f"_{metadata_type}"),
+                )
 
-        metadata_columns = set()
-        for metadata_df in self.data_manager.current_metadata.values():
-            if metadata_df is None:
-                continue
-            metadata_columns.update(metadata_df.columns)
+        if process_df is None:
+            return None, []
 
-        allowed = (numeric_cols & metadata_columns) - result_columns - {target_col}
-        return sorted(allowed)
+        target_series = self._get_target_series(target_col)
+        if target_series is None:
+            return None, []
+
+        combined = pd.merge(process_df, target_series, on="sample_id", how="inner")
+
+        feature_cols = [
+            col
+            for col in combined.select_dtypes(include="number").columns
+            if col != target_col and combined[col].dropna().nunique() > 1
+        ]
+
+        return combined, feature_cols
 
     def _initialize_batch_options(self):
         """Initialize batch options from API."""
@@ -294,6 +337,7 @@ class SampleDataExplorer:
 
             # Generate parameter summary
             self._refresh_parameter_summary()
+            self._refresh_ml_target_options()
 
             self._update_status(
                 f"✓ Loaded {len(self.current_sample_ids)} samples with "
@@ -1062,12 +1106,12 @@ class SampleDataExplorer:
                 logger.exception("Error computing correlations")
 
     def _on_run_random_forest(self, button):
-        """Fit a Random Forest to predict the chosen target from the currently merged
-        dataset, and report which other parameters matter most."""
+        """Fit a Random Forest to predict the chosen target from the currently loaded
+        process/preparation parameters, and report which of them matter most."""
         with self.gui.rf_output:
             clear_output(wait=True)
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+            if not self.data_manager.current_metadata and not self.data_manager.current_results:
                 print("⚠️ No data available. Load batches and select data sources first.")
                 return
 
@@ -1076,8 +1120,8 @@ class SampleDataExplorer:
                 print("⚠️ Pick a target parameter first.")
                 return
 
-            feature_cols = self._get_optimizable_feature_columns(target)
-            if not feature_cols:
+            combined_df, feature_cols = self._build_optimization_dataframe(target)
+            if combined_df is None or not feature_cols:
                 print(
                     "⚠️ No process/preparation parameters available to use as features. "
                     "Load batches with process step data (not just results) first."
@@ -1085,9 +1129,7 @@ class SampleDataExplorer:
                 return
 
             try:
-                result = ml.run_random_forest(
-                    self.data_manager.merged_data, target, feature_cols=feature_cols
-                )
+                result = ml.run_random_forest(combined_df, target, feature_cols=feature_cols)
             except ValueError as e:
                 print(f"⚠️ {e}")
                 return
@@ -1117,12 +1159,12 @@ class SampleDataExplorer:
 
     def _on_suggest_experiments(self, button):
         """Suggest next parameter combinations most likely to improve the chosen
-        target, using a Gaussian Process surrogate fit on the currently merged
-        dataset."""
+        target, using a Gaussian Process surrogate fit on the currently loaded
+        process/preparation parameters."""
         with self.gui.bo_output:
             clear_output(wait=True)
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+            if not self.data_manager.current_metadata and not self.data_manager.current_results:
                 print("⚠️ No data available. Load batches and select data sources first.")
                 return
 
@@ -1133,8 +1175,8 @@ class SampleDataExplorer:
 
             direction = self.gui.bo_direction_selector.value.lower()
 
-            feature_cols = self._get_optimizable_feature_columns(target)
-            if not feature_cols:
+            combined_df, feature_cols = self._build_optimization_dataframe(target)
+            if combined_df is None or not feature_cols:
                 print(
                     "⚠️ No process/preparation parameters available to use as features. "
                     "Load batches with process step data (not just results) first."
@@ -1143,7 +1185,7 @@ class SampleDataExplorer:
 
             try:
                 result = ml.suggest_next_experiments(
-                    self.data_manager.merged_data,
+                    combined_df,
                     target,
                     feature_cols=feature_cols,
                     direction=direction,
