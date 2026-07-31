@@ -13,6 +13,7 @@ sensible defaults so a lab scientist can pick a target and click "Run".
 """
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -136,6 +137,7 @@ def suggest_next_experiments(
     expected_improvement columns, sorted by expected_improvement descending).
     """
     from scipy.stats import norm
+    from sklearn.exceptions import ConvergenceWarning
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF, WhiteKernel
     from sklearn.preprocessing import StandardScaler
@@ -168,10 +170,16 @@ def suggest_next_experiments(
     X_scaled = scaler.fit_transform(X)
 
     kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)) + WhiteKernel(
-        noise_level=1.0, noise_level_bounds=(1e-5, 1e1)
+        noise_level=1.0, noise_level_bounds=(1e-8, 1e1)
     )
     gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, random_state=random_state)
-    gp.fit(X_scaled, y)
+    # A near-zero fitted noise level (the optimizer pinned against noise_level_bounds'
+    # lower edge) just means the data looks near-noiseless to the model - harmless for
+    # this "basic" suggestion tool, so the sklearn ConvergenceWarning about it is
+    # suppressed rather than surfaced as an error to the user.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=ConvergenceWarning)
+        gp.fit(X_scaled, y)
 
     rng = np.random.default_rng(random_state)
     mins = X.min(axis=0)

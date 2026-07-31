@@ -83,6 +83,7 @@ class SampleDataExplorer:
             self.gui.correlation_widget,
             self.gui.rf_widget,
             self.gui.bo_widget,
+            self.gui.correlation_scatter_output,
         )
 
         # Application state
@@ -154,6 +155,42 @@ class SampleDataExplorer:
             else:
                 default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
                 selector.value = default if default else numeric_cols[0]
+
+    def _get_optimizable_feature_columns(self, target_col: str) -> list:
+        """Restrict Random Forest / Bayesian Optimization features to process/
+        preparation parameters (data_manager.current_metadata), never measurement
+        results (data_manager.current_results).
+
+        Results like Voc/Jsc/FF/etc. are computed alongside a target such as
+        efficiency (they come from the same JV measurement) - including them as
+        "features" trivially "explains" the target without being anything a lab
+        scientist can actually tune for the next batch. current_metadata vs
+        current_results is exactly the process-vs-measurement distinction the rest of
+        this app already tracks, so no new bookkeeping is needed here.
+        """
+        merged_data = self.data_manager.merged_data
+        if merged_data is None or merged_data.empty:
+            return []
+
+        numeric_cols = set(merged_data.select_dtypes(include="number").columns)
+
+        result_columns = set()
+        for result_type, result_df in self.data_manager.current_results.items():
+            if result_df is None:
+                continue
+            result_columns.update(result_df.columns)
+            # Merge conflicts between two result types are suffixed "<col>_<result_type>"
+            # (see DataManager.rebuild_merged_data) - exclude those variants too.
+            result_columns.update(f"{col}_{result_type}" for col in result_df.columns)
+
+        metadata_columns = set()
+        for metadata_df in self.data_manager.current_metadata.values():
+            if metadata_df is None:
+                continue
+            metadata_columns.update(metadata_df.columns)
+
+        allowed = (numeric_cols & metadata_columns) - result_columns - {target_col}
+        return sorted(allowed)
 
     def _initialize_batch_options(self):
         """Initialize batch options from API."""
@@ -979,7 +1016,8 @@ class SampleDataExplorer:
                 traceback.print_exc()
 
     def _on_find_correlations(self, button):
-        """Compute and render a correlation matrix over the currently merged dataset."""
+        """Compute and render a correlation view over the currently merged dataset, in
+        whichever of the two formats (Heatmap / Scatter Matrix) is currently selected."""
         with self.gui.correlation_status_output:
             clear_output()
 
@@ -988,18 +1026,37 @@ class SampleDataExplorer:
                 return
 
             min_unique = self.gui.correlation_min_unique.value
+            plot_type = self.gui.correlation_plot_type.value
 
             try:
-                used_cols = self.plot_manager.create_correlation_heatmap(
-                    self.data_manager.merged_data, min_unique=min_unique
-                )
-                if len(used_cols) < 2:
-                    print(
-                        f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
-                        f"{min_unique} unique values - need at least 2 for a correlation matrix."
+                if plot_type == "Heatmap":
+                    self.gui.correlation_scatter_output.clear_output()
+                    used_cols = self.plot_manager.create_correlation_heatmap(
+                        self.data_manager.merged_data, min_unique=min_unique
                     )
+                    if len(used_cols) < 2:
+                        print(
+                            f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
+                            f"{min_unique} unique values - need at least 2 for a heatmap."
+                        )
+                    else:
+                        print(f"✓ Correlation heatmap computed for {len(used_cols)} parameters.")
                 else:
-                    print(f"✓ Correlation matrix computed for {len(used_cols)} parameters.")
+                    self.gui.correlation_widget.data = []
+                    self.gui.correlation_widget.update_layout(
+                        title='Switch "Format" to Heatmap to use this view'
+                    )
+                    used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
+                        self.data_manager.merged_data, min_unique=min_unique
+                    )
+                    if len(used_cols) < 2:
+                        print(
+                            f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
+                            f"{min_unique} unique values - need at least 2 for a scatter matrix."
+                        )
+                    else:
+                        note = " (showing the first 12)" if truncated else ""
+                        print(f"✓ Scatter matrix computed for {len(used_cols)} parameters{note}.")
             except Exception as e:
                 print(f"❌ Error computing correlations: {e}")
                 logger.exception("Error computing correlations")
@@ -1019,8 +1076,18 @@ class SampleDataExplorer:
                 print("⚠️ Pick a target parameter first.")
                 return
 
+            feature_cols = self._get_optimizable_feature_columns(target)
+            if not feature_cols:
+                print(
+                    "⚠️ No process/preparation parameters available to use as features. "
+                    "Load batches with process step data (not just results) first."
+                )
+                return
+
             try:
-                result = ml.run_random_forest(self.data_manager.merged_data, target)
+                result = ml.run_random_forest(
+                    self.data_manager.merged_data, target, feature_cols=feature_cols
+                )
             except ValueError as e:
                 print(f"⚠️ {e}")
                 return
@@ -1066,9 +1133,20 @@ class SampleDataExplorer:
 
             direction = self.gui.bo_direction_selector.value.lower()
 
+            feature_cols = self._get_optimizable_feature_columns(target)
+            if not feature_cols:
+                print(
+                    "⚠️ No process/preparation parameters available to use as features. "
+                    "Load batches with process step data (not just results) first."
+                )
+                return
+
             try:
                 result = ml.suggest_next_experiments(
-                    self.data_manager.merged_data, target, direction=direction
+                    self.data_manager.merged_data,
+                    target,
+                    feature_cols=feature_cols,
+                    direction=direction,
                 )
             except ValueError as e:
                 print(f"⚠️ {e}")
@@ -1080,19 +1158,24 @@ class SampleDataExplorer:
 
             suggestions = result["suggestions"]
             pred_col = f"predicted_{target}"
-            feature_cols = [
+            display_feature_cols = [
                 c
                 for c in suggestions.columns
                 if c not in (pred_col, "predicted_std", "expected_improvement")
             ]
 
-            header_cols = [*feature_cols, f"{target} (predicted)", "± std", "Expected improvement"]
+            header_cols = [
+                *display_feature_cols,
+                f"{target} (predicted)",
+                "± std",
+                "Expected improvement",
+            ]
             table_lines = [
                 "| " + " | ".join(header_cols) + " |",
                 "|" + "---|" * len(header_cols),
             ]
             for _, row in suggestions.iterrows():
-                values = [f"{row[c]:.3g}" for c in feature_cols]
+                values = [f"{row[c]:.3g}" for c in display_feature_cols]
                 table_lines.append(
                     "| "
                     + " | ".join(values)

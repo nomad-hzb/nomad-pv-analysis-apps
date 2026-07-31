@@ -24,6 +24,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from IPython.display import HTML, clear_output
 from IPython.display import display as ipy_display
+from plotly.subplots import make_subplots
 from utils import get_material_column as _get_material_column
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class PlotManager:
         correlation_widget=None,
         rf_widget=None,
         bo_widget=None,
+        correlation_scatter_output=None,
     ):
         """
         Initialize plot manager.
@@ -49,12 +51,19 @@ class PlotManager:
             correlation_widget: Plotly FigureWidget for the correlation matrix heatmap
             rf_widget: Plotly FigureWidget for the Random Forest feature-importance chart
             bo_widget: Plotly FigureWidget for the Bayesian Optimization suggestions chart
+            correlation_scatter_output: Output widget for the correlation scatter-matrix
+                view (a second FigureWidget doesn't work here - its subplot grid size
+                changes with how many parameters pass the min_unique filter, and a
+                FigureWidget's axis layout doesn't cleanly reset between calls with a
+                different grid size, so this view is rendered fresh into an Output
+                each time instead)
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
         self.correlation_widget = correlation_widget
         self.rf_widget = rf_widget
         self.bo_widget = bo_widget
+        self.correlation_scatter_output = correlation_scatter_output
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
@@ -516,7 +525,7 @@ class PlotManager:
                 zmid=0,
                 zmin=-1,
                 zmax=1,
-                colorbar=dict(title="r"),
+                colorbar=dict(title="Pearson r"),
                 text=[[f"{v:.2f}" for v in row] for row in corr.values],
                 texttemplate="%{text}",
                 hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
@@ -530,6 +539,155 @@ class PlotManager:
             margin=dict(l=150, b=150),
         )
         return varying_cols
+
+    def create_correlation_scatter_matrix(
+        self, df: pd.DataFrame, min_unique: int = 5, max_params: int = 12
+    ) -> tuple:
+        """
+        Render the second correlation view (matching JV-Analysis's Heatmap/Scatter
+        Matrix pair): diagonal histograms, lower-triangle scatter, upper-triangle
+        Pearson r as colored text. Capped at max_params columns - an NxN subplot grid
+        gets unusably large/slow well before then.
+
+        Renders into self.correlation_scatter_output (a plain Output, not a
+        FigureWidget - see __init__'s docstring for why) rather than
+        self.correlation_widget. Returns (columns_used, truncated).
+        """
+        if self.correlation_scatter_output is None:
+            raise ValueError("PlotManager has no correlation_scatter_output configured")
+
+        numeric_df = df.select_dtypes(include="number")
+        varying_cols = [
+            col for col in numeric_df.columns if numeric_df[col].dropna().nunique() > min_unique
+        ]
+        truncated = len(varying_cols) > max_params
+        varying_cols = varying_cols[:max_params]
+
+        with self.correlation_scatter_output:
+            clear_output(wait=True)
+
+            if len(varying_cols) < 2:
+                return varying_cols, truncated
+
+            subset = numeric_df[varying_cols]
+            corr = subset.corr()
+            n = len(varying_cols)
+
+            scatter_color = "rgba(93, 164, 214, 0.5)"
+            hist_color = "rgba(93, 164, 214, 0.7)"
+
+            fig = make_subplots(
+                rows=n,
+                cols=n,
+                shared_xaxes=False,
+                shared_yaxes=False,
+                horizontal_spacing=0.04,
+                vertical_spacing=0.04,
+            )
+
+            for row_idx, label_y in enumerate(varying_cols):
+                for col_idx, label_x in enumerate(varying_cols):
+                    r, c = row_idx + 1, col_idx + 1
+
+                    if col_idx > row_idx:
+                        # Upper triangle: Pearson r as colored text (red=positive, blue=negative)
+                        r_val = corr.loc[label_y, label_x]
+                        abs_r = abs(r_val)
+                        text_color = (
+                            f"rgba(215, 48, 39, {0.4 + 0.6 * abs_r:.2f})"
+                            if r_val > 0
+                            else f"rgba(69, 117, 180, {0.4 + 0.6 * abs_r:.2f})"
+                        )
+                        font_size = int(9 + 9 * abs_r)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[0.5],
+                                y=[0.5],
+                                mode="text",
+                                text=[f"<b>{r_val:.2f}</b>"],
+                                textfont=dict(size=font_size, color=text_color),
+                                showlegend=False,
+                                hovertemplate=(
+                                    f"<b>{label_x} vs {label_y}</b><br>"
+                                    f"Pearson r = {r_val:.3f}<extra></extra>"
+                                ),
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                        fig.update_xaxes(
+                            range=[0, 1],
+                            showticklabels=False,
+                            showgrid=False,
+                            zeroline=False,
+                            row=r,
+                            col=c,
+                        )
+                        fig.update_yaxes(
+                            range=[0, 1],
+                            showticklabels=False,
+                            showgrid=False,
+                            zeroline=False,
+                            row=r,
+                            col=c,
+                        )
+                        continue
+                    elif col_idx == row_idx:
+                        # Diagonal: histogram of the variable
+                        vals = subset[label_x].dropna()
+                        fig.add_trace(
+                            go.Histogram(
+                                x=vals,
+                                marker_color=hist_color,
+                                showlegend=False,
+                                hovertemplate=(
+                                    f"<b>{label_x}</b><br>Value: %{{x:.3f}}<br>"
+                                    "Count: %{y}<extra></extra>"
+                                ),
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                    else:
+                        # Lower triangle: scatter
+                        common_idx = subset[[label_x, label_y]].dropna().index
+                        fig.add_trace(
+                            go.Scatter(
+                                x=subset.loc[common_idx, label_x],
+                                y=subset.loc[common_idx, label_y],
+                                mode="markers",
+                                marker=dict(size=3, color=scatter_color, opacity=0.7),
+                                showlegend=False,
+                                hovertemplate=(
+                                    f"<b>{label_x} vs {label_y}</b><br>"
+                                    f"{label_x}: %{{x:.3f}}<br>"
+                                    f"{label_y}: %{{y:.3f}}<extra></extra>"
+                                ),
+                            ),
+                            row=r,
+                            col=c,
+                        )
+
+            for i, label in enumerate(varying_cols):
+                fig.update_xaxes(title_text=label, title_font=dict(size=9), row=n, col=i + 1)
+                if i > 0:
+                    fig.update_yaxes(title_text=label, title_font=dict(size=9), row=i + 1, col=1)
+
+            cell_size = max(90, min(150, 900 // n))
+            title = f"Scatter matrix ({n} parameters, >{min_unique} unique values)"
+            if truncated:
+                title += f" - showing first {max_params}"
+            fig.update_layout(
+                title=title,
+                height=cell_size * n + 80,
+                template="plotly_white",
+                margin=dict(l=80, r=40, t=80, b=80),
+                showlegend=False,
+            )
+
+            ipy_display(fig)
+
+        return varying_cols, truncated
 
     def create_feature_importance_plot(self, importances: list, target: str):
         """Render Random Forest feature importances as a horizontal bar chart, most

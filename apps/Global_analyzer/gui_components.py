@@ -225,6 +225,14 @@ class GUIManager:
             layout={"width": "260px"},
         )
 
+        self.correlation_plot_type = widgets.Dropdown(
+            options=["Heatmap", "Scatter Matrix"],
+            value="Heatmap",
+            description="Format:",
+            style={"description_width": "70px"},
+            layout={"width": "220px"},
+        )
+
         self.find_correlations_button = widgets.Button(
             description="Find Correlations",
             button_style="success",
@@ -240,6 +248,8 @@ class GUIManager:
             template="plotly_white",
             title='Select data sources, then click "Find Correlations"',
         )
+
+        self.correlation_scatter_output = widgets.Output()
 
         # ====================================================================
         # RANDOM FOREST
@@ -447,6 +457,7 @@ class GUIManager:
         step2 = widgets.VBox(
             [
                 widgets.HTML("<h3 style='color: #A23B72;'>Step 2: Select Data Sources</h3>"),
+                self.show_varying_only,
                 widgets.HTML("<h4 style='color: #666;'>X-Axis Data:</h4>"),
                 self.group_by_subbatch,
                 self.x_data_source_selector,
@@ -471,7 +482,6 @@ class GUIManager:
                 self.plot_type_selector,
                 self.jv_aggregation_selector,
                 self.colorscale_selector,
-                self.show_varying_only,
                 self.debug_checkbox,
                 widgets.HBox([self.create_plot_button, self.download_button]),
                 self.download_output,
@@ -506,9 +516,16 @@ class GUIManager:
                     "Parameters with too few distinct values (e.g. flags/constants) are "
                     "excluded via the threshold below.</p>"
                 ),
-                widgets.HBox([self.correlation_min_unique, self.find_correlations_button]),
+                widgets.HBox(
+                    [
+                        self.correlation_min_unique,
+                        self.correlation_plot_type,
+                        self.find_correlations_button,
+                    ]
+                ),
                 self.correlation_status_output,
                 self.correlation_widget,
+                self.correlation_scatter_output,
             ],
             layout={"padding": "20px"},
         )
