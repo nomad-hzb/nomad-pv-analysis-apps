@@ -92,7 +92,7 @@ def test_detect_peaks_finds_obvious_peak():
     x = list(range(50))
     y = [0.0] * 50
     y[25] = 5000.0  # one clear peak
-    positions, intensities = XRDPlotManager.detect_peaks(x, y)
+    positions, intensities, areas, segments = XRDPlotManager.detect_peaks(x, y)
     assert len(positions) >= 1
     assert abs(positions[0] - 25) < 2
 
@@ -100,7 +100,7 @@ def test_detect_peaks_finds_obvious_peak():
 def test_detect_peaks_returns_lists():
     x = [10.0, 20.0, 30.0]
     y = [100.0, 2000.0, 100.0]
-    pos, inten = XRDPlotManager.detect_peaks(x, y)
+    pos, inten, areas, segments = XRDPlotManager.detect_peaks(x, y)
     assert isinstance(pos, list)
     assert isinstance(inten, list)
 

@@ -54,7 +54,7 @@ class XRDPlotManager:
                 x_seg = x_arr[li : ri + 1]
                 y_seg = y_arr[li : ri + 1]
                 baseline = np.linspace(float(y_arr[li]), float(y_arr[ri]), len(x_seg))
-                areas.append(max(0.0, float(np.trapz(y_seg - baseline, x_seg))))
+                areas.append(max(0.0, float(np.trapezoid(y_seg - baseline, x_seg))))
                 segments.append((x_seg, y_seg, baseline))
 
         return x_arr[peaks].tolist(), y_arr[peaks].tolist(), areas, segments
