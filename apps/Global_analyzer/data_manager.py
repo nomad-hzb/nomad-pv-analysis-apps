@@ -229,6 +229,10 @@ class DataManager:
             "evaporation": self.data_loader.load_evaporation_data,
             "slot_die_coating": self.data_loader.load_slot_die_coating_data,
             "spin_coating": self.data_loader.load_spin_coating_data,
+            "ald": self.data_loader.load_ald_data,
+            "blade_coating": self.data_loader.load_blade_coating_data,
+            "dip_coating": self.data_loader.load_dip_coating_data,
+            "laser_scribing": self.data_loader.load_laser_scribing_data,
         }
 
         logger.debug("Loading metadata types (fast)...")
@@ -266,6 +270,7 @@ class DataManager:
                 "eis": "HySprint_ElectrochemicalImpedanceSpectroscopy",
                 "trspv_measurement": "HySprint_trSPVmeasurement",
                 "nmr": "HySprint_Simple_NMR",
+                "xrd": "HySprint_XRD_XY",
             }
 
             # data_key tells us where the actual results live inside the top-level measurement dict
@@ -286,6 +291,7 @@ class DataManager:
                 "pes": None,
                 "eis": None,
                 "trspv_measurement": None,
+                "xrd": None,
             }
             top_level_fields = ["datetime", "name", "description", "data_file", "lab_id"]
 

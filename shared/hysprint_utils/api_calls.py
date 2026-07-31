@@ -4,6 +4,7 @@
 import getpass
 
 import requests
+
 from hysprint_utils.config import ENTRY_TYPES
 
 
@@ -91,6 +92,44 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
     response.raise_for_status()
     data = response.json()["data"]
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
+
+def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
+    """Like get_batch_ids, but also resolves each batch's author display name.
+
+    Requesting 'metadata' (not just 'data') makes NOMAD resolve 'main_author' as an
+    embedded user object with 'name'/'username' fields, not just the opaque numeric
+    'user_id' - that's the only way to show a human-readable name in a filter dropdown.
+    """
+    query = {
+        'required': {
+            'data': '*',
+            'metadata': '*'
+        },
+        'owner': 'visible',
+        'query': {'entry_type':batch_type},
+        'pagination': {
+            'page_size': 10000
+        }
+    }
+    response = requests.post(
+        f'{url}/entries/archive/query', headers={'Authorization': f'Bearer {token}'}, json=query)
+    response.raise_for_status()
+    data = response.json()["data"]
+    results = []
+    for d in data:
+        archive = d["archive"]
+        lab_id = archive.get("data", {}).get("lab_id")
+        if not lab_id:
+            continue
+        main_author = archive.get("metadata", {}).get("main_author") or {}
+        author_name = (
+            main_author.get("name")
+            or main_author.get("username")
+            or (str(main_author["user_id"]) if main_author.get("user_id") else None)
+            or "Unknown"
+        )
+        results.append({"lab_id": lab_id, "author_name": author_name})
+    return results
 
 def get_ids_in_batch(url, token, batch_ids, batch_type=ENTRY_TYPES["batch"]):
     query = {

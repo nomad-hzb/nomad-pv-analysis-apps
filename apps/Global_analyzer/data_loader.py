@@ -24,6 +24,41 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _flatten_process_entry(entry: Dict, prefix: str = "") -> Dict:
+    """Generic fallback field extraction for process types with no dedicated loader.
+
+    Flattens nested dicts to dot-path keys and keeps scalar (str/int/float/bool) leaves
+    as their native type - unlike a pure display flattener, values here feed plot
+    parameters, so they must stay numeric/bool rather than being stringified. A
+    single-item list is unwrapped onto the same path (NOMAD's common "0-or-1 items"
+    repeatable subsection); a multi-item list is numbered 1-based per item so later
+    items don't silently overwrite earlier ones (e.g. multiple solvents).
+    """
+    out: Dict = {}
+    for key, value in entry.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            out.update(_flatten_process_entry(value, path))
+        elif isinstance(value, list):
+            if not value:
+                continue
+            if len(value) == 1:
+                item = value[0]
+                if isinstance(item, dict):
+                    out.update(_flatten_process_entry(item, path))
+                else:
+                    out[path] = item
+            else:
+                for index, item in enumerate(value, start=1):
+                    if isinstance(item, dict):
+                        out.update(_flatten_process_entry(item, f"{path}.{index}"))
+                    else:
+                        out[f"{path}.{index}"] = item
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            out[path] = value
+    return out
+
+
 class HySprintDataLoader:
     """
     A class to load and process different types of HySprint measurement data.
@@ -41,6 +76,10 @@ class HySprintDataLoader:
         "HySprint_SlotDieCoating",
         "HySprint_SpinCoating",
         "HySprint_Inkjet_Printing",
+        "HySprint_AtomicLayerDeposition",
+        "HySprint_BladeCoating",
+        "HySprint_DipCoating",
+        "HySprint_LaserScribing",
     ]
 
     RESULT_TYPES = [
@@ -547,6 +586,98 @@ class HySprintDataLoader:
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
+
+    def load_generic_process_data(
+        self, sample_ids: List[str], variation: Dict[str, str], entry_type: str
+    ) -> Optional[pd.DataFrame]:
+        """Generic fallback metadata loader for process types with no hand-written
+        extractor (their exact schema fields aren't documented here). Same "generic
+        fallback" precedent as Entry_Auditor's own flatten helper, adapted to keep
+        numeric/bool scalars (not just strings) since these values are meant to feed
+        plots via the Data Source -> Material -> Parameter cascade.
+        """
+        logger.info("Fetching %s data (generic loader) for %d samples", entry_type, len(sample_ids))
+
+        all_entries = self.get_all_data(self.url, self.token, sample_ids, eqe_type=entry_type)
+
+        if not all_entries:
+            return None
+
+        sample_data_list = []
+
+        skip_keys = {
+            "name",
+            "datetime",
+            "description",
+            "location",
+            "positon_in_experimental_plan",
+            "layer",
+            "m_def",
+            "samples",
+            "lab_id",
+        }
+
+        for sample_id, sample_entries in all_entries.items():
+            for entry in sample_entries:
+                process_data = entry[0]
+
+                row_data = {
+                    "sample_id": sample_id,
+                    "variation": variation.get(sample_id, ""),
+                    "name": process_data.get("name", ""),
+                    "datetime": process_data.get("datetime", ""),
+                    "description": process_data.get("description", ""),
+                    "location": process_data.get("location", ""),
+                    "position_in_plan": process_data.get("positon_in_experimental_plan", None),
+                }
+
+                # Layer information, if present - same shape the dedicated loaders use.
+                layers = process_data.get("layer", [])
+                if layers:
+                    layer = layers[0]
+                    row_data.update(
+                        {
+                            "layer_type": layer.get("layer_type", ""),
+                            "layer_material_name": layer.get("layer_material_name", ""),
+                        }
+                    )
+
+                for key, value in process_data.items():
+                    if key in skip_keys:
+                        continue
+                    for flat_key, flat_value in _flatten_process_entry({key: value}).items():
+                        if flat_key not in row_data:
+                            row_data[flat_key] = flat_value
+
+                sample_data_list.append(pd.DataFrame([row_data]))
+
+        return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
+
+    def load_ald_data(
+        self, sample_ids: List[str], variation: Dict[str, str]
+    ) -> Optional[pd.DataFrame]:
+        """Load Atomic Layer Deposition metadata (generic loader)."""
+        return self.load_generic_process_data(
+            sample_ids, variation, "HySprint_AtomicLayerDeposition"
+        )
+
+    def load_blade_coating_data(
+        self, sample_ids: List[str], variation: Dict[str, str]
+    ) -> Optional[pd.DataFrame]:
+        """Load Blade Coating metadata (generic loader)."""
+        return self.load_generic_process_data(sample_ids, variation, "HySprint_BladeCoating")
+
+    def load_dip_coating_data(
+        self, sample_ids: List[str], variation: Dict[str, str]
+    ) -> Optional[pd.DataFrame]:
+        """Load Dip Coating metadata (generic loader)."""
+        return self.load_generic_process_data(sample_ids, variation, "HySprint_DipCoating")
+
+    def load_laser_scribing_data(
+        self, sample_ids: List[str], variation: Dict[str, str]
+    ) -> Optional[pd.DataFrame]:
+        """Load Laser Scribing metadata (generic loader)."""
+        return self.load_generic_process_data(sample_ids, variation, "HySprint_LaserScribing")
 
     # RESULT LOADERS
 

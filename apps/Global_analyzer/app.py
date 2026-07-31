@@ -76,7 +76,9 @@ class SampleDataExplorer:
         self.process_manager = ProcessStepManager()
         self.data_loader = HySprintDataLoader(url, token, get_all_eqe)
         self.data_manager = DataManager(self.data_loader, self.param_manager)
-        self.plot_manager = PlotManager(self.gui.plot_widget, self.gui.stats_output)
+        self.plot_manager = PlotManager(
+            self.gui.plot_widget, self.gui.stats_output, self.gui.correlation_widget
+        )
 
         # Application state
         self.current_batches = []
@@ -101,6 +103,7 @@ class SampleDataExplorer:
                 "create_plot": self._on_create_plot,
                 "toggle_varying": self._on_toggle_varying_only,
                 "download": self._on_download_data,
+                "find_correlations": self._on_find_correlations,
             }
         )
 
@@ -303,6 +306,7 @@ class SampleDataExplorer:
                             "data_key": None,
                         },
                         "nmr": {"api_type": "HySprint_Simple_NMR", "data_key": "data"},
+                        "xrd": {"api_type": "HySprint_XRD_XY", "data_key": None},
                     }
 
                     for measurement_key, config in measurement_configs.items():
@@ -413,6 +417,8 @@ class SampleDataExplorer:
                         measurement_display_names.append("trSPV")
                     elif mt == "nmr":
                         measurement_display_names.append("NMR")
+                    elif mt == "xrd":
+                        measurement_display_names.append("XRD")
                     else:
                         measurement_display_names.append(mt.replace("_", " ").title())
 
@@ -657,6 +663,7 @@ class SampleDataExplorer:
             "EIS": "eis",
             "trSPV": "trspv_measurement",
             "NMR": "nmr",
+            "XRD": "xrd",
         }
 
         measurement_key = display_to_key.get(measurement_display_name)
@@ -924,6 +931,32 @@ class SampleDataExplorer:
             except Exception as e:
                 print(f"❌ Download error: {e}")
                 traceback.print_exc()
+
+    def _on_find_correlations(self, button):
+        """Compute and render a correlation matrix over the currently merged dataset."""
+        with self.gui.correlation_status_output:
+            clear_output()
+
+            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+                print("⚠️ No data available. Load batches and select data sources first.")
+                return
+
+            min_unique = self.gui.correlation_min_unique.value
+
+            try:
+                used_cols = self.plot_manager.create_correlation_heatmap(
+                    self.data_manager.merged_data, min_unique=min_unique
+                )
+                if len(used_cols) < 2:
+                    print(
+                        f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
+                        f"{min_unique} unique values — need at least 2 for a correlation matrix."
+                    )
+                else:
+                    print(f"✓ Correlation matrix computed for {len(used_cols)} parameters.")
+            except Exception as e:
+                print(f"❌ Error computing correlations: {e}")
+                logger.exception("Error computing correlations")
 
     def create_interface(self):
         """Create and return the complete interface."""

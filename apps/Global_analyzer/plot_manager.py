@@ -32,16 +32,18 @@ logger = logging.getLogger(__name__)
 class PlotManager:
     """Manages plot creation and data preparation."""
 
-    def __init__(self, plot_widget: go.FigureWidget, stats_output):
+    def __init__(self, plot_widget: go.FigureWidget, stats_output, correlation_widget=None):
         """
         Initialize plot manager.
 
         Args:
             plot_widget: Plotly FigureWidget for rendering plots
             stats_output: Output widget for statistics display
+            correlation_widget: Plotly FigureWidget for the correlation matrix heatmap
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
+        self.correlation_widget = correlation_widget
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
@@ -467,6 +469,56 @@ class PlotManager:
             ),
             margin=dict(r=200),
         )
+
+    def create_correlation_heatmap(self, df: pd.DataFrame, min_unique: int = 5) -> list:
+        """
+        Compute and render a correlation matrix heatmap over every numeric column with
+        more than `min_unique` distinct values - filters out near-constant/binary flag
+        columns that would otherwise clutter the matrix without saying anything useful.
+
+        Returns the list of columns actually included, so the caller can report it.
+        """
+        if self.correlation_widget is None:
+            raise ValueError("PlotManager has no correlation_widget configured")
+
+        numeric_df = df.select_dtypes(include="number")
+        varying_cols = [
+            col for col in numeric_df.columns if numeric_df[col].dropna().nunique() > min_unique
+        ]
+
+        self.correlation_widget.data = []
+
+        if len(varying_cols) < 2:
+            self.correlation_widget.update_layout(
+                title="Not enough varying numeric parameters for a correlation matrix"
+            )
+            return varying_cols
+
+        corr = numeric_df[varying_cols].corr()
+
+        self.correlation_widget.add_trace(
+            go.Heatmap(
+                z=corr.values,
+                x=list(corr.columns),
+                y=list(corr.index),
+                colorscale="RdBu",
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                colorbar=dict(title="r"),
+                text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                texttemplate="%{text}",
+                hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
+            )
+        )
+        self.correlation_widget.update_layout(
+            title=f"Correlation matrix ({len(varying_cols)} parameters, >{min_unique} unique values)",
+            height=max(500, 30 * len(varying_cols)),
+            template="plotly_white",
+            xaxis=dict(tickangle=-45),
+            margin=dict(l=150, b=150),
+        )
+        return varying_cols
 
     def display_statistics(
         self, df: pd.DataFrame, x_col: str, y_col: str, x_label: str, y_label: str

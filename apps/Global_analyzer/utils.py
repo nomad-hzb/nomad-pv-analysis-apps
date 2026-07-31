@@ -279,6 +279,12 @@ class ProcessStepManager:
             "slot": "slot_die_coating",
             "slotdie": "slot_die_coating",
             "spin": "spin_coating",
+            "ald": "ald",
+            "atomiclayerdeposition": "ald",
+            "blade": "blade_coating",
+            "dip": "dip_coating",
+            "laser": "laser_scribing",
+            "scribing": "laser_scribing",
         }
 
         for key, value in mapping.items():
