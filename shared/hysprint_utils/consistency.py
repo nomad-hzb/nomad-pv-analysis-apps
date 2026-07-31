@@ -41,7 +41,7 @@ def get_string_columns(
     for column in df.columns:
         if column in exclude_columns:
             continue
-        if df[column].dtype != object:
+        if not pd.api.types.is_string_dtype(df[column]):
             continue
         series = df[column].replace("", None).dropna()
         if series.empty or series.nunique() > max_unique:

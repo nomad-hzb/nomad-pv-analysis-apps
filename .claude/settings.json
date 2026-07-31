@@ -77,7 +77,9 @@
       "Bash(python -m ruff check apps/TRPL_Analysis/ apps/XRD_peak_finder/ apps/NMR_Analysis/ apps/EQE_Analysis/ apps/AbsPL_Analysis/ apps/JV-Analysis/ apps/MPPT_Analysis/ apps/DesignOfExperiments/ shared/ tests/ scripts/)",
       "Bash(PYTHONPATH=apps/DesignOfExperiments python -m pytest tests/DesignOfExperiments/ -q -m \"not live\")",
       "Bash(PYTHONPATH=\"apps/JV-Analysis\" python -m pytest \"tests/JV-Analysis/\" -q -m \"not live\")",
-      "Bash(PYTHONPATH=shared python -m pytest tests/shared/ -q -m \"not live\")"
+      "Bash(PYTHONPATH=shared python -m pytest tests/shared/ -q -m \"not live\")",
+      "Bash(gh run *)",
+      "Bash(PYTHONPATH=shared python -m pytest tests/shared/test_consistency.py -v -m \"not live\")"
     ],
     "additionalDirectories": [
       "\\tmp"
