@@ -10,11 +10,12 @@ import logging
 import ipywidgets as widgets
 import plotly.graph_objects as go
 from data_manager import MEASUREMENT_TYPE, XRDDataManager
+from IPython.display import display as ipydisplay
 from natsort import natsorted
+from plot_manager import XRDPlotManager
+
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
-from IPython.display import display as ipydisplay
-from plot_manager import XRDPlotManager
 
 logger = logging.getLogger(__name__)
 

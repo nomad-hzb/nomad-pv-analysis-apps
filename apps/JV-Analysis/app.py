@@ -20,13 +20,14 @@ import pandas as pd
 import requests
 from data_manager import DataManager
 from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, InfoUI, PlotUI, SaveUI
-from hysprint_utils.batch_selection import create_batch_selection
-from hysprint_utils.error_handler import ErrorHandler
 from IPython.display import Markdown, clear_output, display
 from openpyxl.utils.dataframe import dataframe_to_rows
 from plot_manager import plotting_string_action
 from resizable_plot_utility import ResizablePlotManager
 from utils import save_combined_excel_data
+
+from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ try:
     from hysprint_utils.api_calls import get_all_measurements_except_JV, get_ids_in_batch
 except ImportError:
     logger.warning("Warning: Some API modules not available")
+
+
 class SimpleAuthManager:
     """Simplified authentication manager"""
 
@@ -83,6 +86,7 @@ class SimpleAuthManager:
     def _token_from_secrets():
         """Try to load NOMAD_TOKEN from secrets.py two levels above this file."""
         import importlib.util
+
         secrets_path = Path(__file__).parent.parent.parent / "secrets.py"
         try:
             spec = importlib.util.spec_from_file_location("_secrets", secrets_path)
@@ -442,7 +446,9 @@ If you tested specific variables or conditions for each sample, please write the
         """Download the complete (unfiltered) JV data as CSV."""
         data = self.data_manager.get_data()
         if data and "jvc" in data:
-            self.save_ui.trigger_download(data["jvc"].to_csv(index=False), "jv_full.csv", "text/plain")
+            self.save_ui.trigger_download(
+                data["jvc"].to_csv(index=False), "jv_full.csv", "text/plain"
+            )
         else:
             logger.warning("No JV data available for download")
 
@@ -590,7 +596,9 @@ If you tested specific variables or conditions for each sample, please write the
                         for _, row in jv_filtered_samples.iterrows():
                             sample = row["sample"]
                             cell = row["cell"]
-                            for reason in [r.strip() for r in row["filter_reason"].split(",") if r.strip()]:
+                            for reason in [
+                                r.strip() for r in row["filter_reason"].split(",") if r.strip()
+                            ]:
                                 condition_groups.setdefault(reason, {}).setdefault(sample, [])
                                 if cell not in condition_groups[reason][sample]:
                                     condition_groups[reason][sample].append(cell)
@@ -924,9 +932,9 @@ If you tested specific variables or conditions for each sample, please write the
                 )
                 logger.info(
                     (
-                    "Download initiated. If it doesn't start automatically, "
-                    "click the button above."
-                )
+                        "Download initiated. If it doesn't start automatically, "
+                        "click the button above."
+                    )
                 )
 
         except Exception as e:
@@ -962,9 +970,9 @@ If you tested specific variables or conditions for each sample, please write the
                 )
                 logger.info(
                     (
-                    "Download initiated. If it doesn't start automatically, "
-                    "click the button above."
-                )
+                        "Download initiated. If it doesn't start automatically, "
+                        "click the button above."
+                    )
                 )
 
         except Exception as e:
@@ -1014,9 +1022,9 @@ If you tested specific variables or conditions for each sample, please write the
                 )
                 logger.info(
                     (
-                    "Download initiated. If it doesn't start automatically, "
-                    "click the button above."
-                )
+                        "Download initiated. If it doesn't start automatically, "
+                        "click the button above."
+                    )
                 )
 
         except Exception as e:

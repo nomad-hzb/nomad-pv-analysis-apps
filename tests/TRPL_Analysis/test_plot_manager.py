@@ -1,7 +1,7 @@
 """PlotManager: figure type and trace checks."""
+
 import numpy as np
 import plotly.graph_objects as go
-import pytest
 from plot_manager import TRPLPlotManager
 
 

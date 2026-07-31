@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
+from pydantic import BaseModel, field_validator
+
 from hysprint_utils.api_calls import (
     get_all_eqe,
     get_ids_in_batch,
@@ -11,7 +13,6 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta  # noqa: F401  (available for import by callers)
-from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 

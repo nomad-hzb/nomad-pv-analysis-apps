@@ -117,9 +117,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate NOMAD test fixtures")
     parser.add_argument("--url", required=True, help="NOMAD Oasis API URL")
     parser.add_argument("--token", required=True, help="NOMAD API token")
-    parser.add_argument(
-        "--batch", required=True, nargs="+", help="Batch ID(s) to fetch data for"
-    )
+    parser.add_argument("--batch", required=True, nargs="+", help="Batch ID(s) to fetch data for")
     parser.add_argument(
         "--app",
         required=True,

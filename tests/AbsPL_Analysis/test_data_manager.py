@@ -1,11 +1,11 @@
 """AbsPlDataManager: load_offline, filter, export."""
+
 import io
 import json
 from pathlib import Path
 
 import pandas as pd
-import pytest
-from data_manager import AbsPlDataManager, MEASUREMENT_TYPE
+from data_manager import MEASUREMENT_TYPE, AbsPlDataManager
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
 
@@ -34,11 +34,14 @@ def test_load_offline_skips_invalid_rows(tmp_path):
     fixture = {
         "descriptions": {"S001": "ref", "S002": "var1"},
         "measurements": {
-            "S001": [
-                [{"results": [{"bandgap": "not-a-float"}], "name": "bad"}]
-            ],
+            "S001": [[{"results": [{"bandgap": "not-a-float"}], "name": "bad"}]],
             "S002": [
-                [{"results": [{"bandgap": 1.58, "luminescence_quantum_yield": 0.08}], "name": "good"}]
+                [
+                    {
+                        "results": [{"bandgap": 1.58, "luminescence_quantum_yield": 0.08}],
+                        "name": "good",
+                    }
+                ]
             ],
         },
     }

@@ -26,15 +26,18 @@ import plot_manager as pm
 import scipy.optimize
 import scipy.signal
 from data_manager import MEASUREMENT_TYPE, TRPLDataManager
-from hysprint_utils.api_calls import get_all_batches_wth_data
-from hysprint_utils.batch_selection import create_batch_selection
-from hysprint_utils.error_handler import ErrorHandler
-from hysprint_utils.plotting_utils import WidgetFactory
 from IPython.display import display as ipydisplay
 from scipy.interpolate import BSpline, generate_knots, make_splrep
 from scipy.optimize import minimize
 
+from hysprint_utils.api_calls import get_all_batches_wth_data
+from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.plotting_utils import WidgetFactory
+
 logger = logging.getLogger(__name__)
+
+
 def _fit_convex_spline(x, y, spl0, n_grid=200, tol=0.0):
     """Refit BSpline coefficients with convexity constraint f'' >= tol."""
     x, y = np.asarray(x), np.asarray(y)
@@ -343,7 +346,8 @@ class AnalysisPanel:
                 thickness = gp["thickness"]
                 if thickness == 0:
                     raise ValueError(
-                        "Thickness is 0 nm. Set a non-zero value in 'Thickness [nm]' before running analysis."
+                        "Thickness is 0 nm. Set a non-zero value in "
+                        "'Thickness [nm]' before running analysis."
                     )
                 n0s, fluences = _calculate_N0s(
                     hc,
@@ -375,13 +379,8 @@ class AnalysisPanel:
                     fit_sav = scipy.signal.savgol_filter(pl, 51, 3)
                     s = 1e-5
                     knots = list(generate_knots(t, fit_sav, s=s, k=3, nest=30))
-                    spr0 = make_splrep(t, fit_sav, k=3, s=s, t=knots[-1])
                     fit_knots_vals = make_splrep(t, fit_sav, k=3, s=s, t=knots[-1])(t)
                     mask = fit_knots_vals > 10 * row["noise"]
-                    spl_convex_obj = _fit_convex_spline(
-                        t[mask], fit_sav[mask], spr0, n_grid=300, tol=0.0
-                    )
-                    spl_convex = spl_convex_obj(t[mask])
 
                     p0 = [1, 1e4] * n_exp
                     lb = (1e-12,) * (2 * n_exp)

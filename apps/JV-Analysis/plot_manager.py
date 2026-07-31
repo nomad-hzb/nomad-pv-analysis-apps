@@ -84,7 +84,17 @@ def _parse_custom_order(order_str):
     return groups if groups else None
 
 
-def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=None, sort_order="Alphanumeric ↑", custom_order="", direction_split=False, flip_current=False):  # noqa: E501
+def plotting_string_action(
+    plot_list,
+    data,
+    supp,
+    is_voila=False,
+    color_scheme=None,
+    sort_order="Alphanumeric ↑",
+    custom_order="",
+    direction_split=False,
+    flip_current=False,
+):  # noqa: E501
     """
     Main plotting function that processes plot codes and creates figures.
     """
@@ -175,13 +185,20 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                 x_code = rest[:-1] if dir_split else rest
                 x_code = x_code or "a"
                 var_x_map = {
-                    "e": "batch", "g": "condition", "a": "sample",
-                    "b": "cell", "c": "direction", "s": "status",
+                    "e": "batch",
+                    "g": "condition",
+                    "a": "sample",
+                    "b": "cell",
+                    "c": "direction",
+                    "s": "status",
                 }
                 var_x = var_x_map.get(x_code, "sample")
                 fig, fig_name = plot_manager.create_voc_jsc_ff_pce_subplots(
-                    filtered_jv, [omitted_jv, filter_pars],
-                    colors=color_scheme, var_x=var_x, direction_split=dir_split,
+                    filtered_jv,
+                    [omitted_jv, filter_pars],
+                    colors=color_scheme,
+                    var_x=var_x,
+                    direction_split=dir_split,
                 )
                 fig_list.append(fig)
                 fig_names.append(fig_name)
@@ -196,7 +213,10 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                 continue
             elif "CwH" in pl:
                 fig, fig_name = plot_manager.create_jv_best_device_plot(
-                    filtered_jv, filtered_curves, colors=color_scheme, show_summary=False,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    show_summary=False,
                     flip_current=flip_current,
                 )
             elif "Cxw" in pl:
@@ -205,7 +225,10 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                     filtered_jv, complete_curves
                 )
                 figs, fig_names_new = plot_manager.create_jv_separated_by_cell_plot(
-                    filtered_jv, working_curves, colors=color_scheme, plot_type="working",
+                    filtered_jv,
+                    working_curves,
+                    colors=color_scheme,
+                    plot_type="working",
                     flip_current=flip_current,
                 )
                 if isinstance(figs, list) and isinstance(fig_names_new, list):
@@ -221,7 +244,10 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                     filtered_jv, complete_curves
                 )
                 figs, fig_names_new = plot_manager.create_jv_separated_by_substrate_plot(
-                    filtered_jv, working_curves, colors=color_scheme, plot_type="working",
+                    filtered_jv,
+                    working_curves,
+                    colors=color_scheme,
+                    plot_type="working",
                     flip_current=flip_current,
                 )
                 if isinstance(figs, list) and isinstance(fig_names_new, list):
@@ -269,7 +295,11 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                 )
             elif "J" in pl and var_x and var_y:
                 fig, fig_name, _ = plot_manager.create_boxplot(
-                    omitted_jv, var_x, var_y, [filtered_jv, filter_pars], "junk",
+                    omitted_jv,
+                    var_x,
+                    var_y,
+                    [filtered_jv, filter_pars],
+                    "junk",
                     sort_order=sort_order,
                     custom_order=custom_order,
                     direction_split="D" in pl,
@@ -280,14 +310,20 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
             elif pl.startswith("CwBT"):
                 show_summary = not pl.endswith("H")
                 fig, fig_name = plot_manager.create_jv_best_by_batch_together(
-                    filtered_jv, filtered_curves, colors=color_scheme,
-                    show_summary=show_summary, flip_current=flip_current,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    show_summary=show_summary,
+                    flip_current=flip_current,
                 )
             elif pl.startswith("CwBS"):
                 show_summary = not pl.endswith("H")
                 figs, fig_names_new = plot_manager.create_jv_best_by_batch_separate(
-                    filtered_jv, filtered_curves, colors=color_scheme,
-                    show_summary=show_summary, flip_current=flip_current,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    show_summary=show_summary,
+                    flip_current=flip_current,
                 )
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_new)
@@ -295,32 +331,47 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
             elif pl.startswith("CwVT"):
                 show_summary = not pl.endswith("H")
                 fig, fig_name = plot_manager.create_jv_best_by_variable_together(
-                    filtered_jv, filtered_curves, colors=color_scheme,
-                    show_summary=show_summary, flip_current=flip_current,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    show_summary=show_summary,
+                    flip_current=flip_current,
                 )
             elif pl.startswith("CwVS"):
                 show_summary = not pl.endswith("H")
                 figs, fig_names_new = plot_manager.create_jv_best_by_variable_separate(
-                    filtered_jv, filtered_curves, colors=color_scheme,
-                    show_summary=show_summary, flip_current=flip_current,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    show_summary=show_summary,
+                    flip_current=flip_current,
                 )
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_new)
                 continue
             elif "Cw" in pl:
                 fig, fig_name = plot_manager.create_jv_best_device_plot(
-                    filtered_jv, filtered_curves, colors=color_scheme, flip_current=flip_current,
+                    filtered_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    flip_current=flip_current,
                 )
             elif "Cy" in pl:
                 fig, fig_name = plot_manager.create_jv_all_cells_plot(
-                    complete_jv, filtered_curves, colors=color_scheme, flip_current=flip_current,
+                    complete_jv,
+                    filtered_curves,
+                    colors=color_scheme,
+                    flip_current=flip_current,
                 )
             elif "Cz" in pl:
                 working_curves = plot_manager._create_matching_curves_data(
                     filtered_jv, complete_curves
                 )
                 fig, fig_name = plot_manager.create_jv_working_cells_plot(
-                    filtered_jv, working_curves, colors=color_scheme, flip_current=flip_current,
+                    filtered_jv,
+                    working_curves,
+                    colors=color_scheme,
+                    flip_current=flip_current,
                 )
             elif "Co" in pl:
                 if not omitted_jv.empty:
@@ -349,11 +400,17 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                         rejected_curves.groupby(["sample", "cell"]).size().reset_index()
                     )
                 fig, fig_name = plot_manager.create_jv_non_working_cells_plot(
-                    omitted_jv, rejected_curves, colors=color_scheme, flip_current=flip_current,
+                    omitted_jv,
+                    rejected_curves,
+                    colors=color_scheme,
+                    flip_current=flip_current,
                 )
             elif "Cx" in pl:
                 figs, fig_names_new = plot_manager.create_jv_separated_by_cell_plot(
-                    complete_jv, complete_curves, colors=color_scheme, flip_current=flip_current,
+                    complete_jv,
+                    complete_curves,
+                    colors=color_scheme,
+                    flip_current=flip_current,
                 )
                 if isinstance(figs, list) and isinstance(fig_names_new, list):
                     fig_list.extend(figs)
@@ -364,7 +421,10 @@ def plotting_string_action(plot_list, data, supp, is_voila=False, color_scheme=N
                 continue
             elif "Cd" in pl:
                 figs, fig_names_new = plot_manager.create_jv_separated_by_substrate_plot(
-                    complete_jv, complete_curves, colors=color_scheme, plot_type="all",
+                    complete_jv,
+                    complete_curves,
+                    colors=color_scheme,
+                    plot_type="all",
                     flip_current=flip_current,
                 )
                 if isinstance(figs, list) and isinstance(fig_names_new, list):
@@ -473,9 +533,12 @@ def plot_list_from_voila(plot_list):
             code += jvc_dict.get(option1, "")
         elif "JV Curve" in plot_type:
             _best_opts = {
-                "Best device only", "Best device overall",
-                "Best device by batch (together)", "Best device by batch (separate)",
-                "Best device by variable (together)", "Best device by variable (separate)",
+                "Best device only",
+                "Best device overall",
+                "Best device by batch (together)",
+                "Best device by batch (separate)",
+                "Best device by variable (together)",
+                "Best device by variable (separate)",
             }
             if option1 in _best_opts:
                 base = cur_dict.get(option1, "Cw")
@@ -662,7 +725,9 @@ class PlotManager:
 
         return matching_curves
 
-    def create_jv_best_device_plot(self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False):  # noqa: E501
+    def create_jv_best_device_plot(
+        self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False
+    ):  # noqa: E501
         """Plot JV curves for the best device (highest PCE) with all available measurements"""
 
         voltage_rows = curves_data[curves_data["variable"] == "Voltage (V)"]
@@ -979,7 +1044,17 @@ class PlotManager:
         return fig, sample_name
 
     def create_boxplot(
-        self, data, var_x, var_y, filtered_info, datatype="data", wb=None, colors=None, sort_order="Alphanumeric ↑", custom_order="", direction_split=False
+        self,
+        data,
+        var_x,
+        var_y,
+        filtered_info,
+        datatype="data",
+        wb=None,
+        colors=None,
+        sort_order="Alphanumeric ↑",
+        custom_order="",
+        direction_split=False,
     ):
         """Create a boxplot with statistical analysis - ENHANCED with data verification"""
         names_dict = {
@@ -1099,9 +1174,7 @@ class PlotManager:
         }
 
         use_direction_split = (
-            direction_split
-            and "direction" in data.columns
-            and var_x != "direction"
+            direction_split and "direction" in data.columns and var_x != "direction"
         )
 
         if use_direction_split:
@@ -1713,7 +1786,10 @@ class PlotManager:
 
         data_label = "all data" if all_data else "filtered data"
         fig.update_layout(
-            title=f"Correlation Matrix of JV Parameters<br><sup>{len(data)} measurements ({data_label})</sup>",
+            title=(
+                f"Correlation Matrix of JV Parameters<br>"
+                f"<sup>{len(data)} measurements ({data_label})</sup>"
+            ),
             template="plotly_white",
             autosize=True,
             height=650,
@@ -1755,7 +1831,8 @@ class PlotManager:
         hist_color = "rgba(93, 164, 214, 0.7)"
 
         fig = make_subplots(
-            rows=n, cols=n,
+            rows=n,
+            cols=n,
             shared_xaxes=False,
             shared_yaxes=False,
             horizontal_spacing=0.04,
@@ -1778,24 +1855,35 @@ class PlotManager:
                     font_size = int(9 + 9 * abs_r)
                     fig.add_trace(
                         go.Scatter(
-                            x=[0.5], y=[0.5],
+                            x=[0.5],
+                            y=[0.5],
                             mode="text",
                             text=[f"<b>{r_val:.2f}</b>"],
                             textfont=dict(size=font_size, color=text_color),
                             showlegend=False,
                             hovertemplate=(
-                                f"<b>{label_x} vs {label_y}</b><br>Pearson R = {r_val:.3f}<extra></extra>"
+                                f"<b>{label_x} vs {label_y}</b><br>"
+                                f"Pearson R = {r_val:.3f}<extra></extra>"
                             ),
                         ),
-                        row=r, col=c,
+                        row=r,
+                        col=c,
                     )
                     fig.update_xaxes(
-                        range=[0, 1], showticklabels=False, showgrid=False, zeroline=False,
-                        row=r, col=c,
+                        range=[0, 1],
+                        showticklabels=False,
+                        showgrid=False,
+                        zeroline=False,
+                        row=r,
+                        col=c,
                     )
                     fig.update_yaxes(
-                        range=[0, 1], showticklabels=False, showgrid=False, zeroline=False,
-                        row=r, col=c,
+                        range=[0, 1],
+                        showticklabels=False,
+                        showgrid=False,
+                        zeroline=False,
+                        row=r,
+                        col=c,
                     )
                     continue
                 elif col_idx == row_idx:
@@ -1806,13 +1894,16 @@ class PlotManager:
                             x=vals,
                             marker_color=hist_color,
                             showlegend=False,
-                            hovertemplate=f"<b>{label_x}</b><br>Value: %{{x:.3f}}<br>Count: %{{y}}<extra></extra>",
+                            hovertemplate=(
+                                f"<b>{label_x}</b><br>Value: %{{x:.3f}}<br>"
+                                "Count: %{y}<extra></extra>"
+                            ),
                         ),
-                        row=r, col=c,
+                        row=r,
+                        col=c,
                     )
                 else:
                     # Lower triangle: scatter
-                    x_vals = subset[label_x].dropna()
                     # Align indices
                     common_idx = subset[[label_x, label_y]].dropna().index
                     fig.add_trace(
@@ -1828,7 +1919,8 @@ class PlotManager:
                                 f"{label_y}: %{{y:.3f}}<extra></extra>"
                             ),
                         ),
-                        row=r, col=c,
+                        row=r,
+                        col=c,
                     )
 
         # Add axis labels along the edges only
@@ -1842,7 +1934,11 @@ class PlotManager:
         cell_size = max(110, min(170, 900 // n))
         data_label = "all data" if all_data else "filtered data"
         fig.update_layout(
-            title=f"Scatter Matrix of JV Parameters<br><sup>{len(data)} measurements ({data_label}) — diagonal: distribution, lower triangle: scatter</sup>",
+            title=(
+                f"Scatter Matrix of JV Parameters<br>"
+                f"<sup>{len(data)} measurements ({data_label}) — "
+                f"diagonal: distribution, lower triangle: scatter</sup>"
+            ),
             height=cell_size * n + 80,
             autosize=True,
             template="plotly_white",
@@ -1852,7 +1948,9 @@ class PlotManager:
 
         return fig, "correlation_scatter_matrix.html"
 
-    def create_voc_jsc_ff_pce_subplots(self, data, filtered_info, colors=None, var_x=None, direction_split=False):
+    def create_voc_jsc_ff_pce_subplots(
+        self, data, filtered_info, colors=None, var_x=None, direction_split=False
+    ):
         """Create a 2x2 facet figure with Voc, Jsc, FF, PCE boxplots."""
         logger.debug("📊 Creating Voc/Jsc/FF/PCE subplots")
 
@@ -1881,9 +1979,7 @@ class PlotManager:
             pass
 
         use_direction_color = (
-            direction_split
-            and "direction" in data.columns
-            and var_x != "direction"
+            direction_split and "direction" in data.columns and var_x != "direction"
         )
 
         if use_direction_color:
@@ -1913,10 +2009,14 @@ class PlotManager:
 
         if colors is None:
             colors = [
-                "rgba(93, 164, 214, 0.7)", "rgba(255, 144, 14, 0.7)",
-                "rgba(44, 160, 101, 0.7)", "rgba(255, 65, 54, 0.7)",
-                "rgba(207, 114, 255, 0.7)", "rgba(127, 96, 0, 0.7)",
-                "rgba(255, 140, 184, 0.7)", "rgba(79, 90, 117, 0.7)",
+                "rgba(93, 164, 214, 0.7)",
+                "rgba(255, 144, 14, 0.7)",
+                "rgba(44, 160, 101, 0.7)",
+                "rgba(255, 65, 54, 0.7)",
+                "rgba(207, 114, 255, 0.7)",
+                "rgba(127, 96, 0, 0.7)",
+                "rgba(255, 140, 184, 0.7)",
+                "rgba(79, 90, 117, 0.7)",
             ]
 
         dir_note = " | split by scan direction" if use_direction_color else ""
@@ -1927,7 +2027,10 @@ class PlotManager:
             facet_col_wrap=2,
             points="all",
             template="plotly_white",
-            title=f"The big 4 — Voc, Jsc, FF, PCE by {var_x}{dir_note}<br><sup>{len(data)} measurements (filtered data)</sup>",
+            title=(
+                f"The big 4 — Voc, Jsc, FF, PCE by {var_x}{dir_note}<br>"
+                f"<sup>{len(data)} measurements (filtered data)</sup>"
+            ),
         )
         if use_direction_color:
             px_kwargs = {
@@ -1963,8 +2066,13 @@ class PlotManager:
         if use_direction_color:
             layout_kwargs["margin"] = dict(l=60, r=160, t=120, b=80)
             layout_kwargs["legend"] = dict(
-                x=1.01, y=1, xanchor="left", yanchor="top",
-                bgcolor="rgba(255,255,255,0.9)", bordercolor="black", borderwidth=1,
+                x=1.01,
+                y=1,
+                xanchor="left",
+                yanchor="top",
+                bgcolor="rgba(255,255,255,0.9)",
+                bordercolor="black",
+                borderwidth=1,
             )
         else:
             layout_kwargs["margin"] = dict(l=60, r=40, t=120, b=80)
@@ -2251,7 +2359,9 @@ class PlotManager:
 
         return fig, "JV_working_cells.html"
 
-    def create_jv_non_working_cells_plot(self, jvc_data, curves_data, colors=None, flip_current=False):
+    def create_jv_non_working_cells_plot(
+        self, jvc_data, curves_data, colors=None, flip_current=False
+    ):
         """Plot JV curves for rejected cells only (cells that were filtered out)"""
 
         if jvc_data.empty:
@@ -2370,7 +2480,9 @@ class PlotManager:
 
         return fig, "JV_rejected_cells.html"
 
-    def create_jv_separated_by_cell_plot(self, jvc_data, curves_data, colors=None, plot_type="all", flip_current=False):  # noqa: E501
+    def create_jv_separated_by_cell_plot(
+        self, jvc_data, curves_data, colors=None, plot_type="all", flip_current=False
+    ):  # noqa: E501
         """Create separate figures for each sample, with 6 subplots (one per cell) in each figure"""
         if plot_type == "working":
             logger.debug("Creating JV curves separated by cell (working cells only)")
@@ -2752,7 +2864,9 @@ class PlotManager:
     # Best-device variants: by batch / by variable
     # ------------------------------------------------------------------
 
-    def _plot_best_device_curves(self, fig, best_device_jv, best_curves, base_color, label, flip_current=False):  # noqa: E501
+    def _plot_best_device_curves(
+        self, fig, best_device_jv, best_curves, base_color, label, flip_current=False
+    ):  # noqa: E501
         """Add traces for one best-device to an existing figure."""
         r, g, b, alpha = self._extract_rgb_from_color(base_color)
 
@@ -2808,8 +2922,14 @@ class PlotManager:
         if df_rev.empty and df_for.empty:
             return
         char_vals = ["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)"]
-        char_rev = [df_rev[c].iloc[0] if (not df_rev.empty and c in df_rev.columns) else 0 for c in char_vals]  # noqa: E501
-        char_for = [df_for[c].iloc[0] if (not df_for.empty and c in df_for.columns) else 0 for c in char_vals]  # noqa: E501
+        char_rev = [
+            df_rev[c].iloc[0] if (not df_rev.empty and c in df_rev.columns) else 0
+            for c in char_vals
+        ]  # noqa: E501
+        char_for = [
+            df_for[c].iloc[0] if (not df_for.empty and c in df_for.columns) else 0
+            for c in char_vals
+        ]  # noqa: E501
         annot_y = 5 if flip_current else -5
         text_rev = (
             f"Rev:<br>Voc: {char_rev[0]:>5.2f}"
@@ -2824,15 +2944,27 @@ class PlotManager:
             f"<br>{char_for[3]:.1f}%"
         )
         fig.add_annotation(
-            x=x_rev, y=annot_y, text=text_rev,
-            showarrow=False, font=dict(size=12), align="left", name="summary_rev",
+            x=x_rev,
+            y=annot_y,
+            text=text_rev,
+            showarrow=False,
+            font=dict(size=12),
+            align="left",
+            name="summary_rev",
         )
         fig.add_annotation(
-            x=x_rev + 0.3, y=annot_y, text=text_for,
-            showarrow=False, font=dict(size=12), align="left", name="summary_for",
+            x=x_rev + 0.3,
+            y=annot_y,
+            text=text_for,
+            showarrow=False,
+            font=dict(size=12),
+            align="left",
+            name="summary_for",
         )
 
-    def create_jv_best_by_batch_together(self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False):  # noqa: E501
+    def create_jv_best_by_batch_together(
+        self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False
+    ):  # noqa: E501
         """One figure showing the best device (highest PCE) for each batch."""
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -2842,7 +2974,6 @@ class PlotManager:
         fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
 
         batches = sorted(jvc_data["batch"].unique())
-        summary_items = []
 
         for batch_idx, batch in enumerate(batches):
             batch_jv = jvc_data[jvc_data["batch"] == batch]
@@ -2860,7 +2991,9 @@ class PlotManager:
 
             base_color = colors[batch_idx % len(colors)]
             label = f"{batch}: {best_sample}[{best_cell}]"
-            self._plot_best_device_curves(fig, batch_jv, best_curves, base_color, label, flip_current)
+            self._plot_best_device_curves(
+                fig, batch_jv, best_curves, base_color, label, flip_current
+            )
 
         y_range = [-5, 26] if flip_current else [-26, 5]
         fig.update_layout(
@@ -2871,15 +3004,22 @@ class PlotManager:
             yaxis=dict(range=y_range),
             template="plotly_white",
             legend=dict(
-                x=1.02, y=1, bgcolor="rgba(255,255,255,0.9)",
-                bordercolor="black", borderwidth=1, xanchor="left", yanchor="top",
+                x=1.02,
+                y=1,
+                bgcolor="rgba(255,255,255,0.9)",
+                bordercolor="black",
+                borderwidth=1,
+                xanchor="left",
+                yanchor="top",
             ),
             showlegend=True,
             margin=dict(r=250),
         )
         return fig, "JV_best_by_batch_together.html"
 
-    def create_jv_best_by_batch_separate(self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False):  # noqa: E501
+    def create_jv_best_by_batch_separate(
+        self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False
+    ):  # noqa: E501
         """Separate figure per batch, each showing the best device in that batch."""
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -2903,11 +3043,15 @@ class PlotManager:
 
             fig = go.Figure()
             fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
-            fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
+            fig.add_shape(
+                type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1)
+            )
 
             base_color = colors[batch_idx % len(colors)]
             label = f"{best_sample}[{best_cell}]"
-            self._plot_best_device_curves(fig, batch_jv, best_curves, base_color, label, flip_current)
+            self._plot_best_device_curves(
+                fig, batch_jv, best_curves, base_color, label, flip_current
+            )
 
             if show_summary:
                 best_jv = batch_jv[
@@ -2925,8 +3069,13 @@ class PlotManager:
                 yaxis=dict(range=y_range),
                 template="plotly_white",
                 legend=dict(
-                    x=1.02, y=1, bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="black", borderwidth=1, xanchor="left", yanchor="top",
+                    x=1.02,
+                    y=1,
+                    bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="black",
+                    borderwidth=1,
+                    xanchor="left",
+                    yanchor="top",
                 ),
                 showlegend=True,
                 margin=dict(r=200),
@@ -2937,12 +3086,17 @@ class PlotManager:
         logger.debug("  Created %s best-by-batch figures", len(figures))
         return figures, figure_names
 
-    def create_jv_best_by_variable_together(self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False):  # noqa: E501
+    def create_jv_best_by_variable_together(
+        self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False
+    ):  # noqa: E501
         """One figure showing the best device per condition/variable."""
         if "condition" not in jvc_data.columns:
             fig = go.Figure()
             fig.update_layout(
-                title="Best device by variable -- no conditions set (use Tab 2 to assign variable names)"
+                title=(
+                    "Best device by variable -- no conditions set "
+                    "(use Tab 2 to assign variable names)"
+                )
             )
             return fig, "JV_best_by_variable_together.html"
 
@@ -2954,7 +3108,6 @@ class PlotManager:
         fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
 
         conditions = sorted(jvc_data["condition"].dropna().unique())
-        summary_items = []
 
         for cond_idx, condition in enumerate(conditions):
             cond_jv = jvc_data[jvc_data["condition"] == condition]
@@ -2972,7 +3125,9 @@ class PlotManager:
 
             base_color = colors[cond_idx % len(colors)]
             label = f"{condition}: {best_sample}[{best_cell}]"
-            self._plot_best_device_curves(fig, cond_jv, best_curves, base_color, label, flip_current)
+            self._plot_best_device_curves(
+                fig, cond_jv, best_curves, base_color, label, flip_current
+            )
 
         y_range = [-5, 26] if flip_current else [-26, 5]
         fig.update_layout(
@@ -2983,20 +3138,30 @@ class PlotManager:
             yaxis=dict(range=y_range),
             template="plotly_white",
             legend=dict(
-                x=1.02, y=1, bgcolor="rgba(255,255,255,0.9)",
-                bordercolor="black", borderwidth=1, xanchor="left", yanchor="top",
+                x=1.02,
+                y=1,
+                bgcolor="rgba(255,255,255,0.9)",
+                bordercolor="black",
+                borderwidth=1,
+                xanchor="left",
+                yanchor="top",
             ),
             showlegend=True,
             margin=dict(r=250),
         )
         return fig, "JV_best_by_variable_together.html"
 
-    def create_jv_best_by_variable_separate(self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False):  # noqa: E501
+    def create_jv_best_by_variable_separate(
+        self, jvc_data, curves_data, colors=None, show_summary=True, flip_current=False
+    ):  # noqa: E501
         """Separate figure per condition/variable, each showing the best device."""
         if "condition" not in jvc_data.columns:
             fig = go.Figure()
             fig.update_layout(
-                title="Best device by variable -- no conditions set (use Tab 2 to assign variable names)"
+                title=(
+                    "Best device by variable -- no conditions set "
+                    "(use Tab 2 to assign variable names)"
+                )
             )
             return [fig], ["JV_best_by_variable_separate.html"]
 
@@ -3022,11 +3187,15 @@ class PlotManager:
 
             fig = go.Figure()
             fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
-            fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
+            fig.add_shape(
+                type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1)
+            )
 
             base_color = colors[cond_idx % len(colors)]
             label = f"{best_sample}[{best_cell}]"
-            self._plot_best_device_curves(fig, cond_jv, best_curves, base_color, label, flip_current)
+            self._plot_best_device_curves(
+                fig, cond_jv, best_curves, base_color, label, flip_current
+            )
 
             if show_summary:
                 best_jv = cond_jv[
@@ -3044,8 +3213,13 @@ class PlotManager:
                 yaxis=dict(range=y_range),
                 template="plotly_white",
                 legend=dict(
-                    x=1.02, y=1, bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="black", borderwidth=1, xanchor="left", yanchor="top",
+                    x=1.02,
+                    y=1,
+                    bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="black",
+                    borderwidth=1,
+                    xanchor="left",
+                    yanchor="top",
                 ),
                 showlegend=True,
                 margin=dict(r=200),

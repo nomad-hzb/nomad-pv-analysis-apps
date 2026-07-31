@@ -4,12 +4,10 @@ File_Uploader: unit tests for data_manager functions.
 Tests cover: JSON splitting, file categorisation, type detection,
 NOMAD filename construction, and AppState mutations.
 """
+
 import json
 
-import pytest
-
 from data_manager import (
-    AppState,
     categorize_files,
     create_nomad_filename,
     extract_filenames_from_vuetify,

@@ -10,13 +10,14 @@ import ipywidgets as widgets
 import pandas as pd
 import plot_manager
 from data_manager import MEASUREMENT_TYPE  # noqa: F401
+from IPython.display import HTML
+from IPython.display import display as ipydisplay
+from natsort import natsorted
+
 from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
-from IPython.display import HTML
-from IPython.display import display as ipydisplay
-from natsort import natsorted
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,7 @@ class BatchPanel:
         # The SelectMultiple is the second child of the VBox returned by create_batch_selection
         self._selector = self._batch_widget.children[1]
 
-        filter_btn = WidgetFactory.create_button(
-            "Show EQE batches", button_style="warning"
-        )
+        filter_btn = WidgetFactory.create_button("Show EQE batches", button_style="warning")
         filter_btn.on_click(self._apply_filter)
 
         self.widget = widgets.VBox([self._batch_widget, filter_btn])
@@ -170,8 +169,7 @@ class VariablesPanel:
 
     def _build_rows(self):
         self._rows = [
-            _SampleRow(sid, self._preset_dd.value, self._dm)
-            for sid in self._dm.sample_ids
+            _SampleRow(sid, self._preset_dd.value, self._dm) for sid in self._dm.sample_ids
         ]
         self._rows_box.children = tuple(self._rows)
 

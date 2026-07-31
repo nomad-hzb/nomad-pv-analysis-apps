@@ -2,9 +2,8 @@
 
 import numpy as np
 import pytest
-from pydantic import ValidationError
-
 from data_manager import XRDRow
+from pydantic import ValidationError
 
 
 def test_valid_row_passes():

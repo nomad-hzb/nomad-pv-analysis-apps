@@ -1,11 +1,11 @@
 """DataManager: load_offline(), filter, reset, export."""
+
 import io
 import json
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
-import pytest
 from data_manager import MEASUREMENT_TYPE, TRPLDataManager
 from plot_manager import TRPLPlotManager
 

@@ -1,10 +1,7 @@
 """test_plot_manager.py — XRDPlotManager figure and trace checks."""
 
 import plotly.graph_objects as go
-import pytest
-
 from plot_manager import XRDPlotManager
-
 
 ENTRY = {
     "angle": [10.0, 20.0, 30.0, 40.0],
@@ -28,6 +25,7 @@ FILE_ENTRY = {
 # individual()
 # ---------------------------------------------------------------------------
 
+
 def test_individual_returns_figure():
     fig = XRDPlotManager.individual(ENTRY, "S001")
     assert isinstance(fig, go.Figure)
@@ -41,7 +39,8 @@ def test_individual_has_data_trace():
 
 def test_individual_with_peaks_has_two_traces():
     fig = XRDPlotManager.individual(
-        ENTRY, "S001",
+        ENTRY,
+        "S001",
         peak_positions=[30.0],
         peak_intensities=[2000.0],
     )
@@ -57,6 +56,7 @@ def test_individual_file_entry_uses_filename_title():
 # ---------------------------------------------------------------------------
 # overlay()
 # ---------------------------------------------------------------------------
+
 
 def test_overlay_returns_figure():
     data = {"S001": ENTRY, "S002": dict(ENTRY, sample_id="S002", variation="var1")}
@@ -87,6 +87,7 @@ def test_overlay_empty_selection_returns_empty_figure():
 # detect_peaks()
 # ---------------------------------------------------------------------------
 
+
 def test_detect_peaks_finds_obvious_peak():
     x = list(range(50))
     y = [0.0] * 50
@@ -107,6 +108,7 @@ def test_detect_peaks_returns_lists():
 # ---------------------------------------------------------------------------
 # suggested_stagger_range()
 # ---------------------------------------------------------------------------
+
 
 def test_suggested_stagger_range_returns_tuple():
     data = {"S001": ENTRY}

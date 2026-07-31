@@ -1,10 +1,10 @@
 """NMRDataManager: load_offline, properties, export."""
+
 import json
 from pathlib import Path
 
 import plotly.graph_objects as go
-import pytest
-from data_manager import NMRDataManager, MEASUREMENT_TYPE
+from data_manager import MEASUREMENT_TYPE, NMRDataManager
 from plot_manager import NMRPlotManager
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
@@ -35,10 +35,20 @@ def test_load_offline_skips_invalid_rows(tmp_path):
         "descriptions": {"S001": "ref", "S002": "var1"},
         "measurements": {
             "S001": [
-                [{"data": {"chemical_shift": "not-a-list", "intensity": "not-a-list"}, "name": "bad"}]
+                [
+                    {
+                        "data": {"chemical_shift": "not-a-list", "intensity": "not-a-list"},
+                        "name": "bad",
+                    }
+                ]
             ],
             "S002": [
-                [{"data": {"chemical_shift": [8.0, 4.0], "intensity": [1000.0, 5000.0]}, "name": "good"}]
+                [
+                    {
+                        "data": {"chemical_shift": [8.0, 4.0], "intensity": [1000.0, 5000.0]},
+                        "name": "good",
+                    }
+                ]
             ],
         },
     }
@@ -51,6 +61,7 @@ def test_load_offline_skips_invalid_rows(tmp_path):
 
 def test_csv_export_after_offline_load():
     import io
+
     import pandas as pd
 
     dm = NMRDataManager()

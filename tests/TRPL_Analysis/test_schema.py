@@ -1,8 +1,9 @@
 """Pydantic model validation tests."""
+
 import numpy as np
 import pytest
-from pydantic import ValidationError
 from data_manager import TRPLRow
+from pydantic import ValidationError
 
 
 def test_valid_row_passes():

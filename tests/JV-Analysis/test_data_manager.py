@@ -18,24 +18,46 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
 class TestJVRow:
     def test_valid_row_accepted(self):
         row = JVRow(
-            voc=1.05, jsc=-18.3, ff=78.4, pce=15.1,
-            v_mpp=0.87, j_mpp=-17.4, p_mpp=15.1,
-            r_series=4.2, r_shunt=1200.0,
-            sample="SampleA", batch="Batch01", condition="Slot_SAM",
-            cell="C1", direction="Reverse", ilum="1sun",
-            status="working", sample_id="sid-001",
+            voc=1.05,
+            jsc=-18.3,
+            ff=78.4,
+            pce=15.1,
+            v_mpp=0.87,
+            j_mpp=-17.4,
+            p_mpp=15.1,
+            r_series=4.2,
+            r_shunt=1200.0,
+            sample="SampleA",
+            batch="Batch01",
+            condition="Slot_SAM",
+            cell="C1",
+            direction="Reverse",
+            ilum="1sun",
+            status="working",
+            sample_id="sid-001",
         )
         assert row.pce == 15.1
         assert row.r_series == 4.2
 
     def test_optional_r_fields_accept_none(self):
         row = JVRow(
-            voc=1.05, jsc=-18.3, ff=78.4, pce=15.1,
-            v_mpp=0.87, j_mpp=-17.4, p_mpp=15.1,
-            r_series=None, r_shunt=None,
-            sample="SampleA", batch="Batch01", condition="Slot_SAM",
-            cell="C1", direction="Reverse", ilum="1sun",
-            status="working", sample_id="sid-001",
+            voc=1.05,
+            jsc=-18.3,
+            ff=78.4,
+            pce=15.1,
+            v_mpp=0.87,
+            j_mpp=-17.4,
+            p_mpp=15.1,
+            r_series=None,
+            r_shunt=None,
+            sample="SampleA",
+            batch="Batch01",
+            condition="Slot_SAM",
+            cell="C1",
+            direction="Reverse",
+            ilum="1sun",
+            status="working",
+            sample_id="sid-001",
         )
         assert row.r_series is None
         assert row.r_shunt is None
@@ -43,22 +65,44 @@ class TestJVRow:
     def test_invalid_voc_raises_validation_error(self):
         with pytest.raises(ValidationError):
             JVRow(
-                voc="not_a_number", jsc=-18.3, ff=78.4, pce=15.1,
-                v_mpp=0.87, j_mpp=-17.4, p_mpp=15.1,
-                r_series=None, r_shunt=None,
-                sample="SampleC", batch="Batch01", condition="BL Printing",
-                cell="C3", direction="Reverse", ilum="1sun",
-                status="working", sample_id="sid-003",
+                voc="not_a_number",
+                jsc=-18.3,
+                ff=78.4,
+                pce=15.1,
+                v_mpp=0.87,
+                j_mpp=-17.4,
+                p_mpp=15.1,
+                r_series=None,
+                r_shunt=None,
+                sample="SampleC",
+                batch="Batch01",
+                condition="BL Printing",
+                cell="C3",
+                direction="Reverse",
+                ilum="1sun",
+                status="working",
+                sample_id="sid-003",
             )
 
     def test_model_dump_returns_dict(self):
         row = JVRow(
-            voc=1.0, jsc=-18.0, ff=75.0, pce=13.5,
-            v_mpp=0.85, j_mpp=-16.0, p_mpp=13.6,
-            r_series=5.0, r_shunt=900.0,
-            sample="S", batch="B", condition="C",
-            cell="c1", direction="Reverse", ilum="1sun",
-            status="working", sample_id="sid-x",
+            voc=1.0,
+            jsc=-18.0,
+            ff=75.0,
+            pce=13.5,
+            v_mpp=0.85,
+            j_mpp=-16.0,
+            p_mpp=13.6,
+            r_series=5.0,
+            r_shunt=900.0,
+            sample="S",
+            batch="B",
+            condition="C",
+            cell="c1",
+            direction="Reverse",
+            ilum="1sun",
+            status="working",
+            sample_id="sid-x",
         )
         d = row.model_dump()
         assert isinstance(d, dict)
@@ -90,30 +134,52 @@ def test_load_offline_skips_invalid_rows(tmp_path, mock_auth_manager):
         "sample_ids": ["sid-good", "sid-bad"],
         "descriptions": {},
         "measurements": {
-            "sid-good": [[
-                {"data_file": "Good.nxs",
-                 "jv_curve": [{"cell_name": "C1Rev",
-                               "open_circuit_voltage": 1.05,
-                               "short_circuit_current_density": 18.3,
-                               "fill_factor": 0.784, "efficiency": 15.1,
-                               "potential_at_maximum_power_point": 0.87,
-                               "current_density_at_maximun_power_point": 17.4,
-                               "series_resistance": 4.2, "shunt_resistance": 1200.0,
-                               "voltage": [0.0, 1.0], "current_density": [-18.3, 0.0]}]},
-                {"upload_id": "up1"}
-            ]],
-            "sid-bad": [[
-                {"data_file": "Bad.nxs",
-                 "jv_curve": [{"cell_name": "C2Rev",
-                               "open_circuit_voltage": "INVALID",
-                               "short_circuit_current_density": 18.3,
-                               "fill_factor": 0.784, "efficiency": 15.1,
-                               "potential_at_maximum_power_point": 0.87,
-                               "current_density_at_maximun_power_point": 17.4,
-                               "series_resistance": None, "shunt_resistance": None,
-                               "voltage": [0.0, 1.0], "current_density": [-18.3, 0.0]}]},
-                {"upload_id": "up2"}
-            ]],
+            "sid-good": [
+                [
+                    {
+                        "data_file": "Good.nxs",
+                        "jv_curve": [
+                            {
+                                "cell_name": "C1Rev",
+                                "open_circuit_voltage": 1.05,
+                                "short_circuit_current_density": 18.3,
+                                "fill_factor": 0.784,
+                                "efficiency": 15.1,
+                                "potential_at_maximum_power_point": 0.87,
+                                "current_density_at_maximun_power_point": 17.4,
+                                "series_resistance": 4.2,
+                                "shunt_resistance": 1200.0,
+                                "voltage": [0.0, 1.0],
+                                "current_density": [-18.3, 0.0],
+                            }
+                        ],
+                    },
+                    {"upload_id": "up1"},
+                ]
+            ],
+            "sid-bad": [
+                [
+                    {
+                        "data_file": "Bad.nxs",
+                        "jv_curve": [
+                            {
+                                "cell_name": "C2Rev",
+                                "open_circuit_voltage": "INVALID",
+                                "short_circuit_current_density": 18.3,
+                                "fill_factor": 0.784,
+                                "efficiency": 15.1,
+                                "potential_at_maximum_power_point": 0.87,
+                                "current_density_at_maximun_power_point": 17.4,
+                                "series_resistance": None,
+                                "shunt_resistance": None,
+                                "voltage": [0.0, 1.0],
+                                "current_density": [-18.3, 0.0],
+                            }
+                        ],
+                    },
+                    {"upload_id": "up2"},
+                ]
+            ],
         },
     }
     fx = tmp_path / "mixed.json"

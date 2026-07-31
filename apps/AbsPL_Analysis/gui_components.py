@@ -11,13 +11,14 @@ import logging
 import ipywidgets as widgets
 import pandas as pd
 from data_manager import MEASUREMENT_TYPE
+from IPython.display import HTML
+from IPython.display import display as ipydisplay
+from natsort import natsorted
+
 from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
-from IPython.display import HTML
-from IPython.display import display as ipydisplay
-from natsort import natsorted
 
 logger = logging.getLogger(__name__)
 

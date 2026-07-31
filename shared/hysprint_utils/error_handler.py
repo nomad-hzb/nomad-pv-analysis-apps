@@ -1,5 +1,7 @@
-import requests
 import traceback
+
+import requests
+
 
 class ErrorHandler:
     @staticmethod
@@ -9,10 +11,11 @@ class ErrorHandler:
             full_message = f"Error: {message}: {str(error)}"
         else:
             full_message = f"Error: {message}"
-        
+
         if output_widget:
             with output_widget:
                 from IPython.display import clear_output
+
                 clear_output(wait=True)
                 print(full_message)
                 if show_traceback and error:
@@ -21,7 +24,7 @@ class ErrorHandler:
             print(full_message)
             if show_traceback and error:
                 traceback.print_exc()
-    
+
     @staticmethod
     def log_info(message, output_widget=None):
         """Log informational messages"""
@@ -30,7 +33,7 @@ class ErrorHandler:
                 print(message)
         else:
             print(message)
-    
+
     @staticmethod
     def log_success(message, output_widget=None):
         """Log success messages"""
@@ -39,22 +42,22 @@ class ErrorHandler:
                 print(message)
         else:
             print(message)
-    
+
     @staticmethod
     def handle_auth_error(error, auth_manager):
         """Handle authentication-specific errors"""
         if isinstance(error, ValueError):
-            auth_manager._update_status(f'Status: Error - {error}', 'red')
+            auth_manager._update_status(f"Status: Error - {error}", "red")
         elif isinstance(error, requests.exceptions.RequestException):
             auth_manager._handle_request_error(error)
         else:
-            auth_manager._update_status(f'Status: Unexpected Error - {error}', 'red')
-    
+            auth_manager._update_status(f"Status: Unexpected Error - {error}", "red")
+
     @staticmethod
     def handle_data_loading_error(error, output_widget):
         """Handle data loading specific errors"""
         ErrorHandler.log_error("loading data", error, output_widget, show_traceback=True)
-    
+
     @staticmethod
     def handle_plot_error(error, output_widget, plot_name=None):
         """Handle plotting specific errors"""

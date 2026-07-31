@@ -12,11 +12,12 @@ import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
 from data_manager import MEASUREMENT_TYPE
+from IPython.display import display as ipydisplay
+
 from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
-from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
@@ -81,9 +82,7 @@ class BatchPanel:
                     self.status_out,
                 )
             except Exception as exc:  # noqa: BLE001
-                ErrorHandler.log_error(
-                    "Filter failed", exc, self.status_out, show_traceback=True
-                )
+                ErrorHandler.log_error("Filter failed", exc, self.status_out, show_traceback=True)
                 self._filter_btn.disabled = False
                 self._filter_btn.description = "Retry filter"
 

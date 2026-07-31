@@ -1,4 +1,5 @@
 """Shared fixtures for File_Uploader tests -- never hits the real API."""
+
 import importlib.util
 import os
 import sys
@@ -32,9 +33,30 @@ from data_manager import AppState  # noqa: E402
 FIXTURE_JSON = {
     "parameters": {"instrument": "test_jv_setup"},
     "data": [
-        {"sample": "JM434", "cell": "1", "direction": "fw", "card": "A", "channel": "1", "efficiency": 15.2},
-        {"sample": "JM434", "cell": "1", "direction": "rv", "card": "A", "channel": "1", "efficiency": 14.9},
-        {"sample": "JM435", "cell": "2", "direction": "fw", "card": "B", "channel": "2", "efficiency": 16.1},
+        {
+            "sample": "JM434",
+            "cell": "1",
+            "direction": "fw",
+            "card": "A",
+            "channel": "1",
+            "efficiency": 15.2,
+        },
+        {
+            "sample": "JM434",
+            "cell": "1",
+            "direction": "rv",
+            "card": "A",
+            "channel": "1",
+            "efficiency": 14.9,
+        },
+        {
+            "sample": "JM435",
+            "cell": "2",
+            "direction": "fw",
+            "card": "B",
+            "channel": "2",
+            "efficiency": 16.1,
+        },
     ],
 }
 

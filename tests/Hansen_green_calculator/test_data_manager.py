@@ -1,23 +1,21 @@
 """Tests for data_manager.py"""
-import numpy as np
+
 import pandas as pd
 import pytest
-
 from data_manager import (
-    SolventDataManager,
     InkDataManager,
-    PerovskiteDataManager,
-    find_optimal_blend,
-    weighted_average,
+    SolventDataManager,
     calculate_enclosing_sphere,
     create_sphere_mesh,
     export_blend_csv,
+    find_optimal_blend,
+    weighted_average,
 )
-
 
 # ---------------------------------------------------------------------------
 # SolventDataManager
 # ---------------------------------------------------------------------------
+
 
 class TestSolventDataManager:
     def test_load_missing_file(self):
@@ -65,6 +63,7 @@ class TestSolventDataManager:
 # InkDataManager
 # ---------------------------------------------------------------------------
 
+
 class TestInkDataManager:
     def test_load_missing_file(self):
         idm = InkDataManager(xlsx_path="nonexistent.xlsx")
@@ -84,6 +83,7 @@ class TestInkDataManager:
 # ---------------------------------------------------------------------------
 # PerovskiteDataManager
 # ---------------------------------------------------------------------------
+
 
 class TestPerovskiteDataManager:
     def test_get_sheet2(self, loaded_perov_dm, perov_df):
@@ -108,11 +108,13 @@ class TestPerovskiteDataManager:
 # find_optimal_blend
 # ---------------------------------------------------------------------------
 
+
 class TestFindOptimalBlend:
     def test_single_solvent_returns_fraction_1(self, solvent_df):
         one = solvent_df.iloc[[0]]
         fracs, dist, blend = find_optimal_blend(
-            [one["D"].iloc[0], one["P"].iloc[0], one["H"].iloc[0]], one)
+            [one["D"].iloc[0], one["P"].iloc[0], one["H"].iloc[0]], one
+        )
         assert abs(fracs.sum() - 1.0) < 1e-6
         assert dist < 1e-3
 
@@ -121,8 +123,7 @@ class TestFindOptimalBlend:
         assert abs(fracs.sum() - 1.0) < 1e-5
 
     def test_min_percentage_respected(self, solvent_df):
-        fracs, _, _ = find_optimal_blend([17.0, 10.0, 10.0], solvent_df,
-                                          min_percentage=0.05)
+        fracs, _, _ = find_optimal_blend([17.0, 10.0, 10.0], solvent_df, min_percentage=0.05)
         assert all(f >= 0.049 for f in fracs)
 
     def test_empty_df_returns_inf(self):
@@ -136,6 +137,7 @@ class TestFindOptimalBlend:
 # weighted_average
 # ---------------------------------------------------------------------------
 
+
 class TestWeightedAverage:
     def test_equal_parts(self, solvent_df):
         selected = {
@@ -143,7 +145,7 @@ class TestWeightedAverage:
             1: {"data": solvent_df.iloc[1], "percentage": 50.0},
         }
         result = weighted_average(selected, solvent_df)
-        expected_D = (15.5 * 0.5 + 15.8 * 0.5)
+        expected_D = 15.5 * 0.5 + 15.8 * 0.5
         assert abs(result["D"] - expected_D) < 1e-6
 
     def test_missing_values_handled(self, solvent_df):
@@ -175,6 +177,7 @@ class TestWeightedAverage:
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
+
 class TestSphereHelpers:
     def test_single_point_radius(self, perov_df):
         center, radius = calculate_enclosing_sphere(perov_df.iloc[[0]])
@@ -196,17 +199,25 @@ class TestSphereHelpers:
 # export_blend_csv
 # ---------------------------------------------------------------------------
 
+
 class TestExportBlendCsv:
     def test_returns_string(self, solvent_df):
         res_df = pd.DataFrame([{"Solvent": "Acetone", "Fraction": 1.0, "Percentage": 100.0}])
-        out = export_blend_csv([17.0, 8.0, 10.0], [17.0, 8.0, 10.0], 0.0,
-                               res_df, solvent_df.iloc[:1])
+        out = export_blend_csv(
+            [17.0, 8.0, 10.0], [17.0, 8.0, 10.0], 0.0, res_df, solvent_df.iloc[:1]
+        )
         assert isinstance(out, str)
         assert "Target_D" in out
 
     def test_includes_temperature_when_given(self, solvent_df):
         res_df = pd.DataFrame([{"Solvent": "Acetone", "Fraction": 1.0, "Percentage": 100.0}])
-        out = export_blend_csv([17.0, 8.0, 10.0], [17.0, 8.0, 10.0], 0.0,
-                               res_df, solvent_df.iloc[:1], temperature_k=298.15)
+        out = export_blend_csv(
+            [17.0, 8.0, 10.0],
+            [17.0, 8.0, 10.0],
+            0.0,
+            res_df,
+            solvent_df.iloc[:1],
+            temperature_k=298.15,
+        )
         assert "Temperature_K" in out
         assert "298.15" in out

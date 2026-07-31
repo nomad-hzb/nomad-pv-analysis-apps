@@ -7,15 +7,13 @@ import base64
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 import ipywidgets as widgets
 import numpy as np
 import pandas as pd
-from IPython.display import clear_output, display
-
 from data_manager import DataManager
 from gui_components import GUIComponents
+from IPython.display import clear_output, display
 from plot_manager import PlotManager
 from sampling_algorithms import SamplingEngine
 from utils import Constants, ValidationUtils
@@ -235,9 +233,7 @@ class DoEApplication:
     def _setup_event_handlers(self):
         """Setup event handlers for user interactions."""
         if hasattr(self.gui_components, "algorithm_dropdown"):
-            self.gui_components.algorithm_dropdown.observe(
-                self._on_algorithm_change, names="value"
-            )
+            self.gui_components.algorithm_dropdown.observe(self._on_algorithm_change, names="value")
 
         if hasattr(self.gui_components, "generate_button"):
             self.gui_components.generate_button.on_click(self._on_generate_samples)
@@ -247,9 +243,7 @@ class DoEApplication:
             self.gui_components.regenerate_button.on_click(self._on_new_design)
 
         if hasattr(self.gui_components, "plot_type_dropdown"):
-            self.gui_components.plot_type_dropdown.observe(
-                self._on_plot_type_change, names="value"
-            )
+            self.gui_components.plot_type_dropdown.observe(self._on_plot_type_change, names="value")
 
         if hasattr(self.gui_components, "export_plot_button"):
             self.gui_components.export_plot_button.on_click(self._on_export_plot)
@@ -393,9 +387,7 @@ class DoEApplication:
 
     def _update_metrics_display(self):
         if self.quality_metrics:
-            self.gui_components.update_metrics_display(
-                self.metrics_section, self.quality_metrics
-            )
+            self.gui_components.update_metrics_display(self.metrics_section, self.quality_metrics)
 
     def _update_viz_options(self, variables):
         """Filter plot type options based on the number of numeric variables."""
@@ -479,9 +471,7 @@ class DoEApplication:
             with self.plot_area:
                 clear_output(wait=True)
                 display(self.current_figure)
-                display(
-                    widgets.HTML(f"<p style='color: #c0392b;'>Export failed: {str(e)}</p>")
-                )
+                display(widgets.HTML(f"<p style='color: #c0392b;'>Export failed: {str(e)}</p>"))
 
     # ------------------------------------------------------------------
     # Public API

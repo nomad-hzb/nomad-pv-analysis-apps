@@ -16,15 +16,18 @@ from gui_components import (
     PlottingPanel,
     SpectralPanel,
 )
-from hysprint_utils.auth_manager import AuthenticationManager
-from hysprint_utils.plotting_utils import create_manual
 from IPython.display import display as ipydisplay
 from plot_manager import AbsPlPlotManager
+
+from hysprint_utils.auth_manager import AuthenticationManager
+from hysprint_utils.plotting_utils import create_manual
 
 logger = logging.getLogger(__name__)
 
 _TESTS_ROOT = Path(__file__).parent.parent.parent / "tests"
 DEMO_FIXTURE_PATH = _TESTS_ROOT / "AbsPL_Analysis" / "fixtures" / "api_responses.json"
+
+
 class AbsPlApp:
     """
     Top-level application object.

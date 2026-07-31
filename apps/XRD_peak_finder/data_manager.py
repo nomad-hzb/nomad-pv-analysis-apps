@@ -11,6 +11,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from pydantic import ValidationError, field_validator
+
 from hysprint_utils.api_calls import (
     get_all_batches_wth_data,
     get_ids_in_batch,
@@ -22,7 +24,6 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
-from pydantic import ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 MEASUREMENT_TYPE = ENTRY_TYPES["xrd"]
@@ -137,8 +138,7 @@ class XRDDataManager:
                 df_raw = pd.DataFrame(payload.get("data", {}))
                 if df_raw.empty or df_raw.shape[1] < 2:
                     ErrorHandler.log_error(
-                        "Sample %s entry %d: unexpected data shape -- skipping"
-                        % (sample_id, i)
+                        "Sample %s entry %d: unexpected data shape -- skipping" % (sample_id, i)
                     )
                     continue
 

@@ -57,7 +57,27 @@
       "Bash(python -m pytest tests/Entry_Auditor/ -q)",
       "Bash(python -m pytest tests/shared/ -q)",
       "Bash(python -m pytest tests/smart_databaser/ -q)",
-      "Bash(python -m ruff check apps/Entry_Auditor shared/hysprint_utils/consistency.py tests/Entry_Auditor tests/shared/test_consistency.py)"
+      "Bash(python -m ruff check apps/Entry_Auditor shared/hysprint_utils/consistency.py tests/Entry_Auditor tests/shared/test_consistency.py)",
+      "Bash(grep -rl \"^import shared$\\\\|^from shared import\\\\|import shared\\\\b\" --include=\"*.py\" apps/ tests/ scripts/)",
+      "Bash(python -m ruff check apps/TRPL_Analysis/ apps/XRD_peak_finder/ apps/NMR_Analysis/ apps/EQE_Analysis/ apps/AbsPL_Analysis/ apps/JV-Analysis/ apps/MPPT_Analysis/ apps/DesignOfExperiments/ shared/ tests/ scripts/ --output-format concise)",
+      "Bash(python -m ruff check --fix apps/DesignOfExperiments/sampling_algorithms.py)",
+      "Bash(python -m ruff format apps/DesignOfExperiments/sampling_algorithms.py)",
+      "Bash(python -m ruff check apps/DesignOfExperiments/sampling_algorithms.py)",
+      "Bash(python -m ruff check apps/DesignOfExperiments/gui_components.py --output-format concise)",
+      "Bash(python -m ruff format apps/DesignOfExperiments/gui_components.py)",
+      "Bash(python -m ruff check apps/DesignOfExperiments/gui_components.py)",
+      "Bash(python -m ruff format apps/DesignOfExperiments/)",
+      "Bash(python -m ruff check apps/DesignOfExperiments/)",
+      "Bash(python -m ruff check apps/JV-Analysis/plot_manager.py --output-format concise)",
+      "Bash(python -m ruff check apps/TRPL_Analysis/ --output-format concise)",
+      "Bash(python -m ruff format apps/TRPL_Analysis/)",
+      "Bash(python -m ruff check apps/TRPL_Analysis/)",
+      "Bash(PYTHONPATH=apps/DesignOfExperiments python -m pytest tests/DesignOfExperiments/ -v -m \"not live\")",
+      "Bash(PYTHONPATH=apps/TRPL_Analysis python -c ' *)",
+      "Bash(python -m ruff check apps/TRPL_Analysis/ apps/XRD_peak_finder/ apps/NMR_Analysis/ apps/EQE_Analysis/ apps/AbsPL_Analysis/ apps/JV-Analysis/ apps/MPPT_Analysis/ apps/DesignOfExperiments/ shared/ tests/ scripts/)",
+      "Bash(PYTHONPATH=apps/DesignOfExperiments python -m pytest tests/DesignOfExperiments/ -q -m \"not live\")",
+      "Bash(PYTHONPATH=\"apps/JV-Analysis\" python -m pytest \"tests/JV-Analysis/\" -q -m \"not live\")",
+      "Bash(PYTHONPATH=shared python -m pytest tests/shared/ -q -m \"not live\")"
     ],
     "additionalDirectories": [
       "\\tmp"

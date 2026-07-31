@@ -56,8 +56,12 @@ class DataManager:
             voltage = raw_data.get("voltage") or [None] * n
             current = raw_data.get("current_density") or [None] * n
             return [
-                {"time": time_val[i], "power_density": power[i],
-                 "voltage": voltage[i], "current_density": current[i]}
+                {
+                    "time": time_val[i],
+                    "power_density": power[i],
+                    "voltage": voltage[i],
+                    "current_density": current[i],
+                }
                 for i in range(n)
             ]
         return [raw_data]
@@ -372,8 +376,8 @@ class DataManager:
 
                             if frame_range is not None:
                                 start, end = frame_range
-                                t_data = t_data[start:] if end is None else t_data[start:end + 1]
-                                y_data = y_data[start:] if end is None else y_data[start:end + 1]
+                                t_data = t_data[start:] if end is None else t_data[start : end + 1]
+                                y_data = y_data[start:] if end is None else y_data[start : end + 1]
 
                             valid_mask = ~(np.isnan(t_data) | np.isnan(y_data))
                             t_data = t_data[valid_mask]
@@ -420,8 +424,8 @@ class DataManager:
 
                         if frame_range is not None:
                             start, end = frame_range
-                            t_data = t_data[start:] if end is None else t_data[start:end + 1]
-                            y_data = y_data[start:] if end is None else y_data[start:end + 1]
+                            t_data = t_data[start:] if end is None else t_data[start : end + 1]
+                            y_data = y_data[start:] if end is None else y_data[start : end + 1]
 
                         valid_mask = ~(np.isnan(t_data) | np.isnan(y_data))
                         t_data = t_data[valid_mask]

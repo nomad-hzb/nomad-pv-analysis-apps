@@ -9,13 +9,13 @@ __created__ = "August 2025"
 
 import logging
 import operator
-import os
 from typing import Optional
 
 import pandas as pd
+from pydantic import BaseModel, ValidationError, field_validator
+
 from hysprint_utils.api_calls import get_all_JV, get_ids_in_batch, get_sample_description
 from hysprint_utils.error_handler import ErrorHandler
-from pydantic import BaseModel, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -272,10 +272,17 @@ class DataManager:
                     missing_jv = [s for s in batch_sample_ids if s not in batch_jvs]
                     if output_widget:
                         with output_widget:
-                            print("   JV data: %d/%d samples found" % (len(batch_jvs), len(batch_sample_ids)))
+                            print(
+                                "   JV data: %d/%d samples found"
+                                % (len(batch_jvs), len(batch_sample_ids))
+                            )
                             if missing_jv:
-                                print("   ⚠️ No HySprint_JVmeasurement in NOMAD for: %s" % missing_jv)
-                                print("      → Check that JV files (.jv.txt) were uploaded for these samples")
+                                print(
+                                    "   ⚠️ No HySprint_JVmeasurement in NOMAD for: %s" % missing_jv
+                                )
+                                print(
+                                    "      → Check that JV files (.jv.txt) were uploaded for these samples"
+                                )
 
                     all_jvs.update(batch_jvs)
                     successful_batches.append(batch_id)
@@ -493,7 +500,10 @@ class DataManager:
                         status = extract_status_from_metadata(jv_data, jv_md)
 
                         for c in jv_data["jv_curve"]:
-                            file_name = "../%s/%s" % (jv_md["upload_id"], jv_data.get("data_file", ""))
+                            file_name = "../%s/%s" % (
+                                jv_md["upload_id"],
+                                jv_data.get("data_file", ""),
+                            )
                             illum = "Dark" if "dark" in c["cell_name"].lower() else "Light"
                             cell = c["cell_name"][0]
                             direction = "Forward" if "for" in c["cell_name"].lower() else "Reverse"
@@ -630,14 +640,35 @@ class DataManager:
     def _build_from_raw(self, all_jvs: dict, sample_ids: list) -> tuple:
         """Core transformation: all_jvs dict -> (df_jvc, df_cur). No API calls."""
         columns_jvc = [
-            "Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_mpp(V)",
-            "J_mpp(mA/cm2)", "P_mpp(mW/cm2)", "R_series(Ohmcm2)",
-            "R_shunt(Ohmcm2)", "sample", "batch", "condition", "cell",
-            "direction", "ilum", "status", "sample_id",
+            "Voc(V)",
+            "Jsc(mA/cm2)",
+            "FF(%)",
+            "PCE(%)",
+            "V_mpp(V)",
+            "J_mpp(mA/cm2)",
+            "P_mpp(mW/cm2)",
+            "R_series(Ohmcm2)",
+            "R_shunt(Ohmcm2)",
+            "sample",
+            "batch",
+            "condition",
+            "cell",
+            "direction",
+            "ilum",
+            "status",
+            "sample_id",
         ]
         columns_cur = [
-            "index", "sample", "batch", "condition", "variable",
-            "cell", "direction", "ilum", "sample_id", "status",
+            "index",
+            "sample",
+            "batch",
+            "condition",
+            "variable",
+            "cell",
+            "direction",
+            "ilum",
+            "sample_id",
+            "status",
         ]
 
         max_data_points = 0
@@ -660,7 +691,10 @@ class DataManager:
                     continue
                 status = extract_status_from_metadata(jv_data, jv_md)
                 for c in jv_data["jv_curve"]:
-                    file_name = "../%s/%s" % (jv_md.get("upload_id", ""), jv_data.get("data_file", ""))
+                    file_name = "../%s/%s" % (
+                        jv_md.get("upload_id", ""),
+                        jv_data.get("data_file", ""),
+                    )
                     illum = "Dark" if "dark" in c["cell_name"].lower() else "Light"
                     cell = c["cell_name"][0]
                     direction = "Forward" if "for" in c["cell_name"].lower() else "Reverse"
@@ -691,14 +725,35 @@ class DataManager:
                         logger.warning("Skipping invalid JV row for sample %s: %s", sid, exc)
                         continue
 
-                    row_v = ["_".join(["Voltage (V)", cell, direction, illum]),
-                             sample_clean, file_name.split("/")[1] if "/" in file_name else "",
-                             "w", "Voltage (V)", cell, direction, illum, sid, status]
+                    row_v = [
+                        "_".join(["Voltage (V)", cell, direction, illum]),
+                        sample_clean,
+                        file_name.split("/")[1] if "/" in file_name else "",
+                        "w",
+                        "Voltage (V)",
+                        cell,
+                        direction,
+                        illum,
+                        sid,
+                        status,
+                    ]
                     row_v.extend(c["voltage"] + [None] * (max_data_points - len(c["voltage"])))
-                    row_j = ["_".join(["Current Density(mA/cm2)", cell, direction, illum]),
-                             sample_clean, file_name.split("/")[1] if "/" in file_name else "",
-                             "w", "Current Density(mA/cm2)", cell, direction, illum, sid, status]
-                    row_j.extend(c["current_density"] + [None] * (max_data_points - len(c["current_density"])))
+                    row_j = [
+                        "_".join(["Current Density(mA/cm2)", cell, direction, illum]),
+                        sample_clean,
+                        file_name.split("/")[1] if "/" in file_name else "",
+                        "w",
+                        "Current Density(mA/cm2)",
+                        cell,
+                        direction,
+                        illum,
+                        sid,
+                        status,
+                    ]
+                    row_j.extend(
+                        c["current_density"]
+                        + [None] * (max_data_points - len(c["current_density"]))
+                    )
                     rows_cur.append(row_v)
                     rows_cur.append(row_j)
 

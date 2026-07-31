@@ -1,10 +1,9 @@
 """EQEDataManager: load_offline, MultiIndex structure, export."""
+
 import json
 from pathlib import Path
 
-import pandas as pd
-import pytest
-from data_manager import EQEDataManager, MEASUREMENT_TYPE
+from data_manager import MEASUREMENT_TYPE, EQEDataManager
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
 
@@ -39,16 +38,23 @@ def test_load_offline_skips_invalid_rows(tmp_path):
     fixture = {
         "descriptions": {"S001": "ref", "S002": "var1"},
         "measurements": {
-            "S001": [
-                [{"name": "bad", "description": "", "eqe_data": [{"bad_field": 999}]}]
-            ],
+            "S001": [[{"name": "bad", "description": "", "eqe_data": [{"bad_field": 999}]}]],
             "S002": [
-                [{"name": "good", "description": "", "eqe_data": [
-                    {"photon_energy_array": [1.4, 1.6],
-                     "wavelength_array": [886.0, 775.0],
-                     "eqe_array": [0.5, 0.8],
-                     "bandgap_eqe": 1.35, "integrated_jsc": 18.0}
-                ]}]
+                [
+                    {
+                        "name": "good",
+                        "description": "",
+                        "eqe_data": [
+                            {
+                                "photon_energy_array": [1.4, 1.6],
+                                "wavelength_array": [886.0, 775.0],
+                                "eqe_array": [0.5, 0.8],
+                                "bandgap_eqe": 1.35,
+                                "integrated_jsc": 18.0,
+                            }
+                        ],
+                    }
+                ]
             ],
         },
     }

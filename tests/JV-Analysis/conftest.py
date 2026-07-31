@@ -42,9 +42,23 @@ def jvc_dataframe(loaded_manager):
 def empty_jvc_dataframe():
     """Empty DataFrame with correct columns."""
     cols = [
-        "Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_mpp(V)",
-        "J_mpp(mA/cm2)", "P_mpp(mW/cm2)", "R_series(Ohmcm2)", "R_shunt(Ohmcm2)",
-        "sample", "batch", "condition", "cell", "direction", "ilum", "status", "sample_id",
+        "Voc(V)",
+        "Jsc(mA/cm2)",
+        "FF(%)",
+        "PCE(%)",
+        "V_mpp(V)",
+        "J_mpp(mA/cm2)",
+        "P_mpp(mW/cm2)",
+        "R_series(Ohmcm2)",
+        "R_shunt(Ohmcm2)",
+        "sample",
+        "batch",
+        "condition",
+        "cell",
+        "direction",
+        "ilum",
+        "status",
+        "sample_id",
     ]
     return pd.DataFrame(columns=cols)
 

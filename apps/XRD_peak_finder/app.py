@@ -16,14 +16,17 @@ from gui_components import (
     OverlayPanel,
     SampleGridPanel,
 )
+from IPython.display import display as ipydisplay
+
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.plotting_utils import WidgetFactory, create_manual
-from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
 
 _TESTS_ROOT = Path(__file__).parent.parent.parent / "tests"
 DEMO_FIXTURE_PATH = _TESTS_ROOT / "XRD_peak_finder" / "fixtures" / "api_responses.json"
+
+
 class XRDApp:
     """Top-level app — call display() from the notebook."""
 

@@ -12,9 +12,10 @@ from pathlib import Path
 import data_manager as dm_module
 import gui_components as gui
 import ipywidgets as widgets
+from IPython.display import display as ipydisplay
+
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.error_handler import ErrorHandler
-from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
 

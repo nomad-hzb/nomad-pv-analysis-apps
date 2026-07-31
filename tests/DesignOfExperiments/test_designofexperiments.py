@@ -6,11 +6,9 @@ Covers DataManager, SamplingEngine, and PlotManager.
 import pandas as pd
 import plotly.graph_objects as go
 import pytest
-
 from data_manager import DataManager, Variable, VariableType
 from plot_manager import PlotManager
 from sampling_algorithms import SamplingEngine
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

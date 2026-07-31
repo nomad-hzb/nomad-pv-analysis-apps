@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
-import pytest
-from data_manager import XRDDataManager, parse_xy_file, MEASUREMENT_TYPE
+from data_manager import MEASUREMENT_TYPE, XRDDataManager, parse_xy_file
 from plot_manager import XRDPlotManager
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"

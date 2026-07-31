@@ -53,7 +53,9 @@ class GUIComponents:
                     return
                 curves, sample_ids, entries, properties = result
                 self.app_state.load_curves_data(curves, sample_ids, entries, properties)
-                print(f"✅ Data loaded successfully! Found {len(sample_ids)} samples with MPPT data")
+                print(
+                    f"✅ Data loaded successfully! Found {len(sample_ids)} samples with MPPT data"
+                )
                 if self.app_controller:
                     self.app_controller.enable_sample_tab()
 
@@ -288,7 +290,7 @@ class GUIComponents:
         )
         frame_range_info = widgets.HTML(
             value=f"<small>0 – {_min_points - 1} measurement points "
-                  f"(limited to shortest measurement among selected samples)</small>"
+            f"(limited to shortest measurement among selected samples)</small>"
         )
 
         fit_button = widgets.Button(
@@ -314,8 +316,7 @@ class GUIComponents:
             model = available_fit_model_list[model_selector.value]
             params = ", ".join(model.columns)
             formula_display.value = (
-                f"<b>Selected Model:</b> $${ model.description }$$"
-                f"<br><b>Parameters:</b> {params}"
+                f"<b>Selected Model:</b> $${model.description}$$<br><b>Parameters:</b> {params}"
             )
 
         def perform_fitting(b):
@@ -353,11 +354,13 @@ class GUIComponents:
                         with results_toggle.children[0]:
                             results_toggle.children[0].clear_output()
                             display(HTML("<h4>Detailed Fit Results</h4>"))
-                            display(HTML(
-                                '<div style="overflow-x:auto;">'
-                                + fit_results.to_html(index=False, float_format="%.4f")
-                                + "</div>"
-                            ))
+                            display(
+                                HTML(
+                                    '<div style="overflow-x:auto;">'
+                                    + fit_results.to_html(index=False, float_format="%.4f")
+                                    + "</div>"
+                                )
+                            )
 
                         with stats_toggle.children[0]:
                             stats_toggle.children[0].clear_output()
@@ -366,11 +369,13 @@ class GUIComponents:
                             numerical_cols = fit_results.select_dtypes(include=[np.number]).columns
                             if len(numerical_cols) > 0:
                                 stats_df = fit_results[numerical_cols].describe()
-                                display(HTML(
-                                    '<div style="overflow-x:auto;">'
-                                    + stats_df.to_html(float_format="%.4f")
-                                    + "</div>"
-                                ))
+                                display(
+                                    HTML(
+                                        '<div style="overflow-x:auto;">'
+                                        + stats_df.to_html(float_format="%.4f")
+                                        + "</div>"
+                                    )
+                                )
                             else:
                                 print("No numerical parameters to summarize")
 
