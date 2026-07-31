@@ -43,6 +43,7 @@ from data_manager import (
     preview_value_for_field,
     progress_band,
     rebuild_field_specs,
+    relevant_field_specs,
     set_field_manual,
     set_field_varies,
     steps_for_process_type,
@@ -168,6 +169,14 @@ def _build_field_row(
             value="" if spec.value is None else str(spec.value),
             placeholder=placeholder,
             layout=widgets.Layout(width="200px"),
+            # continuous_update=False: on_value_change ultimately triggers a full panel
+            # re-render (see _notify_change), which discards and rebuilds this very
+            # widget. With the ipywidgets default (True, fires on every keystroke), that
+            # rebuild raced with the browser's own IME/typing state on every character -
+            # reported as "typing lags, and often only the first character or two of a
+            # fast-typed word survive." Committing on blur/Enter instead avoids the
+            # mid-keystroke rebuild entirely.
+            continuous_update=False,
         )
         if field_key in _DATE_FIELD_FORMATS:
             # Exempt: colons in "HH:MM:SS" are legitimate here, and this field never
@@ -248,8 +257,13 @@ class ProcessFieldsPanel(widgets.VBox):
         return preview_value_for_field(self.state, self.process, field_key, self.cache)
 
     def _render(self) -> None:
+        # relevant_field_specs, not self.process.field_specs directly: field_specs is
+        # additive-only (a checkbox-gated field never gets deleted just because the
+        # checkbox was unchecked again - see that function's docstring), so this filters
+        # back down to only what the process's CURRENT config actually has a column for.
+        visible_specs = relevant_field_specs(self.process)
         self.children = [
-            _provenance_summary_html(self.process.field_specs.values()),
+            _provenance_summary_html(visible_specs.values()),
             *(
                 _build_field_row(
                     field_key,
@@ -258,7 +272,7 @@ class ProcessFieldsPanel(widgets.VBox):
                     self._on_value_change,
                     preview_value=self._preview_for(field_key, spec),
                 )
-                for field_key, spec in self.process.field_specs.items()
+                for field_key, spec in visible_specs.items()
             ),
         ]
 
@@ -346,6 +360,11 @@ class SampleSetupPanel(widgets.VBox):
             max=1000,
             description="Total samples:",
             style={"description_width": "initial"},
+            # continuous_update=False: every change rebuilds sets_inputs_box's per-Subbatch
+            # widgets from scratch (_render_set_inputs) - see _build_field_row's
+            # value_widget for why firing that on every keystroke, not on blur/Enter,
+            # caused typing lag/dropped digits.
+            continuous_update=False,
         )
         self.set_count_input = widgets.BoundedIntText(
             value=4,
@@ -353,6 +372,7 @@ class SampleSetupPanel(widgets.VBox):
             max=50,
             description="Variation Subbatch:",
             style={"description_width": "initial"},
+            continuous_update=False,
         )
         self.sets_inputs_box = widgets.VBox([])
         self.apply_button = widgets.Button(description="Apply Sample Setup", button_style="primary")
@@ -398,6 +418,7 @@ class SampleSetupPanel(widgets.VBox):
                 description=f"Subbatch {set_index + 1} samples:",
                 style={"description_width": "initial"},
                 layout=widgets.Layout(margin="0 0 0 20px"),
+                continuous_update=False,
             )
             count_input._set_index = set_index
             rows.append(count_input)
@@ -427,7 +448,8 @@ def _build_download_link_html(state: ExperimentState) -> tuple[str, bytes, str]:
     b64_data = base64.b64encode(data).decode()
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     link_html = (
-        f'<a download="{filename}" href="data:{mime};base64,{b64_data}">Download {filename}</a>'
+        f'<a download="{filename}" href="data:{mime};base64,{b64_data}">'
+        f"Click here to download the experiment file ({filename})</a>"
     )
     return link_html, data, filename
 
@@ -818,7 +840,14 @@ class VaryingFieldsMatrix(widgets.VBox):
         for _label, spec in varying_fields:
             value = spec.per_sample_values.get(sample_number)
             cell = widgets.Text(
-                value="" if value is None else str(value), layout=widgets.Layout(width="180px")
+                value="" if value is None else str(value),
+                layout=widgets.Layout(width="180px"),
+                # continuous_update=False - see _build_field_row's value_widget for why.
+                # Here the cost is much worse: a per-keystroke change rebuilds the ENTIRE
+                # matrix (every sample x every varying column), which is very likely the
+                # real cause behind "the table sometimes doesn't appear" - large-matrix
+                # re-renders were being triggered on every character typed into any cell.
+                continuous_update=False,
             )
             _guard_forbidden_characters(
                 cell,
@@ -831,7 +860,9 @@ class VaryingFieldsMatrix(widgets.VBox):
         if variation_spec is not None:
             variation_value = variation_spec.per_sample_values.get(sample_number) or ""
         variation_cell = widgets.Text(
-            value=str(variation_value), layout=widgets.Layout(width="180px")
+            value=str(variation_value),
+            layout=widgets.Layout(width="180px"),
+            continuous_update=False,
         )
         _guard_forbidden_characters(
             variation_cell,
@@ -1473,6 +1504,12 @@ class ProcessSequenceBuilder(widgets.VBox):
                 description=f"{label}:",
                 style={"description_width": "initial"},
                 layout=widgets.Layout(width="120px"),
+                # continuous_update=False - see _build_field_row's value_widget for why.
+                # This one is the worst case in the app: _on_config_change triggers a full
+                # rebuild_field_specs() PLUS a re-render of every row in the whole
+                # ProcessSequenceBuilder, not just this process - firing that per
+                # keystroke made typing here the most visibly broken spot.
+                continuous_update=False,
             )
             control.observe(
                 lambda change, seq=process.sequence_index, k=key: self._on_config_change(

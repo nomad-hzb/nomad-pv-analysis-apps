@@ -3025,7 +3025,7 @@ def test_create_download_button_click_produces_download_link(fresh_state):
 
     button.click()
 
-    assert "Download" in output_area.value
+    assert "download" in output_area.value.lower()
     assert "base64," in output_area.value
     assert ".xlsx" in output_area.value
 
@@ -3174,7 +3174,7 @@ def test_create_finish_section_download_only_produces_link(fresh_state):
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
 
-    assert "Download" in status_output.value
+    assert "download" in status_output.value.lower()
     assert "base64," in status_output.value
 
 

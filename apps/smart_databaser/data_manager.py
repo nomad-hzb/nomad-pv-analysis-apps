@@ -173,6 +173,30 @@ BOOLEAN_CONFIG_FIELDS = [
     ("carbon_paste", "Carbon Paste", {"Evaporation"}),
 ]
 
+# config_key -> Excel field key(s) whose presence on a source archive step implies that
+# optional block was actually used there - probed by infer_config_from_source_step so a
+# boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already
+# are (see INDEXED_CONFIG_KEYS). Without this, a source step with real Anti solvent/Gas
+# quenching/Vacuum quenching/GAVD data was silently dropped on adopt/replicate, since the
+# target process's config stayed at its all-False default and never gained a field_spec
+# slot for autofill_process_from_batch to write into. Not every BOOLEAN_CONFIG_FIELDS key
+# has a probe yet (e.g. "carbon_paste" has no mapped archive path at all currently) -
+# those simply never get inferred, same as before this change.
+#
+# IMPORTANT: per field_mappings.json, Gas quenching and Vacuum quenching share the same
+# archive "quenching" sub-object and even overlap on some field names ("duration" backs
+# both "Gas quenching duration [s]" AND "Vacuum quenching duration [s]"; same for
+# "pressure") - probing those would set BOTH booleans whenever either one has data. Only
+# each block's own EXCLUSIVE field is used here (confirmed against field_mappings.json,
+# not guessed): "Gas" (quenching.gas) for gas quenching, "Vacuum quenching start time [s]"
+# (quenching.start_time) for vacuum quenching.
+BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
+    "antisolvent": ("Anti solvent name", "Anti solvent volume [ml]"),
+    "gasquenching": ("Gas", "Gas quenching flow rate [ml/s]", "Gas quenching velocity [m/s]"),
+    "vacuumquenching": ("Vacuum quenching start time [s]",),
+    "gavd": ("GAVD start time [s]", "GAVD vacuum pressure [mbar]"),
+}
+
 ATMOSPHERIC_CONFIG_KEY = "add_atmospheric"
 
 # Classic Windows-filename-reserved characters. This app derives Nomad IDs
@@ -723,12 +747,13 @@ def is_field_required_by_default(process_type: str, field_key: str) -> bool:
 
 
 def infer_config_from_source_step(process_type: str, step: dict) -> dict:
-    """Best-effort config (solvents/solutes/spinsteps/... counts) inferred from how many
-    of a source step's indexed fields (Solvent N name, Rotation speed N, ...) actually
-    have data, per INDEXED_CONFIG_KEYS - so a target process autofilled from this step
-    gets a field_spec slot for every value the source can supply, instead of silently
-    dropping values beyond whatever count the target happened to already be configured
-    for (e.g. a source with 2 solvents but a target still configured for 1)."""
+    """Best-effort config (solvents/solutes/spinsteps/... counts, plus optional
+    antisolvent/gas-quenching/vacuum-quenching/GAVD blocks) inferred from what a source
+    step actually has data for, so a target process autofilled from this step gets a
+    field_spec slot for every value the source can supply, instead of silently dropping
+    values beyond whatever the target happened to already be configured for (e.g. a
+    source with 2 solvents but a target still configured for 1, or a source with real
+    Anti solvent data but the target's "Antisolvent" checkbox still unchecked)."""
     field_paths = PROCESS_TYPE_FIELD_PATHS.get(process_type, {})
     inferred: dict[str, int] = {}
     for config_key, excel_key_template in INDEXED_CONFIG_KEYS.get(process_type, {}).items():
@@ -739,6 +764,15 @@ def infer_config_from_source_step(process_type: str, step: dict) -> dict:
                 count = n
         if count:
             inferred[config_key] = count
+    for config_key, _label, applicable_types in BOOLEAN_CONFIG_FIELDS:
+        if process_type not in applicable_types:
+            continue
+        probes = BOOLEAN_CONFIG_PROBE_FIELDS.get(config_key, ())
+        for probe_key in probes:
+            path_info = field_paths.get(probe_key)
+            if path_info is not None and _get_path_any(step, path_info[0]) is not None:
+                inferred[config_key] = True
+                break
     return inferred
 
 
@@ -1661,6 +1695,41 @@ def update_variation_column(state: ExperimentState, delimiter: str = "_") -> int
     return written
 
 
+def relevant_field_keys_for_process(process: ProcessInstance) -> set[str]:
+    """Field keys process.config CURRENTLY generates an Excel column for - i.e. what a
+    fresh rebuild_field_specs() would sync today, reusing the same header-generation
+    machinery rather than duplicating sheet_experiment.py's config-gating logic.
+
+    sync_field_specs_from_columns is deliberately additive-only (a field_spec, once
+    created, is never deleted - see its own docstring), so an optional block toggled on
+    then off again (e.g. the "Vacuum Quenching" checkbox) leaves its field_specs sitting
+    in process.field_specs forever: harmless for stored values (nothing is lost, and
+    re-checking the box brings the old value straight back), but wrong for anything that
+    iterates field_specs directly - it would still count/show fields the current config
+    no longer has a column for. Callers that count or display fields (progress, nudge
+    queue, ProcessFieldsPanel) should filter through this first; callers that only care
+    about not losing data (Excel export's column_map, which is rebuilt from the live
+    config at generation time anyway) don't need it."""
+    workbook = Workbook()
+    add_experiment_sheet(
+        workbook,
+        [
+            {"process": "Experiment Info"},
+            {"process": process.process_type, "config": dict(process.config)},
+        ],
+        is_testing=False,
+    )
+    column_map = build_column_map(workbook.active)
+    return {field_key for (sequence_index, field_key) in column_map if sequence_index == 1}
+
+
+def relevant_field_specs(process: ProcessInstance) -> dict[str, ProcessFieldSpec]:
+    """process.field_specs filtered to keys relevant_field_keys_for_process still backs -
+    see that function's docstring for why this filtering is needed."""
+    relevant = relevant_field_keys_for_process(process)
+    return {key: spec for key, spec in process.field_specs.items() if key in relevant}
+
+
 # ---------------------------------------------------------------------------
 # Material-gated progress bar. A process only counts toward the denominator if it is not
 # material-gated, or is material-gated and has "Material name" filled - see
@@ -1680,12 +1749,16 @@ def compute_process_progress(
     material-gating rule - matches the real NOMAD parser, which skips such processes).
     Fields with required_for_progress=False are dropped before unit resolution, so they
     never appear in the denominator OR numerator - the user-facing "this field doesn't
-    matter" opt-out (see set_field_required_for_progress)."""
+    matter" opt-out (see set_field_required_for_progress). Also excludes fields whose
+    config-gated column no longer exists (see relevant_field_specs) - e.g. an optional
+    checkbox (Vacuum Quenching, ...) that was checked then unchecked again, whose
+    field_specs otherwise linger forever without this filter."""
     if not process.counts_toward_progress():
         return (0, 0)
-    field_keys = [key for key, spec in process.field_specs.items() if spec.required_for_progress]
+    specs = relevant_field_specs(process)
+    field_keys = [key for key, spec in specs.items() if spec.required_for_progress]
     units = resolve_progress_units(process.process_type, field_keys, alias_groups)
-    filled = sum(1 for unit in units if any(process.field_specs[key].is_filled() for key in unit))
+    filled = sum(1 for unit in units if any(specs[key].is_filled() for key in unit))
     return (filled, len(units))
 
 
@@ -1763,12 +1836,15 @@ def build_nudge_queue(state: ExperimentState, max_items: int | None = None) -> l
     queue length (None = no cap) - kept as a parameter so the strategy is easy to retune,
     per the product owner's expectation that this gets tuned after real feedback. Fields
     with required_for_progress=False are skipped entirely - marking a field "not
-    required" means don't nag about it either, not just don't count it."""
+    required" means don't nag about it either, not just don't count it. Also skips fields
+    whose config-gated column no longer exists (see relevant_field_specs) - otherwise an
+    unchecked optional block (Vacuum Quenching, ...) that was ever checked once would nag
+    forever about a field the user can no longer even see."""
     processes_with_missing: list[tuple[ProcessInstance, list[str]]] = []
     for process in state.process_sequence:
         missing_keys = [
             key
-            for key, spec in process.field_specs.items()
+            for key, spec in relevant_field_specs(process).items()
             if not spec.varies and not spec.is_filled() and spec.required_for_progress
         ]
         if missing_keys:
@@ -1794,7 +1870,7 @@ def build_nudge_queue(state: ExperimentState, max_items: int | None = None) -> l
             kind="outlier",
         )
         for process in state.process_sequence
-        for field_key, spec in process.field_specs.items()
+        for field_key, spec in relevant_field_specs(process).items()
         if not spec.varies and spec.is_outlier and spec.is_filled() and spec.required_for_progress
     ]
 
@@ -1804,14 +1880,15 @@ def build_nudge_queue(state: ExperimentState, max_items: int | None = None) -> l
 
 def build_missing_fields_summary(state: ExperimentState) -> list[tuple[ProcessInstance, int]]:
     """Every process that still has missing REQUIRED fields (varying or not - uses the
-    same is_filled() the progress bar uses; excludes required_for_progress=False fields,
-    same as the progress bar), with a count of how many. Always the LAST popup shown in
-    the nudge flow, regardless of queue length."""
+    same is_filled() the progress bar uses; excludes required_for_progress=False fields
+    and config-gated-away fields, same as the progress bar - see relevant_field_specs),
+    with a count of how many. Always the LAST popup shown in the nudge flow, regardless
+    of queue length."""
     summary = []
     for process in state.process_sequence:
         missing_count = sum(
             1
-            for spec in process.field_specs.values()
+            for spec in relevant_field_specs(process).values()
             if not spec.is_filled() and spec.required_for_progress
         )
         if missing_count:
