@@ -16,17 +16,16 @@ from data_manager import (
     EXPERIMENT_INFO_COMPUTED_KEYS,
     FIELD_MAPPINGS_CONFIG_PATH,
     FORBIDDEN_VALUE_CHARACTERS,
-    PIXEL_FIELD_KEYS,
     PROCESS_TYPE_FIELD_PATHS,
     FieldProvenance,
     NomadSessionCache,
-    PixelFieldSpec,
     ProcessFieldSpec,
     ProcessInstance,
     append_parent_id_column,
     apply_process_override,
     apply_variation_template,
     apply_whole_experiment_template,
+    auto_fill_variation_column,
     autofill_experiment_info_from_batch,
     autofill_process_from_batch,
     build_column_map,
@@ -60,6 +59,7 @@ from data_manager import (
     load_field_value_multipliers,
     load_required_field_exceptions,
     occurrence_index_for_process,
+    populate_column_from_first,
     preview_value_for_field,
     process_sequence_to_dicts,
     progress_band,
@@ -71,8 +71,6 @@ from data_manager import (
     set_field_manual,
     set_field_required_for_progress,
     set_field_varies,
-    set_pixel_field_if_empty,
-    set_pixel_field_manual,
     steps_for_process_type,
     subbatch_for_sample,
     sync_field_specs_from_columns,
@@ -239,34 +237,6 @@ def test_set_field_varies_off_preserves_per_sample_values():
 
 
 # ---------------------------------------------------------------------------
-# Pixel field no-clobber path
-# ---------------------------------------------------------------------------
-
-
-def test_set_pixel_field_if_empty_constant_scope():
-    spec = PixelFieldSpec(key="Number of pixels")
-    assert set_pixel_field_if_empty(spec, 6, sample_number=1, child_index=1) is True
-    assert spec.value == 6
-    assert set_pixel_field_if_empty(spec, 4, sample_number=1, child_index=2) is False
-    assert spec.value == 6
-
-
-def test_set_pixel_field_if_empty_varying_scope_per_child():
-    spec = PixelFieldSpec(key="Pixel area [cm^2]", varies=True)
-    set_pixel_field_if_empty(spec, 0.18, sample_number=1, child_index=1)
-    set_pixel_field_if_empty(spec, 0.20, sample_number=1, child_index=2)
-    set_pixel_field_if_empty(spec, 0.99, sample_number=1, child_index=1)  # no-clobber
-
-    assert spec.per_child_values == {(1, 1): 0.18, (1, 2): 0.20}
-
-
-def test_set_pixel_field_manual_overwrites():
-    spec = PixelFieldSpec(key="Pixel area [cm^2]", varies=True, per_child_values={(1, 1): 0.18})
-    set_pixel_field_manual(spec, 0.25, sample_number=1, child_index=1)
-    assert spec.per_child_values[(1, 1)] == 0.25
-
-
-# ---------------------------------------------------------------------------
 # Material-gated progress
 # ---------------------------------------------------------------------------
 
@@ -419,8 +389,8 @@ def test_sync_field_specs_from_columns_creates_specs_additively(fresh_state):
 
     assert "Material name" in fresh_state.get_process(1).field_specs
     assert "Date" in fresh_state.experiment_info_fields
-    assert "Number of pixels" in fresh_state.pixel_fields
-    assert isinstance(fresh_state.pixel_fields["Number of pixels"], PixelFieldSpec)
+    assert "Number of pixels" in fresh_state.experiment_info_fields
+    assert isinstance(fresh_state.experiment_info_fields["Number of pixels"], ProcessFieldSpec)
 
 
 def test_sync_field_specs_from_columns_never_destroys_existing_values(fresh_state):
@@ -1595,17 +1565,17 @@ def test_compute_experiment_progress_sums_across_processes(fresh_state):
     assert total == process_1_total + process_2_total
 
 
-def test_compute_experiment_info_progress_excludes_computed_and_pixel_keys(fresh_state):
+def test_compute_experiment_info_progress_excludes_only_computed_keys(fresh_state):
     rebuild_field_specs(fresh_state)
     fresh_state.experiment_info_fields["Project_Name"].value = "CsFA"
     # isolate this test from config/required_fields.json's "Notes" exception - it's
-    # testing the computed/pixel-key exclusion specifically, not the required-fields config
+    # testing the computed-key exclusion specifically, not the required-fields config
     fresh_state.experiment_info_fields["Notes"].required_for_progress = True
 
     filled, total = compute_experiment_info_progress(fresh_state)
 
     all_keys = set(fresh_state.experiment_info_fields)
-    relevant_keys = all_keys - EXPERIMENT_INFO_COMPUTED_KEYS - PIXEL_FIELD_KEYS
+    relevant_keys = all_keys - EXPERIMENT_INFO_COMPUTED_KEYS
     assert total == len(relevant_keys)
     assert filled == 1
 
@@ -2072,6 +2042,43 @@ def test_varying_fields_matrix_renders_header_and_sample_rows(fresh_state):
     assert len(matrix.children) == 3  # header + 2 sample rows
 
 
+def test_varying_fields_matrix_operator_cell_gets_a_me_button(fresh_state):
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    set_field_varies(process.field_specs["Operator"], True, fresh_state.sample_numbers())
+
+    matrix = VaryingFieldsMatrix(fresh_state)
+    sample_row = matrix.children[1]
+    operator_cell_slot = sample_row.children[2]  # Sample, Subbatch, then the one field column
+
+    text_widget, quick_fill_button = operator_cell_slot.children
+    assert quick_fill_button.description == "Me"
+
+    quick_fill_button.click()
+    assert text_widget.value  # filled in by the click
+
+
+def test_varying_fields_matrix_column_header_has_populate_button(fresh_state):
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=2)
+    spec = process.field_specs["Material name"]
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+
+    matrix = VaryingFieldsMatrix(fresh_state)
+    header_row = matrix.children[0]
+    material_header = header_row.children[2]  # Sample, Subbatch, then the one field column
+    _label, populate_button = material_header.children
+    assert populate_button.icon == "arrow-down"
+
+    set_field_manual(spec, "C60", sample_number=1)
+    populate_button.click()
+
+    assert spec.per_sample_values == {1: "C60", 2: "C60"}
+
+
 def test_varying_fields_matrix_shows_set_column_before_variation(fresh_state):
     process = fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
@@ -2114,7 +2121,10 @@ def test_varying_fields_matrix_hard_refresh_reflects_state_changes(fresh_state):
     assert len(matrix.children) == 2  # header + 1 sample row now
 
 
-def test_varying_fields_matrix_cell_edit_updates_state_and_recomputes_variation(fresh_state):
+def test_varying_fields_matrix_cell_edit_updates_state_without_touching_variation(fresh_state):
+    # Variation is no longer auto-recomputed on every matrix edit (see
+    # update_variation_column's docstring) - a plain field-cell edit only updates that
+    # field's own per-sample value, nothing else.
     process = fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
     fresh_state.add_sample(variation_group_index=0, sample_number=1)
@@ -2125,9 +2135,7 @@ def test_varying_fields_matrix_cell_edit_updates_state_and_recomputes_variation(
     matrix._on_cell_change(spec, 1, "C60")
 
     assert spec.per_sample_values[1] == "C60"
-    assert (
-        fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "material-name-C60"
-    )
+    assert fresh_state.experiment_info_fields["Variation"].per_sample_values == {}
 
 
 def test_varying_fields_matrix_variation_cell_manual_edit_is_respected(fresh_state):
@@ -2143,6 +2151,62 @@ def test_varying_fields_matrix_variation_cell_manual_edit_is_respected(fresh_sta
     # subsequent field edit must not clobber the manually set Variation
     matrix._on_cell_change(process.field_specs["Material name"], 1, "C60")
     assert fresh_state.experiment_info_fields["Variation"].per_sample_values[1] == "custom label"
+
+
+def test_auto_fill_variation_column_recomputes_after_later_field_edits(fresh_state):
+    # Regression test for the reported bug: typing into a second varying column used to
+    # do nothing to Variation once it had already been computed once (no-clobber blocked
+    # every later recompute). auto_fill_variation_column is the new, explicit, full
+    # recompute - it must pick up a field edited AFTER the first auto-fill too.
+    process = fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    material = process.field_specs["Material name"]
+    solvent = process.field_specs["Solvent 1 name"]
+    set_field_varies(material, True, fresh_state.sample_numbers())
+    set_field_varies(solvent, True, fresh_state.sample_numbers())
+
+    set_field_manual(material, "C60", sample_number=1)
+    first_count = auto_fill_variation_column(fresh_state)
+    first_label = fresh_state.experiment_info_fields["Variation"].per_sample_values[1]
+
+    set_field_manual(solvent, "DMF", sample_number=1)
+    second_count = auto_fill_variation_column(fresh_state)
+    second_label = fresh_state.experiment_info_fields["Variation"].per_sample_values[1]
+
+    assert first_count == 1
+    assert second_count == 1
+    assert first_label != second_label
+    assert "dmf" in second_label.lower()
+
+
+def test_populate_column_from_first_copies_first_sample_into_the_rest(fresh_state):
+    process = fresh_state.add_process("Spin Coating", config={"spinsteps": 1})
+    rebuild_field_specs(fresh_state)
+    spec = process.field_specs["Rotation speed [rpm]"]
+    for sample_number in (1, 2, 3):
+        fresh_state.add_sample(variation_group_index=0, sample_number=sample_number)
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+    set_field_manual(spec, "1000", sample_number=1)
+
+    written = populate_column_from_first(spec, fresh_state.sample_numbers())
+
+    assert written == 2
+    assert spec.per_sample_values == {1: "1000", 2: "1000", 3: "1000"}
+
+
+def test_populate_column_from_first_noop_when_first_sample_empty(fresh_state):
+    process = fresh_state.add_process("Spin Coating", config={"spinsteps": 1})
+    rebuild_field_specs(fresh_state)
+    spec = process.field_specs["Rotation speed [rpm]"]
+    for sample_number in (1, 2):
+        fresh_state.add_sample(variation_group_index=0, sample_number=sample_number)
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+
+    written = populate_column_from_first(spec, fresh_state.sample_numbers())
+
+    assert written == 0
+    assert spec.per_sample_values.get(2) is None
 
 
 def test_progress_bar_widget_reflects_compute_experiment_progress(fresh_state):
@@ -2306,6 +2370,19 @@ def test_initialize_ui_builds_widget_tree():
     assert len(main_interface.children) > 0
 
 
+def test_initialize_ui_auto_applies_default_sample_setup():
+    """Product ask: the Varying Fields table (and everything downstream) previously
+    stayed empty until a user noticed and clicked 'Apply Sample Setup' themselves -
+    initialize_ui now runs it once automatically with the panel's own defaults."""
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]),
+    ):
+        main_interface = initialize_ui("url", "token")
+    sample_setup = main_interface.children[2]
+    assert len(sample_setup.state.samples) == sample_setup.total_samples_input.value > 0
+
+
 def test_initialize_ui_closes_widgets_from_previous_call():
     with (
         patch("data_manager.get_batch_ids", return_value=["B1"]),
@@ -2366,17 +2443,20 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
         assert len(matrix.children) == 1  # placeholder, nothing varies yet
 
         # Simulate state changing without going through any widget that would normally
-        # trigger matrix.refresh() itself.
+        # trigger matrix.refresh() itself. Sample Setup auto-applies its default sample
+        # set on page load now, so state.samples is already populated here - no need to
+        # add one manually.
         state = matrix.state
+        sample_count = len(state.samples)
+        assert sample_count > 0
         process = state.add_process("Evaporation")
         rebuild_field_specs(state)
-        state.add_sample(variation_group_index=0, sample_number=1)
         set_field_varies(process.field_specs["Material name"], True, state.sample_numbers())
         assert len(matrix.children) == 1  # not yet reflected
 
         refresh_matrix_button.click()
 
-    assert len(matrix.children) == 2  # header + 1 sample row
+    assert len(matrix.children) == 1 + sample_count  # header + one row per sample
 
 
 # ---------------------------------------------------------------------------
@@ -2738,19 +2818,25 @@ def test_resolve_cell_value_experiment_info_constant_vs_varying(fresh_state):
     )
 
 
-def test_resolve_cell_value_pixel_field_blank_on_mother_row(fresh_state):
-    fresh_state.pixel_fields["Number of pixels"] = PixelFieldSpec(key="Number of pixels", value=6)
-    assert resolve_cell_value(fresh_state, 0, "Number of pixels", 1, child_index=None) is None
+def test_resolve_cell_value_pixel_field_same_on_mother_and_child_row(fresh_state):
+    # Number of pixels/Pixel area are ordinary Experiment Info fields now (a real exported
+    # file showed both as a single constant value across every row of a batch, not blank
+    # on a whole-substrate row - see relevant_field_specs' sibling history) - a child row
+    # inherits its mother's value same as any other Experiment Info field.
+    fresh_state.experiment_info_fields["Number of pixels"] = ProcessFieldSpec(
+        key="Number of pixels", value=6
+    )
+    assert resolve_cell_value(fresh_state, 0, "Number of pixels", 1, child_index=None) == 6
     assert resolve_cell_value(fresh_state, 0, "Number of pixels", 1, child_index=1) == 6
 
 
-def test_resolve_cell_value_pixel_field_varies_per_child(fresh_state):
-    spec = PixelFieldSpec(
-        key="Pixel area [cm^2]", varies=True, per_child_values={(1, 1): 0.18, (1, 2): 0.20}
+def test_resolve_cell_value_pixel_field_varies_per_sample(fresh_state):
+    spec = ProcessFieldSpec(
+        key="Pixel area [cm^2]", varies=True, per_sample_values={1: 0.18, 2: 0.20}
     )
-    fresh_state.pixel_fields["Pixel area [cm^2]"] = spec
-    assert resolve_cell_value(fresh_state, 0, "Pixel area [cm^2]", 1, child_index=1) == 0.18
-    assert resolve_cell_value(fresh_state, 0, "Pixel area [cm^2]", 1, child_index=2) == 0.20
+    fresh_state.experiment_info_fields["Pixel area [cm^2]"] = spec
+    assert resolve_cell_value(fresh_state, 0, "Pixel area [cm^2]", 1, child_index=None) == 0.18
+    assert resolve_cell_value(fresh_state, 0, "Pixel area [cm^2]", 2, child_index=None) == 0.20
 
 
 def test_resolve_cell_value_process_field_children_inherit_mother_sample_value(fresh_state):
@@ -2836,10 +2922,12 @@ def test_generate_full_workbook_writes_one_row_per_mother_and_child(fresh_state)
     assert worksheet.cell(row=4, column=material_col).value == "C60"  # child inherits
 
 
-def test_generate_full_workbook_pixel_fields_blank_on_mother_populated_on_child(fresh_state):
+def test_generate_full_workbook_pixel_fields_written_on_mother_and_inherited_by_child(
+    fresh_state,
+):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
-    fresh_state.pixel_fields["Number of pixels"].value = 6
+    fresh_state.experiment_info_fields["Number of pixels"].value = 6
     fresh_state.add_sample(variation_group_index=0, sample_number=1, child_count=1)
 
     workbook = generate_full_workbook(fresh_state)
@@ -2847,8 +2935,8 @@ def test_generate_full_workbook_pixel_fields_blank_on_mother_populated_on_child(
     column_map = build_column_map(worksheet)
     pixels_col = column_map[(0, "Number of pixels")]
 
-    assert worksheet.cell(row=3, column=pixels_col).value is None  # mother
-    assert worksheet.cell(row=4, column=pixels_col).value == 6  # child
+    assert worksheet.cell(row=3, column=pixels_col).value == 6  # mother
+    assert worksheet.cell(row=4, column=pixels_col).value == 6  # child inherits
 
 
 def test_workbook_to_bytes_returns_valid_xlsx_signature(fresh_state):
@@ -2871,7 +2959,7 @@ def test_build_experiment_filename_matches_date_convention():
 # ---------------------------------------------------------------------------
 
 
-def test_experiment_info_panel_excludes_computed_and_pixel_keys(fresh_state):
+def test_experiment_info_panel_excludes_only_computed_keys(fresh_state):
     rebuild_field_specs(fresh_state)
     panel = ExperimentInfoPanel(fresh_state)
 
@@ -2882,9 +2970,12 @@ def test_experiment_info_panel_excludes_computed_and_pixel_keys(fresh_state):
     assert "Nomad ID" not in rendered_labels
     assert "Sample" not in rendered_labels
     assert "Subbatch" not in rendered_labels
-    assert "Number of pixels" not in rendered_labels
-    assert "Pixel area [cm^2]" not in rendered_labels
     assert "Project_Name *" in rendered_labels  # a normal (required) field is still shown
+    # Number of pixels/Pixel area are ordinary Experiment Info fields now, not excluded -
+    # see relevant_field_specs' sibling history for why the old per-CHILD-row gating was
+    # removed.
+    assert "Number of pixels *" in rendered_labels
+    assert "Pixel area [cm^2] *" in rendered_labels
 
 
 def test_experiment_info_panel_value_edit_sets_manual_provenance(fresh_state):
@@ -2955,6 +3046,18 @@ def test_sample_setup_panel_apply_adds_samples_for_single_set(fresh_state):
     assert len(fresh_state.samples) == 3
     assert all(s.variation_group_index == 0 for s in fresh_state.samples)
     assert [s.sample_number for s in fresh_state.samples] == [1, 2, 3]
+
+
+def test_sample_setup_panel_apply_sample_setup_is_public_equivalent_of_apply_click(
+    fresh_state,
+):
+    panel = SampleSetupPanel(fresh_state)
+    panel.set_count_input.value = 1
+    panel.sets_inputs_box.children[0].value = 3
+
+    panel.apply_sample_setup()  # same action app.py calls once on page load
+
+    assert len(fresh_state.samples) == 3
 
 
 def test_sample_setup_panel_apply_is_additive_never_removes(fresh_state):

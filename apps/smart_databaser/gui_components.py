@@ -17,7 +17,6 @@ from data_manager import (
     CONFIGURABLE_PROCESS_TYPES,
     EXPERIMENT_INFO_COMPUTED_KEYS,
     NUMERIC_CONFIG_FIELDS,
-    PIXEL_FIELD_KEYS,
     ExperimentState,
     NomadSessionCache,
     NudgeItem,
@@ -26,6 +25,7 @@ from data_manager import (
     apply_process_override,
     apply_variation_template,
     apply_whole_experiment_template,
+    auto_fill_variation_column,
     build_experiment_filename,
     build_field_mapping_debug_report,
     build_missing_fields_summary,
@@ -40,6 +40,7 @@ from data_manager import (
     generate_full_workbook,
     iter_varying_fields,
     list_process_occurrences,
+    populate_column_from_first,
     preview_value_for_field,
     progress_band,
     rebuild_field_specs,
@@ -47,7 +48,6 @@ from data_manager import (
     set_field_manual,
     set_field_varies,
     steps_for_process_type,
-    update_variation_column,
     upload_experiment_excel,
     workbook_to_bytes,
 )
@@ -64,6 +64,35 @@ _DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
 
 def _current_user_name() -> str:
     return os.environ.get("NOMAD_CLIENT_USER", "").strip() or "Unknown User"
+
+
+def _quick_fill_button_for(field_key: str, value_widget: widgets.Text) -> widgets.Button | None:
+    """Shared by _build_field_row (non-varying fields) and VaryingFieldsMatrix's
+    per-sample cells (varying fields moved into the matrix) - a "Today" button for
+    Date/Datetime fields (see _DATE_FIELD_FORMATS), a "Me" button for Operator. Writes
+    straight into value_widget.value, which fires the same observe chain a real keystroke
+    would (forbidden-character guard, on_value_change, ...). Returns None (no button) for
+    every other field key."""
+    date_format = _DATE_FIELD_FORMATS.get(field_key)
+    if date_format is not None:
+
+        def _fill_today(_button, widget=value_widget, fmt=date_format):
+            widget.value = datetime.now().strftime(fmt)
+
+        button = widgets.Button(description="Today", layout=widgets.Layout(width="55px"))
+        button.on_click(_fill_today)
+        return button
+
+    if field_key == "Operator":
+
+        def _fill_operator(_button, widget=value_widget):
+            widget.value = _current_user_name()
+
+        button = widgets.Button(description="Me", layout=widgets.Layout(width="45px"))
+        button.on_click(_fill_operator)
+        return button
+
+    return None
 
 
 def _provenance_summary_html(specs) -> widgets.HTML:
@@ -191,25 +220,7 @@ def _build_field_row(
                 lambda new_value, key=field_key: on_value_change(key, new_value),
             )
 
-        date_format = _DATE_FIELD_FORMATS.get(field_key)
-        if date_format is not None:
-
-            def _fill_today(_button, widget=value_widget, fmt=date_format):
-                widget.value = datetime.now().strftime(fmt)
-
-            quick_fill_button = widgets.Button(
-                description="Today", layout=widgets.Layout(width="55px")
-            )
-            quick_fill_button.on_click(_fill_today)
-        elif field_key == "Operator":
-
-            def _fill_operator(_button, widget=value_widget):
-                widget.value = _current_user_name()
-
-            quick_fill_button = widgets.Button(
-                description="Me", layout=widgets.Layout(width="45px")
-            )
-            quick_fill_button.on_click(_fill_operator)
+        quick_fill_button = _quick_fill_button_for(field_key, value_widget)
 
     row_children = [varies_checkbox, label, value_widget]
     if quick_fill_button is not None:
@@ -246,7 +257,6 @@ class ProcessFieldsPanel(widgets.VBox):
         self._render()
 
     def _notify_change(self) -> None:
-        update_variation_column(self.state)
         self._render()
         if self.on_change:
             self.on_change()
@@ -291,9 +301,12 @@ class ExperimentInfoPanel(widgets.VBox):
     """Same shape as ProcessFieldsPanel but for state.experiment_info_fields. Skips
     "Variation" (computed only, edited via VaryingFieldsMatrix), "Nomad ID" and "Sample"
     (always auto-derived from sample_number/child_index at Excel-generation time - see
-    generate_full_workbook), and the pixel-specific fields (Number of pixels / Pixel
-    area, which vary per CHILD row and are edited via SampleSetupPanel's per-sample
-    table instead)."""
+    generate_full_workbook). "Number of pixels"/"Pixel area" are ordinary fields here
+    like any other - they used to be gated behind a separate per-CHILD-row mechanism, but
+    that had no UI to actually edit it (the per-sample child-row table was removed in an
+    earlier round) and, per a real exported file, both fields are in practice a single
+    constant value applying to the whole batch, not something that varies per diced
+    pixel - see data_manager's git history around PixelFieldSpec's removal."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
@@ -302,7 +315,6 @@ class ExperimentInfoPanel(widgets.VBox):
         self._render()
 
     def _notify_change(self) -> None:
-        update_variation_column(self.state)
         self._render()
         if self.on_change:
             self.on_change()
@@ -311,7 +323,7 @@ class ExperimentInfoPanel(widgets.VBox):
         relevant = {
             field_key: spec
             for field_key, spec in self.state.experiment_info_fields.items()
-            if field_key not in EXPERIMENT_INFO_COMPUTED_KEYS and field_key not in PIXEL_FIELD_KEYS
+            if field_key not in EXPERIMENT_INFO_COMPUTED_KEYS
         }
         self.children = [
             _provenance_summary_html(relevant.values()),
@@ -428,6 +440,13 @@ class SampleSetupPanel(widgets.VBox):
         self._render_set_inputs()
 
     def _on_apply(self, _button) -> None:
+        self.apply_sample_setup()
+
+    def apply_sample_setup(self) -> None:
+        """The 'Apply Sample Setup' button's action, exposed as a public method so
+        app.py can trigger the default sample set once on page load - product ask, since
+        the Varying Fields table (and everything downstream) previously stayed empty
+        until a user noticed and clicked the button themselves."""
         for count_input in self.sets_inputs_box.children:
             set_index = count_input._set_index
             existing = [s for s in self.state.samples if s.variation_group_index == set_index]
@@ -753,9 +772,12 @@ class VaryingFieldsMatrix(widgets.VBox):
     """One column per currently-varying field, one row per sample, plus a leading
     Subbatch column (the sample's variation_group_index from Sample Setup, shown 1-based
     to match the Excel "Subbatch" value - see data_manager.subbatch_for_sample) and a
-    trailing (always-last) computed Variation column. Cells are directly editable; the
-    Variation cell is too (a manual edit there is respected by no-clobber going
-    forward)."""
+    trailing (always-last) Variation column. Every cell is directly editable, including
+    Variation - it is NOT auto-computed live anymore (see update_variation_column's
+    docstring for why); use the "Auto-fill Variation" button above VariationTemplatePanel
+    for an on-demand bulk fill. Every column header (including Variation) has a small
+    arrow-down "populate" button that copies that column's first row down into every
+    other row - a time-saver when most samples share one value."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
@@ -776,7 +798,6 @@ class VaryingFieldsMatrix(widgets.VBox):
         self._render()
 
     def _notify_change(self) -> None:
-        update_variation_column(self.state)
         self._render()
         if self.on_change:
             self.on_change()
@@ -798,23 +819,17 @@ class VaryingFieldsMatrix(widgets.VBox):
             widgets.Label(value="Subbatch", layout=widgets.Layout(width="70px")),
         ]
         header_cells.extend(
-            widgets.HTML(
-                value=(
-                    f"<div style='width:180px; text-align:center;'>{process_part}"
-                    f"<br>{field_part}</div>"
-                )
-            )
-            for process_part, field_part in (
-                _split_varying_field_label(label) for label, _spec in varying_fields
-            )
+            self._build_column_header(label, spec, sample_numbers) for label, spec in varying_fields
         )
+        variation_spec = self.state.experiment_info_fields.get("Variation")
         header_cells.append(
-            widgets.HTML(value="<div style='width:180px; text-align:center;'>Variation</div>")
+            self._build_column_header(
+                "Variation", variation_spec, sample_numbers, label_text="Variation"
+            )
         )
 
         set_by_sample = {s.sample_number: s.variation_group_index for s in self.state.samples}
         rows = [widgets.HBox(header_cells)]
-        variation_spec = self.state.experiment_info_fields.get("Variation")
         for sample_number in sample_numbers:
             rows.append(
                 self._build_sample_row(
@@ -822,6 +837,27 @@ class VaryingFieldsMatrix(widgets.VBox):
                 )
             )
         self.children = rows
+
+    def _build_column_header(
+        self, label: str, spec: ProcessFieldSpec | None, sample_numbers: list[int], label_text=None
+    ) -> widgets.Widget:
+        if label_text is None:
+            process_part, field_part = _split_varying_field_label(label)
+            label_text = f"{process_part}<br>{field_part}"
+        text = widgets.HTML(
+            value=f"<div style='width:180px; text-align:center;'>{label_text}</div>"
+        )
+        if spec is None:
+            return text
+        populate_button = widgets.Button(
+            icon="arrow-down",
+            tooltip="Copy the first row's value into every row below",
+            layout=widgets.Layout(width="30px", margin="2px auto 0 auto"),
+        )
+        populate_button.on_click(
+            lambda _button, s=spec, sns=sample_numbers: self._on_populate_column(s, sns)
+        )
+        return widgets.VBox([text, populate_button], layout=widgets.Layout(align_items="center"))
 
     def _build_sample_row(
         self, sample_number, set_index, varying_fields, variation_spec
@@ -837,7 +873,7 @@ class VaryingFieldsMatrix(widgets.VBox):
                 layout=widgets.Layout(width="70px"),
             ),
         ]
-        for _label, spec in varying_fields:
+        for label, spec in varying_fields:
             value = spec.per_sample_values.get(sample_number)
             cell = widgets.Text(
                 value="" if value is None else str(value),
@@ -854,7 +890,8 @@ class VaryingFieldsMatrix(widgets.VBox):
                 row_warning,
                 lambda new_value, s=spec, sn=sample_number: self._on_cell_change(s, sn, new_value),
             )
-            cells.append(cell)
+            _process_part, field_part = _split_varying_field_label(label)
+            cells.append(self._wrap_cell_with_quick_fill(field_part, cell))
 
         variation_value = ""
         if variation_spec is not None:
@@ -873,6 +910,15 @@ class VaryingFieldsMatrix(widgets.VBox):
         cells.append(row_warning)
         return widgets.HBox(cells)
 
+    def _wrap_cell_with_quick_fill(self, field_key: str, cell: widgets.Text) -> widgets.Widget:
+        """A Date/Datetime/Operator field marked "varies" moves into this matrix - see
+        _quick_fill_button_for's docstring for why it should still get the same
+        Today/Me button it would have had as a plain (non-varying) field row."""
+        quick_fill_button = _quick_fill_button_for(field_key, cell)
+        if quick_fill_button is None:
+            return cell
+        return widgets.HBox([cell, quick_fill_button], layout=widgets.Layout(align_items="center"))
+
     def _on_cell_change(self, spec: ProcessFieldSpec, sample_number: int, new_value) -> None:
         set_field_manual(spec, new_value, sample_number=sample_number)
         self._notify_change()
@@ -885,6 +931,10 @@ class VaryingFieldsMatrix(widgets.VBox):
             # value slot.
             variation_spec.varies = True
             set_field_manual(variation_spec, new_value, sample_number=sample_number)
+        self._notify_change()
+
+    def _on_populate_column(self, spec: ProcessFieldSpec, sample_numbers: list[int]) -> None:
+        populate_column_from_first(spec, sample_numbers)
         self._notify_change()
 
 
@@ -907,11 +957,30 @@ class VariationTemplatePanel(widgets.VBox):
     (ProcessFieldsPanel/ExperimentInfoPanel's 'varies' checkboxes), not this panel's
     own. Hides itself entirely (same condition VaryingFieldsMatrix uses to show its own
     placeholder) whenever there's no actual matrix table to apply a Variation format
-    to."""
+    to.
+
+    Also hosts the "Auto-fill Variation" button, ABOVE the custom-template part per the
+    product ask - Variation is a plain, directly-editable matrix column now (see
+    update_variation_column's docstring), so this button is the only way to (re)compute
+    it in bulk from the current varying-field values; it uses whatever format is active
+    (automatic field-slug label, or this panel's own custom template if one is set)."""
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
+
+        self.autofill_button = widgets.Button(description="Automatically fill up Variation")
+        self.autofill_button.on_click(self._on_autofill)
+        self.autofill_status = widgets.HTML(value="")
+        autofill_caption = widgets.HTML(
+            value=(
+                "<i style='color:#7f8c8d; font-size:11px;'>Variation is a plain entry "
+                "column - it is no longer filled in automatically as you type. Click "
+                "this to (re)generate it for every sample from the varying fields below "
+                "(using the custom format if one is set) - a manually-typed Variation "
+                "value is never overwritten.</i>"
+            )
+        )
 
         self.template_input = widgets.Text(
             value=state.variation_template or "",
@@ -930,14 +999,18 @@ class VariationTemplatePanel(widgets.VBox):
                 "<code>\\1</code>, <code>\\2</code>, <code>\\3</code>... in the same order "
                 "as the legend below - you don't have to use every column. If a "
                 "referenced column has no value for a given sample, it's simply left "
-                "blank for that sample, not an error. Click Apply to (re)generate the "
-                "Variation column under the new format; leave the box empty and click "
-                "Apply to go back to the automatic label.</i>"
+                "blank for that sample, not an error. Click Apply to switch the format "
+                "and immediately (re)generate the Variation column under it; leave the "
+                "box empty and click Apply to go back to the automatic label and refill "
+                "under that instead.</i>"
             )
         )
 
         super().__init__(
             [
+                self.autofill_button,
+                autofill_caption,
+                self.autofill_status,
                 caption,
                 widgets.HBox([self.template_input, self.apply_button]),
                 self.status,
@@ -945,6 +1018,15 @@ class VariationTemplatePanel(widgets.VBox):
             ]
         )
         self.refresh()
+
+    def _on_autofill(self, _button) -> None:
+        written = auto_fill_variation_column(self.state)
+        self.autofill_status.value = (
+            f"<span style='color:#2c7a4b'>Filled {written} sample(s).</span>"
+        )
+        self.refresh()
+        if self.on_change:
+            self.on_change()
 
     def refresh(self) -> None:
         """Re-renders the \\N legend from the CURRENT varying fields - call whenever
@@ -1208,7 +1290,7 @@ class ProcessSequenceBuilder(widgets.VBox):
     per-process override picker for adopting from a different batch entirely. Mirrors
     Excel_creator's row UX (dropdown + add/remove), but writes into an ExperimentState
     instead of a raw dict list, and calls rebuild_field_specs() after every edit so
-    field_specs/pixel_fields stay in sync with the actual generated Excel column layout.
+    field_specs stay in sync with the actual generated Excel column layout.
     """
 
     def __init__(
@@ -1240,7 +1322,6 @@ class ProcessSequenceBuilder(widgets.VBox):
 
     def _notify_change(self) -> None:
         rebuild_field_specs(self.state)
-        update_variation_column(self.state)
         self._render()
         if self.on_change:
             self.on_change()

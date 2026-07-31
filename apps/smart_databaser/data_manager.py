@@ -47,10 +47,6 @@ MATERIAL_GATED_PROCESS_TYPES = {
 
 MATERIAL_FIELD_KEY = "Material name"
 
-# Experiment Info fields that vary per CHILD (pixel) row rather than per sample -
-# see PixelFieldSpec. Confirmed against the real 20260603_Batch2028.xlsx.
-PIXEL_FIELD_KEYS = {"Number of pixels", "Pixel area [cm^2]"}
-
 # Experiment Info fields that are always derived/computed, never directly edited via
 # ExperimentInfoPanel - "Variation" (matrix-computed), "Nomad ID"/"Sample" (derived at
 # Excel-generation time from sample_number/child_index, see generate_full_workbook),
@@ -258,20 +254,6 @@ class ProcessFieldSpec(BaseModel):
         return _is_filled(self.value)
 
 
-class PixelFieldSpec(BaseModel):
-    """Number of pixels / Pixel area - vary per CHILD row, not per sample."""
-
-    key: str
-    varies: bool = False
-    value: Any = None
-    per_child_values: dict[tuple[int, int], Any] = Field(default_factory=dict)
-
-    def is_filled(self) -> bool:
-        if self.varies:
-            return any(_is_filled(v) for v in self.per_child_values.values())
-        return _is_filled(self.value)
-
-
 class ProcessInstance(BaseModel):
     process_type: str
     sequence_index: int
@@ -298,7 +280,6 @@ class SamplePlan(BaseModel):
 class ExperimentState(BaseModel):
     process_sequence: list[ProcessInstance] = Field(default_factory=list)
     experiment_info_fields: dict[str, ProcessFieldSpec] = Field(default_factory=dict)
-    pixel_fields: dict[str, PixelFieldSpec] = Field(default_factory=dict)
     samples: list[SamplePlan] = Field(default_factory=list)
     whole_experiment_template_batch_id: str | None = None
     # None means "use the automatic field-slug label" (compute_variation_label's
@@ -431,36 +412,6 @@ def set_field_required_for_progress(spec: ProcessFieldSpec, required: bool) -> N
     spec.required_for_progress = required
 
 
-def set_pixel_field_if_empty(
-    spec: PixelFieldSpec,
-    value: Any,
-    sample_number: int,
-    child_index: int,
-) -> bool:
-    if spec.varies:
-        key = (sample_number, child_index)
-        if _is_filled(spec.per_child_values.get(key)):
-            return False
-        spec.per_child_values[key] = value
-        return True
-    if _is_filled(spec.value):
-        return False
-    spec.value = value
-    return True
-
-
-def set_pixel_field_manual(
-    spec: PixelFieldSpec,
-    value: Any,
-    sample_number: int,
-    child_index: int,
-) -> None:
-    if spec.varies:
-        spec.per_child_values[(sample_number, child_index)] = value
-    else:
-        spec.value = value
-
-
 # ---------------------------------------------------------------------------
 # Excel header generation - reuses Excel_creator's sheet_experiment.py exactly, then
 # reconstructs a column map by reading back the generated header instead of duplicating
@@ -518,17 +469,13 @@ def build_column_map(worksheet: Worksheet) -> dict[tuple[int, str], int]:
 def sync_field_specs_from_columns(
     state: ExperimentState, column_map: dict[tuple[int, str], int]
 ) -> None:
-    """Additive only: creates a ProcessFieldSpec/PixelFieldSpec for every column that
-    doesn't have one yet. Never removes an existing spec (e.g. after reducing a solvent
-    count), so already-filled values are never silently dropped. A newly-created spec's
+    """Additive only: creates a ProcessFieldSpec for every column that doesn't have one
+    yet. Never removes an existing spec (e.g. after reducing a solvent count), so
+    already-filled values are never silently dropped. A newly-created spec's
     required_for_progress starts from is_field_required_by_default(process_type,
     field_key) (config/required_fields.json) rather than always True."""
     for sequence_index, field_key in column_map:
         if sequence_index == 0:
-            if field_key in PIXEL_FIELD_KEYS:
-                if field_key not in state.pixel_fields:
-                    state.pixel_fields[field_key] = PixelFieldSpec(key=field_key)
-                continue
             bucket = state.experiment_info_fields
             process_type = "Experiment Info"
         else:
@@ -543,8 +490,8 @@ def sync_field_specs_from_columns(
 
 def rebuild_field_specs(state: ExperimentState) -> dict[tuple[int, str], int]:
     """Regenerate the header workbook from the current process sequence/config, additively
-    sync field_specs/pixel_fields, and return the fresh column map. Call after any
-    add/remove/config-change to the process sequence."""
+    sync field_specs, and return the fresh column map. Call after any add/remove/
+    config-change to the process sequence."""
     workbook = generate_header_workbook(state)
     worksheet = workbook.active
     column_map = build_column_map(worksheet)
@@ -1675,9 +1622,18 @@ def apply_variation_template(state: ExperimentState, template: str | None) -> in
 
 def update_variation_column(state: ExperimentState, delimiter: str = "_") -> int:
     """No-clobber (re)computation of the Variation column for every sample - only writes
-    into currently-empty per-sample slots. Returns how many slots were written. Safe to
-    call after every matrix edit; already-set Variation values (manual or previously
-    computed) are never touched, per the no-clobber rule."""
+    into currently-empty per-sample slots. Returns how many slots were written.
+
+    NOT called automatically after every matrix/field edit anymore (it used to be, from
+    every panel's _notify_change) - product feedback was that this made the Variation
+    column feel "buggy": since it's no-clobber, a sample's label was computed once (the
+    slot became non-empty) and then silently stopped updating on every later edit to that
+    same sample's other varying fields, which read as "only the first column I type into
+    actually affects the Variation column." Now purely a plain, directly-editable matrix
+    column (see VaryingFieldsMatrix's Variation cells) unless explicitly (re)computed via
+    this function - wired to gui_components' "Auto-fill Variation" button
+    (auto_fill_variation_column) and to apply_variation_template's custom-format Apply
+    button, both explicit user actions."""
     variation_spec = state.experiment_info_fields.get("Variation")
     if variation_spec is None:
         return 0
@@ -1691,6 +1647,44 @@ def update_variation_column(state: ExperimentState, delimiter: str = "_") -> int
             continue
         variation_spec.per_sample_values[sample_number] = label
         variation_spec.per_sample_provenance[sample_number] = FieldProvenance(source="computed")
+        written += 1
+    return written
+
+
+def auto_fill_variation_column(state: ExperimentState, delimiter: str = "_") -> int:
+    """On-demand FULL recompute of the Variation column - powers gui_components'
+    "Auto-fill Variation" button. First clears every "computed"-sourced value (never a
+    manually-typed one - same discard-only-what-this-source-wrote pattern as
+    apply_variation_template), then calls update_variation_column so every sample's
+    label is freshly derived from its CURRENT varying-field values, not just the ones
+    that happened to be empty. Returns how many slots were (re)written."""
+    variation_spec = state.experiment_info_fields.get("Variation")
+    if variation_spec is not None:
+        clear_autofilled_value(variation_spec, {"computed"})
+    return update_variation_column(state, delimiter)
+
+
+def populate_column_from_first(spec: ProcessFieldSpec, sample_numbers: list[int]) -> int:
+    """Copies the first sample's value (in `sample_numbers` order) into every other
+    sample for this one field - powers the Varying Fields matrix's per-column "populate
+    down" button, a time-saver for the common case where most samples share one value
+    (e.g. every sample spun at "1000 rpm" except a couple of outliers) and typing it once
+    then adjusting the few that differ is faster than typing it N times. Deliberately
+    OVERWRITES every other sample's existing value - this is a one-shot bulk action the
+    user explicitly triggers, not a no-clobber autofill. Forces spec.varies = True first
+    (mirrors VaryingFieldsMatrix._on_variation_cell_change's own defensive forcing) so
+    this is safe to call even on a field whose per-sample scope hasn't been touched yet.
+    No-op (returns 0) if there's no first sample or its own value is still empty - nothing
+    to copy yet."""
+    if not sample_numbers:
+        return 0
+    spec.varies = True
+    first_value = spec.per_sample_values.get(sample_numbers[0])
+    if not _is_filled(first_value):
+        return 0
+    written = 0
+    for sample_number in sample_numbers[1:]:
+        set_field_manual(spec, first_value, sample_number=sample_number)
         written += 1
     return written
 
@@ -1793,16 +1787,14 @@ def progress_band(filled: int, total: int) -> str:
 
 def compute_experiment_info_progress(state: ExperimentState) -> tuple[int, int]:
     """(filled, total) for state.experiment_info_fields, excluding computed-only keys
-    (Variation/Nomad ID/Sample), pixel fields (edited via SampleSetupPanel/pixel_fields
-    instead), and fields the user has marked required_for_progress=False - the same
-    filter ExperimentInfoPanel uses to decide what it renders (plus the opt-out). Used to
-    show a completion percentage next to the Experiment Info row's title."""
+    (Variation/Nomad ID/Sample) and fields the user has marked required_for_progress=False
+    - the same filter ExperimentInfoPanel uses to decide what it renders (plus the
+    opt-out). Used to show a completion percentage next to the Experiment Info row's
+    title."""
     relevant = [
         spec
         for key, spec in state.experiment_info_fields.items()
-        if key not in EXPERIMENT_INFO_COMPUTED_KEYS
-        and key not in PIXEL_FIELD_KEYS
-        and spec.required_for_progress
+        if key not in EXPERIMENT_INFO_COMPUTED_KEYS and spec.required_for_progress
     ]
     filled = sum(1 for spec in relevant if spec.is_filled())
     return (filled, len(relevant))
@@ -1969,22 +1961,6 @@ def _resolve_experiment_info_cell(
     return spec.value
 
 
-def _resolve_pixel_cell(
-    state: ExperimentState, field_key: str, sample_number: int, child_index: int | None
-) -> Any:
-    """Pixel-specific fields are blank on the mother row - confirmed against the real
-    file, where 'Number of pixels'/'Pixel area' are empty for the whole-substrate row and
-    only populated on individual diced-pixel child rows."""
-    if child_index is None:
-        return None
-    spec = state.pixel_fields.get(field_key)
-    if spec is None:
-        return None
-    if spec.varies:
-        return spec.per_child_values.get((sample_number, child_index))
-    return spec.value
-
-
 def _resolve_process_cell(
     state: ExperimentState, sequence_index: int, field_key: str, sample_number: int
 ) -> Any:
@@ -2008,11 +1984,11 @@ def resolve_cell_value(
     child_index: int | None,
 ) -> Any:
     """A varying field's per-sample value is shared by a sample's mother and every child
-    row (children inherit the same process-column values as their mother, per the real
-    file's structure) - only pixel fields differ per child row."""
+    row (children inherit the same process-column/Experiment Info values as their
+    mother, per the real file's structure) - child_index is accepted for a uniform
+    per-row call signature (see generate_full_workbook) but not used to vary the result;
+    nothing in this app's data model currently varies by child_index."""
     if sequence_index == 0:
-        if field_key in PIXEL_FIELD_KEYS:
-            return _resolve_pixel_cell(state, field_key, sample_number, child_index)
         return _resolve_experiment_info_cell(state, field_key, sample_number)
     return _resolve_process_cell(state, sequence_index, field_key, sample_number)
 

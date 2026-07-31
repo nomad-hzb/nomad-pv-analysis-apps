@@ -41,7 +41,7 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
 
     state = ExperimentState()
     cache = NomadSessionCache()
-    rebuild_field_specs(state)  # populate experiment_info_fields/pixel_fields up front
+    rebuild_field_specs(state)  # populate experiment_info_fields up front
 
     progress_bar = ProgressBarWidget(state)
     matrix = VaryingFieldsMatrix(state)
@@ -63,6 +63,10 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
     sequence_builder.on_change = refresh_all
 
     sample_setup = SampleSetupPanel(state, on_change=refresh_all)
+    # Auto-populate the default sample set on load, per product ask - previously the
+    # Varying Fields table (and everything downstream) stayed empty until a user noticed
+    # and clicked "Apply Sample Setup" themselves.
+    sample_setup.apply_sample_setup()
     template_picker = create_whole_experiment_template_picker(
         state, url, token, cache, on_change=refresh_all
     )
