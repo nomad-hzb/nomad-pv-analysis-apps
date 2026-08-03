@@ -10,13 +10,27 @@ Classes:
 Author: HySprint Team
 """
 
+import base64
 import logging
+import os
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import config
 import pandas as pd
+from IPython.display import Javascript
+from IPython.display import display as ipy_display
 
 logger = logging.getLogger(__name__)
+
+try:
+    from hysprint_utils.config import URL_BASE
+except ImportError:
+    URL_BASE = "https://nomad-hzb-se.de"
+    logger.warning("hysprint_utils.config not found; using hardcoded URL fallback")
+
+DOE_VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
+DOE_APP_PATH = "DesignOfExperiments/DoE.ipynb"
 
 
 def get_material_column(df: pd.DataFrame) -> Optional[str]:
@@ -292,3 +306,64 @@ class ProcessStepManager:
                 return value
 
         return None
+
+
+def get_current_user() -> str:
+    """Return the NOMAD username of the person running this notebook, or '' if unknown."""
+    return os.environ.get("NOMAD_CLIENT_USER", "")
+
+
+def get_uploads_path() -> str:
+    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
+
+    Same derivation as App_dashboard/data_manager.py's get_uploads_path: under a NOMAD
+    north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>, where
+    <container> is the folder holding all app folders.
+    """
+    container_dir = os.path.dirname(os.getcwd())
+    upload_dir = os.path.dirname(container_dir)
+    container = os.path.basename(container_dir)
+    upload_id = os.path.basename(upload_dir)
+    return f"uploads/{upload_id}/{container}"
+
+
+def build_doe_voila_url(user: str, uploads_path: str) -> str:
+    """Build the absolute Voila render path for the Design of Experiments tool."""
+    base_path = DOE_VOILA_PATH_TEMPLATE.format(user=user)
+    return f"{base_path}/{uploads_path}/{DOE_APP_PATH}"
+
+
+def build_doe_full_url(voila_url: str) -> str:
+    """Prefix a Voila render path with URL_BASE, for use as a link tooltip."""
+    return f"{URL_BASE}{voila_url}"
+
+
+def trigger_csv_download(df: pd.DataFrame, filename_prefix: str) -> str:
+    """Base64-encode df as CSV and trigger a browser download via a Blob +
+    <a download> JS snippet (client-side only - nothing is persisted server-side;
+    Voila/Jupyter has no direct filesystem-download primitive). Returns the
+    filename used, so the caller can print its own status line inside its own
+    `with output_widget: clear_output()` block - this only triggers the download.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.csv"
+
+    csv_string = df.to_csv(index=False)
+    b64 = base64.b64encode(csv_string.encode()).decode()
+
+    js_code = f"""
+    (function() {{
+        var csvContent = atob('{b64}');
+        var blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
+        var link = document.createElement('a');
+        var url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', '{filename}');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }})();
+    """
+    ipy_display(Javascript(js_code))
+    return filename

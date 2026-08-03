@@ -30,6 +30,34 @@ from utils import get_material_column as _get_material_column
 logger = logging.getLogger(__name__)
 
 
+def bin_numeric_column(series: pd.Series, n_bins: int) -> pd.Series:
+    """Bin a numeric series into n_bins equal-width ranges, for boxplot grouping.
+
+    Returns an ordered pandas Categorical of human-readable range labels (e.g.
+    "12.3 to 45.6" - " to " rather than "-" as separator so negative bin edges,
+    which pd.cut can produce when it slightly expands the outermost bin, stay
+    unambiguous). The categories are ordered by the underlying numeric range, not
+    by the label string - a plain string sort would put "100 to 110" before
+    "20 to 30".
+    """
+    binned = pd.cut(series, bins=n_bins)
+    labels = [f"{interval.left:.3g} to {interval.right:.3g}" for interval in binned.cat.categories]
+    return binned.cat.rename_categories(labels)
+
+
+def _ordered_unique_values(series: pd.Series) -> list:
+    """Return the series' unique non-null values in their natural order.
+
+    Respects an ordered Categorical's category order (e.g. bin_numeric_column's
+    output) instead of falling back to a plain alphabetical sort, which would
+    misorder range labels like "100 to 110" before "20 to 30".
+    """
+    if isinstance(series.dtype, pd.CategoricalDtype) and series.dtype.ordered:
+        present = set(series.dropna().unique())
+        return [category for category in series.cat.categories if category in present]
+    return sorted(series.dropna().unique())
+
+
 class PlotManager:
     """Manages plot creation and data preparation."""
 
@@ -41,6 +69,11 @@ class PlotManager:
         rf_widget=None,
         bo_widget=None,
         correlation_scatter_output=None,
+        pca_widget=None,
+        pareto_widget=None,
+        outlier_widget=None,
+        drift_widget=None,
+        anova_widget=None,
     ):
         """
         Initialize plot manager.
@@ -57,6 +90,13 @@ class PlotManager:
                 FigureWidget's axis layout doesn't cleanly reset between calls with a
                 different grid size, so this view is rendered fresh into an Output
                 each time instead)
+            pca_widget: Plotly FigureWidget for the Experimental tab's PCA scatter
+            pareto_widget: Plotly FigureWidget for the Experimental tab's Pareto front
+            outlier_widget: Plotly FigureWidget for the Experimental tab's outlier plot
+            drift_widget: Plotly FigureWidget for the Experimental tab's process-drift plot
+            anova_widget: Plotly FigureWidget for the Experimental tab's ANOVA boxplot -
+                separate from plot_widget so it doesn't overwrite whatever the user has
+                open on the main Plotting tab
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
@@ -64,6 +104,11 @@ class PlotManager:
         self.rf_widget = rf_widget
         self.bo_widget = bo_widget
         self.correlation_scatter_output = correlation_scatter_output
+        self.pca_widget = pca_widget
+        self.pareto_widget = pareto_widget
+        self.outlier_widget = outlier_widget
+        self.drift_widget = drift_widget
+        self.anova_widget = anova_widget
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
@@ -540,6 +585,80 @@ class PlotManager:
         )
         return varying_cols
 
+    def create_metadata_results_heatmap(
+        self,
+        df: pd.DataFrame,
+        results_cols: list,
+        metadata_cols: list,
+        min_unique: int = 5,
+    ) -> Tuple[list, list]:
+        """
+        Cross-correlation heatmap: measurement results on the x-axis, process
+        metadata on the y-axis - unlike create_correlation_heatmap's full NxN
+        matrix, this never correlates two results or two metadata columns against
+        each other, only results against metadata. Both axes are filtered to
+        columns with more than `min_unique` distinct values, same as
+        create_correlation_heatmap.
+
+        Returns (results_used, metadata_used) so the caller can report them.
+        """
+        if self.correlation_widget is None:
+            raise ValueError("PlotManager has no correlation_widget configured")
+
+        numeric_df = df.select_dtypes(include="number")
+        results_used = [
+            col
+            for col in results_cols
+            if col in numeric_df.columns and numeric_df[col].dropna().nunique() > min_unique
+        ]
+        metadata_used = [
+            col
+            for col in metadata_cols
+            if col in numeric_df.columns and numeric_df[col].dropna().nunique() > min_unique
+        ]
+
+        self.correlation_widget.data = []
+
+        if not results_used or not metadata_used:
+            self.correlation_widget.update_layout(
+                title="Not enough varying parameters on both axes for a heatmap"
+            )
+            return results_used, metadata_used
+
+        corr = pd.DataFrame(
+            {
+                result_col: numeric_df[metadata_used].corrwith(numeric_df[result_col])
+                for result_col in results_used
+            }
+        )
+
+        self.correlation_widget.add_trace(
+            go.Heatmap(
+                z=corr.values,
+                x=list(corr.columns),
+                y=list(corr.index),
+                colorscale="RdBu",
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                colorbar=dict(title="Pearson r"),
+                text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                texttemplate="%{text}",
+                hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
+            )
+        )
+        self.correlation_widget.update_layout(
+            title=(
+                f"Results vs Process Metadata ({len(results_used)} x {len(metadata_used)}, "
+                f">{min_unique} unique values)"
+            ),
+            height=max(500, 30 * len(metadata_used)),
+            template="plotly_white",
+            xaxis=dict(tickangle=-45),
+            margin=dict(l=150, b=150),
+        )
+        return results_used, metadata_used
+
     def create_correlation_scatter_matrix(
         self, df: pd.DataFrame, min_unique: int = 5, max_params: int = 12
     ) -> tuple:
@@ -738,6 +857,212 @@ class PlotManager:
             height=450,
         )
 
+    def create_pca_scatter_plot(
+        self,
+        scores_df: pd.DataFrame,
+        explained_variance_ratio: list,
+        color_col: Optional[str] = None,
+    ):
+        """Render PC1 vs PC2 from experimental_analysis.run_pca's scores_df, axis
+        titles annotated with % variance explained. Colors by color_col if given
+        and present (categorical: one trace per category; numeric: a single
+        trace with a continuous colorscale)."""
+        if self.pca_widget is None:
+            raise ValueError("PlotManager has no pca_widget configured")
+
+        self.pca_widget.data = []
+        pc1_pct = explained_variance_ratio[0] * 100
+        pc2_pct = explained_variance_ratio[1] * 100 if len(explained_variance_ratio) > 1 else 0.0
+
+        if color_col and color_col in scores_df.columns:
+            if pd.api.types.is_numeric_dtype(scores_df[color_col]):
+                self.pca_widget.add_trace(
+                    go.Scatter(
+                        x=scores_df["PC1"],
+                        y=scores_df["PC2"],
+                        mode="markers",
+                        marker=dict(
+                            color=scores_df[color_col], colorscale="Viridis", showscale=True
+                        ),
+                        text=scores_df.get("sample_id"),
+                        hovertemplate="PC1: %{x:.3g}<br>PC2: %{y:.3g}<br>Sample: %{text}<extra></extra>",
+                    )
+                )
+            else:
+                categories = sorted(scores_df[color_col].dropna().unique())
+                colors = self._get_trace_colors("Viridis", len(categories))
+                for category, color in zip(categories, colors):
+                    subset = scores_df[scores_df[color_col] == category]
+                    self.pca_widget.add_trace(
+                        go.Scatter(
+                            x=subset["PC1"],
+                            y=subset["PC2"],
+                            mode="markers",
+                            name=str(category),
+                            marker=dict(color=color),
+                            text=subset.get("sample_id"),
+                            hovertemplate=(
+                                "PC1: %{x:.3g}<br>PC2: %{y:.3g}<br>Sample: %{text}"
+                                f"<extra>{category}</extra>"
+                            ),
+                        )
+                    )
+        else:
+            self.pca_widget.add_trace(
+                go.Scatter(
+                    x=scores_df["PC1"],
+                    y=scores_df["PC2"],
+                    mode="markers",
+                    marker=dict(color="#2E86AB"),
+                    text=scores_df.get("sample_id"),
+                    hovertemplate="PC1: %{x:.3g}<br>PC2: %{y:.3g}<br>Sample: %{text}<extra></extra>",
+                )
+            )
+
+        self.pca_widget.update_layout(
+            title="PCA of checked Process Metadata parameters",
+            xaxis_title=f"PC1 ({pc1_pct:.1f}% variance)",
+            yaxis_title=f"PC2 ({pc2_pct:.1f}% variance)",
+            template="plotly_white",
+            height=500,
+        )
+
+    def create_pareto_front_plot(
+        self,
+        result_df: pd.DataFrame,
+        target_a: str,
+        target_b: str,
+        is_pareto_col: str = "is_pareto_optimal",
+    ):
+        """Render the Pareto-front scatter: dominated points in gray, the front
+        itself highlighted and connected by a line in target_a order."""
+        if self.pareto_widget is None:
+            raise ValueError("PlotManager has no pareto_widget configured")
+
+        self.pareto_widget.data = []
+        dominated = result_df[~result_df[is_pareto_col]]
+        front = result_df[result_df[is_pareto_col]].sort_values(target_a)
+
+        self.pareto_widget.add_trace(
+            go.Scatter(
+                x=dominated[target_a],
+                y=dominated[target_b],
+                mode="markers",
+                name="Dominated",
+                marker=dict(color="lightgray", size=7),
+                text=dominated.get("sample_id"),
+                hovertemplate=f"{target_a}: %{{x:.3g}}<br>{target_b}: %{{y:.3g}}<br>Sample: %{{text}}<extra></extra>",
+            )
+        )
+        self.pareto_widget.add_trace(
+            go.Scatter(
+                x=front[target_a],
+                y=front[target_b],
+                mode="markers+lines",
+                name="Pareto front",
+                marker=dict(color="#D7301F", size=9),
+                line=dict(color="#D7301F", dash="dot"),
+                text=front.get("sample_id"),
+                hovertemplate=f"{target_a}: %{{x:.3g}}<br>{target_b}: %{{y:.3g}}<br>Sample: %{{text}}<extra></extra>",
+            )
+        )
+        self.pareto_widget.update_layout(
+            title=f"Pareto front: {target_a} vs {target_b}",
+            xaxis_title=target_a,
+            yaxis_title=target_b,
+            template="plotly_white",
+            height=500,
+        )
+
+    def create_outlier_plot(self, pca_scores_df: pd.DataFrame, is_outlier: pd.Series):
+        """Render outlier flags positioned via a 2-component PCA of the checked
+        features (computed by the caller, purely for visualization - this method
+        only plots, it doesn't refit anything)."""
+        if self.outlier_widget is None:
+            raise ValueError("PlotManager has no outlier_widget configured")
+
+        self.outlier_widget.data = []
+        normal = pca_scores_df[~is_outlier.to_numpy()]
+        outliers = pca_scores_df[is_outlier.to_numpy()]
+
+        self.outlier_widget.add_trace(
+            go.Scatter(
+                x=normal["PC1"],
+                y=normal["PC2"],
+                mode="markers",
+                name="Normal",
+                marker=dict(color="#2E86AB", size=7),
+                text=normal.get("sample_id"),
+                hovertemplate="PC1: %{x:.3g}<br>PC2: %{y:.3g}<br>Sample: %{text}<extra></extra>",
+            )
+        )
+        self.outlier_widget.add_trace(
+            go.Scatter(
+                x=outliers["PC1"],
+                y=outliers["PC2"],
+                mode="markers",
+                name="Outlier",
+                marker=dict(color="#D7301F", size=10, symbol="x"),
+                text=outliers.get("sample_id"),
+                hovertemplate="PC1: %{x:.3g}<br>PC2: %{y:.3g}<br>Sample: %{text}<extra></extra>",
+            )
+        )
+        self.outlier_widget.update_layout(
+            title="Outlier detection (positioned via PCA of checked parameters)",
+            xaxis_title="PC1",
+            yaxis_title="PC2",
+            template="plotly_white",
+            height=500,
+        )
+
+    def create_process_drift_plot(
+        self,
+        trend_df: pd.DataFrame,
+        param_col: str,
+        datetime_col: str,
+        slope: float,
+        p_value: float,
+    ):
+        """Render param_col vs datetime_col with a fitted linear trend line
+        overlaid, slope/p-value in the title."""
+        if self.drift_widget is None:
+            raise ValueError("PlotManager has no drift_widget configured")
+
+        self.drift_widget.data = []
+        self.drift_widget.add_trace(
+            go.Scatter(
+                x=trend_df[datetime_col],
+                y=trend_df[param_col],
+                mode="markers",
+                name="Measured",
+                marker=dict(color="#2E86AB"),
+                text=trend_df.get("sample_id"),
+                hovertemplate="%{x}<br>"
+                + f"{param_col}: %{{y:.3g}}<br>Sample: %{{text}}<extra></extra>",
+            )
+        )
+
+        time_ordinal = np.arange(len(trend_df))
+        intercept = trend_df[param_col].mean() - slope * time_ordinal.mean()
+        fitted = slope * time_ordinal + intercept
+        self.drift_widget.add_trace(
+            go.Scatter(
+                x=trend_df[datetime_col],
+                y=fitted,
+                mode="lines",
+                name="Trend",
+                line=dict(color="#D7301F", dash="dash"),
+            )
+        )
+
+        self.drift_widget.update_layout(
+            title=f"{param_col} over time (slope={slope:.3g}, p={p_value:.3g})",
+            xaxis_title=datetime_col,
+            yaxis_title=param_col,
+            template="plotly_white",
+            height=450,
+        )
+
     def display_statistics(
         self, df: pd.DataFrame, x_col: str, y_col: str, x_label: str, y_label: str
     ):
@@ -773,22 +1098,34 @@ class PlotManager:
         x_label: str,
         y_label: str,
         colorscale: str = "Viridis",
+        bin_count: Optional[int] = None,
+        target_widget: Optional[go.FigureWidget] = None,
     ):
         """
-        Create a boxplot. Caller is responsible for ensuring x is categorical.
+        Create a boxplot. Caller is responsible for ensuring x is categorical,
+        unless bin_count is given - numeric x is then binned into bin_count
+        equal-width groups via bin_numeric_column. Renders into target_widget if
+        given (e.g. the Experimental tab's ANOVA view), otherwise self.plot_widget
+        (the main Plotting tab), so ANOVA doesn't overwrite what the user has open
+        there.
         """
-        self.plot_widget.data = []
+        widget = target_widget if target_widget is not None else self.plot_widget
+        widget.data = []
         has_sample_id = "sample_id" in df.columns
 
-        # Guard: numeric x makes meaningless boxes (1-2 points per unique value)
+        # Guard: numeric x makes meaningless boxes (1-2 points per unique value),
+        # unless the caller asked for it to be binned into groups.
         if pd.api.types.is_numeric_dtype(df[x_col]):
-            logger.warning(
-                "Boxplot requires a categorical X axis. '%s' is numeric — switch to Scatter.",
-                x_label,
-            )
-            # Render a scatter instead so the user still sees their data
-            self.create_scatter_plot(df, x_col, y_col, color_col, x_label, y_label, colorscale)
-            return
+            if not bin_count:
+                logger.warning(
+                    "Boxplot requires a categorical X axis. '%s' is numeric — switch to Scatter.",
+                    x_label,
+                )
+                # Render a scatter instead so the user still sees their data
+                self.create_scatter_plot(df, x_col, y_col, color_col, x_label, y_label, colorscale)
+                return
+            df = df.copy()
+            df[x_col] = bin_numeric_column(df[x_col], bin_count)
 
         if (
             color_col
@@ -803,7 +1140,7 @@ class PlotManager:
                 mask = df[color_col] == category
                 subset = df[mask]
                 text = subset["sample_id"].tolist() if has_sample_id else None
-                self.plot_widget.add_trace(
+                widget.add_trace(
                     go.Box(
                         x=subset[x_col],
                         y=subset[y_col],
@@ -824,14 +1161,14 @@ class PlotManager:
                 )
         else:
             # No categorical color — one trace per unique x-group, each gets a colorscale color
-            x_groups = sorted(df[x_col].dropna().unique())
+            x_groups = _ordered_unique_values(df[x_col])
             group_colors = self._get_trace_colors(colorscale, len(x_groups))
 
             for x_val, color in zip(x_groups, group_colors):
                 mask = df[x_col] == x_val
                 subset = df[mask]
                 text = subset["sample_id"].tolist() if has_sample_id else None
-                self.plot_widget.add_trace(
+                widget.add_trace(
                     go.Box(
                         x=subset[x_col],
                         y=subset[y_col],
@@ -851,7 +1188,7 @@ class PlotManager:
                     )
                 )
 
-        self.plot_widget.update_layout(
+        widget.update_layout(
             title=f"Distribution of {y_label} grouped by {x_label}",
             xaxis_title=x_label,
             yaxis_title=y_label,
@@ -868,3 +1205,11 @@ class PlotManager:
             ),
             margin=dict(r=200),
         )
+
+        if isinstance(df[x_col].dtype, pd.CategoricalDtype) and df[x_col].dtype.ordered:
+            # Force the axis to follow the (possibly binned) category order rather
+            # than Plotly's default "trace" order, which follows row order and can
+            # scramble numeric bin ranges when a categorical color_col is also set.
+            widget.update_layout(
+                xaxis=dict(categoryorder="array", categoryarray=_ordered_unique_values(df[x_col]))
+            )

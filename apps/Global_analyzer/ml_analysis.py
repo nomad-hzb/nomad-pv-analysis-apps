@@ -219,3 +219,25 @@ def suggest_next_experiments(
         "best_observed": best_observed,
         "suggestions": suggestions,
     }
+
+
+def estimate_max_bo_steps(n_features: int, min_steps: int = 10, max_steps: int = 200) -> dict:
+    """Rule-of-thumb estimate for how many optimization rounds a GP-based Bayesian
+    Optimization typically needs to converge in a low-dimensional setting: roughly
+    10-20 evaluations per active dimension is common guidance for this class of
+    surrogate model. This is a heuristic, not derived from the current dataset -
+    treat it as a ballpark, not a guarantee.
+
+    Returns a dict: n_features, suggested_max_steps, rationale.
+    """
+    suggested_max_steps = min(max(15 * n_features, min_steps), max_steps)
+    rationale = (
+        f"Rough guideline: ~10-20 evaluations per active parameter. With "
+        f"{n_features} parameter(s), a typical GP-based search converges within "
+        f"roughly {suggested_max_steps} total experiments (including ones already run)."
+    )
+    return {
+        "n_features": n_features,
+        "suggested_max_steps": suggested_max_steps,
+        "rationale": rationale,
+    }

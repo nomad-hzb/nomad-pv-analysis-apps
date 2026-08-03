@@ -24,22 +24,21 @@ Usage:
 Author: HySprint Team
 """
 
-import base64
 import logging
 import traceback
-from datetime import datetime
-from typing import List
+from typing import List, Optional
 
+import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
-from data_manager import DataManager
+from data_manager import DataManager, variation_warning
 from gui_components import GUIManager
-from IPython.display import Javascript, Markdown, clear_output
+from IPython.display import Markdown, clear_output
 from IPython.display import display as ipy_display
 from natsort import natsorted
 from plot_manager import PlotManager
-from utils import ParameterManager, ProcessStepManager
+from utils import ParameterManager, ProcessStepManager, trigger_csv_download
 
 from hysprint_utils.api_calls import (
     get_all_eqe,
@@ -84,6 +83,11 @@ class SampleDataExplorer:
             self.gui.rf_widget,
             self.gui.bo_widget,
             self.gui.correlation_scatter_output,
+            self.gui.experimental_pca_widget,
+            self.gui.experimental_pareto_widget,
+            self.gui.experimental_outlier_widget,
+            self.gui.experimental_drift_widget,
+            self.gui.experimental_anova_widget,
         )
 
         # Application state
@@ -92,6 +96,14 @@ class SampleDataExplorer:
         self.current_variation = {}
         self.processing_steps = []
         self.process_display_to_id = {}
+
+        # Shared analysis dataset (Analysis Data / Correlations / RF / BO tabs)
+        self.analysis_df = None
+        self.analysis_metadata_cols = []
+        self.analysis_results_cols = []
+        self._last_correlation_result = None
+        self._last_rf_result = None
+        self._last_bo_result = None
 
         # Connect callbacks
         self._connect_callbacks()
@@ -112,8 +124,18 @@ class SampleDataExplorer:
                 "find_correlations": self._on_find_correlations,
                 "run_random_forest": self._on_run_random_forest,
                 "suggest_experiments": self._on_suggest_experiments,
+                "recalculate_analysis_data": self._on_recalculate_analysis_data,
+                "download_correlations": self._on_download_correlations,
+                "download_rf_results": self._on_download_rf_results,
+                "download_bo_suggestions": self._on_download_bo_suggestions,
+                "run_pca": self._on_run_pca,
+                "find_pareto_front": self._on_find_pareto_front,
+                "detect_outliers": self._on_detect_outliers,
+                "compute_process_drift": self._on_compute_process_drift,
+                "run_anova": self._on_run_anova,
             }
         )
+        self.gui.connect_preset_callbacks(self._apply_preset)
 
     def _update_status(self, message: str):
         """Update status message."""
@@ -136,22 +158,17 @@ class SampleDataExplorer:
 
     def _refresh_ml_target_options(self):
         """Keep the Random Forest / Bayesian Optimization target dropdowns in sync
-        with every numeric result parameter currently loaded across ALL measurement
-        types (data_manager.current_results), preferring an efficiency-like column as
-        the default target.
+        with the checked Results columns from the Analysis Data tab, preferring an
+        efficiency-like column as the default target.
 
-        Deliberately reads current_results directly rather than merged_data: results
-        are loaded eagerly for every measurement type present in the batch (JV, EQE,
-        MPP, ...), independent of which one is picked as a Plotting-tab data source,
-        so e.g. EQE parameters should be selectable here even if the Plotting tab's
-        X/Y/Color are all set to JV-derived columns (or vice versa).
+        Targets are always drawn from analysis_results_cols (measurement results),
+        never analysis_metadata_cols (process metadata) - enforces "targets are
+        always results" at the UI level. Restricted to the currently checked
+        subset so unchecking a result column there also removes it as a target
+        option.
         """
-        numeric_cols = set()
-        for result_df in self.data_manager.current_results.values():
-            if result_df is None or result_df.empty:
-                continue
-            numeric_cols.update(result_df.select_dtypes(include="number").columns)
-        numeric_cols = sorted(numeric_cols)
+        checked_results = set(self.gui.get_checked_results_columns())
+        numeric_cols = sorted(col for col in self.analysis_results_cols if col in checked_results)
 
         for selector in (self.gui.rf_target_selector, self.gui.bo_target_selector):
             previous_value = selector.value
@@ -165,39 +182,20 @@ class SampleDataExplorer:
                 default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
                 selector.value = default if default else numeric_cols[0]
 
-    def _get_target_series(self, target_col: str):
-        """Locate target_col in whichever current_results dataframe has it (results
-        are loaded eagerly for every measurement type present in the batch,
-        independent of the Plotting tab's X/Y/Color choices - see
-        _refresh_ml_target_options), and return one row per sample_id (averaged if a
-        measurement type reports multiple rows per sample, e.g. multiple pixels)."""
-        for result_df in self.data_manager.current_results.values():
-            if result_df is None or "sample_id" not in result_df.columns:
-                continue
-            if target_col not in result_df.columns:
-                continue
-            candidate = result_df[["sample_id", target_col]].dropna(subset=[target_col])
-            if candidate.empty:
-                continue
-            return candidate.groupby("sample_id", as_index=False)[target_col].mean()
-        return None
-
-    def _build_optimization_dataframe(self, target_col: str):
-        """Build the dataframe Random Forest / Bayesian Optimization actually train
-        on: every numeric process/preparation parameter across ALL loaded process
-        types (data_manager.current_metadata), joined on sample_id with the chosen
-        target column (data_manager.current_results).
+    def _build_process_dataframe(self) -> Optional[pd.DataFrame]:
+        """Outer-merge every process/preparation metadata type currently loaded
+        (data_manager.current_metadata) into one row-per-sample_id dataframe.
 
         Deliberately independent of data_manager.merged_data / the Plotting tab's
         X/Y/Color selections - a common plotting workflow (e.g. Voc vs efficiency,
         both "Results") never selects a metadata data source for any axis, which
         would leave merged_data with zero process parameters even though
-        current_metadata is already fully loaded. Returns (combined_df, feature_cols)
-        - feature_cols already excludes the target and any near-constant column
-        (<=1 unique value), so the caller doesn't need to filter further.
+        current_metadata is already fully loaded. Shared by
+        _rebuild_full_analysis_dataframe, which feeds the Analysis Data /
+        Correlations / Random Forest / Bayesian Optimization tabs.
         """
         if not self.data_manager.current_metadata:
-            return None, []
+            return None
 
         process_df = None
         for metadata_type, metadata_df in self.data_manager.current_metadata.items():
@@ -218,22 +216,125 @@ class SampleDataExplorer:
                     suffixes=("", f"_{metadata_type}"),
                 )
 
-        if process_df is None:
-            return None, []
+        return process_df
 
-        target_series = self._get_target_series(target_col)
-        if target_series is None:
-            return None, []
+    def _build_results_dataframe(self) -> Optional[pd.DataFrame]:
+        """Outer-merge every measurement result type currently loaded
+        (data_manager.current_results) into one row-per-sample_id dataframe,
+        analogous to _build_process_dataframe but for results. Multiple rows per
+        sample_id within a single result type (e.g. multiple pixels) are averaged
+        first, matching _get_target_series's per-target averaging.
 
-        combined = pd.merge(process_df, target_series, on="sample_id", how="inner")
+        Also carries the first non-null 'datetime' per sample_id through
+        (dropped by the numeric-only mean otherwise) - measurement results
+        commonly have a timestamp (see the "top_level_fields" list results are
+        loaded with), and it's the Experimental tab's Process Drift tool's only
+        source for one, since not every process-metadata loader captures it.
+        """
+        if not self.data_manager.current_results:
+            return None
 
-        feature_cols = [
-            col
-            for col in combined.select_dtypes(include="number").columns
-            if col != target_col and combined[col].dropna().nunique() > 1
-        ]
+        results_df = None
+        for result_type, result_type_df in self.data_manager.current_results.items():
+            if (
+                result_type_df is None
+                or result_type_df.empty
+                or "sample_id" not in result_type_df.columns
+            ):
+                continue
+            grouped = result_type_df.groupby("sample_id", as_index=False).mean(numeric_only=True)
+            if "datetime" in result_type_df.columns:
+                first_datetime = result_type_df.groupby("sample_id", as_index=False)[
+                    "datetime"
+                ].first()
+                grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
+            if results_df is None:
+                results_df = grouped
+            else:
+                results_df = pd.merge(
+                    results_df,
+                    grouped,
+                    on="sample_id",
+                    how="outer",
+                    suffixes=("", f"_{result_type}"),
+                )
 
-        return combined, feature_cols
+        return results_df
+
+    def _rebuild_full_analysis_dataframe(self):
+        """Build the shared dataset behind the Analysis Data / Correlations / RF /
+        BO tabs: an inner join of every process/preparation parameter with every
+        measurement result, on sample_id. Populates self.analysis_df and the
+        checked-by-default Results/Process Metadata column lists shown in the
+        Analysis Data tab's checkboxes, and refreshes the variation-count warning.
+        """
+        process_df = self._build_process_dataframe()
+        results_df = self._build_results_dataframe()
+
+        if process_df is None or results_df is None:
+            self.analysis_df = None
+            self.analysis_metadata_cols = []
+            self.analysis_results_cols = []
+        else:
+            combined = pd.merge(
+                process_df, results_df, on="sample_id", how="inner", suffixes=("", "_result")
+            )
+            metadata_numeric = set(process_df.select_dtypes(include="number").columns)
+            results_numeric = set(results_df.select_dtypes(include="number").columns)
+
+            self.analysis_df = combined
+            self.analysis_metadata_cols = [
+                col
+                for col in combined.select_dtypes(include="number").columns
+                if col in metadata_numeric and combined[col].dropna().nunique() > 1
+            ]
+            self.analysis_results_cols = [
+                col
+                for col in combined.select_dtypes(include="number").columns
+                if col in results_numeric and combined[col].dropna().nunique() > 1
+            ]
+
+        self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        self._refresh_variation_warning()
+
+    def _refresh_variation_warning(self):
+        """Show an advisory (never blocking) warning for checked metadata columns
+        with too little variation to be useful for correlation/RF/BO."""
+        with self.gui.variation_warning_output:
+            clear_output()
+            if self.analysis_df is None:
+                return
+            checked_metadata = self.gui.get_checked_metadata_columns()
+            low_variation = variation_warning(self.analysis_df, checked_metadata)
+            if low_variation:
+                print(
+                    "⚠️ For better results, use parameters with more variation "
+                    f"(aim for 6+ distinct values): {', '.join(low_variation)}"
+                )
+
+    def _on_recalculate_analysis_data(self, button):
+        """Rebuild the shared analysis dataframe and re-run whichever of
+        Correlations/RF/BO already produced a result, so Recalculate visibly
+        updates whatever the user has open without requiring a trip back through
+        each tab's own button."""
+        with self.gui.analysis_data_status_output:
+            clear_output()
+            print("Recalculating...")
+
+        self._rebuild_full_analysis_dataframe()
+        self._refresh_ml_target_options()
+        self._refresh_experimental_options()
+
+        with self.gui.analysis_data_status_output:
+            clear_output()
+            print("✓ Analysis data updated.")
+
+        if self._last_correlation_result is not None:
+            self._on_find_correlations(None)
+        if self._last_rf_result is not None:
+            self._on_run_random_forest(None)
+        if self._last_bo_result is not None:
+            self._on_suggest_experiments(None)
 
     def _initialize_batch_options(self):
         """Initialize batch options from API."""
@@ -337,7 +438,9 @@ class SampleDataExplorer:
 
             # Generate parameter summary
             self._refresh_parameter_summary()
+            self._rebuild_full_analysis_dataframe()
             self._refresh_ml_target_options()
+            self._refresh_experimental_options()
 
             self._update_status(
                 f"✓ Loaded {len(self.current_sample_ids)} samples with "
@@ -830,6 +933,7 @@ class SampleDataExplorer:
         # Update parameter summary
         self._refresh_parameter_summary()
         self._refresh_ml_target_options()
+        self._refresh_experimental_options()
 
     def _on_toggle_varying_only(self, change):
         """Handle toggle for showing only varying parameters."""
@@ -890,6 +994,45 @@ class SampleDataExplorer:
         ):
             self._load_data_for_source(self.gui.color_data_source_selector.value, "color")
 
+    def _apply_preset(self, preset: dict):
+        """Apply a config.PRESET_PLOTS entry by driving the same selectors/methods
+        the manual dropdown flow uses, then creating the plot.
+
+        Sets each selector's .value directly rather than relying on ipywidgets'
+        change-event firing (a preset may set a dropdown to the value it already
+        holds, which does not fire an observer), so every axis is force-refreshed
+        via the same internal methods the observers call.
+        """
+        if not self.current_sample_ids:
+            self._update_status("⚠️ Load batches before applying a preset plot.")
+            return
+
+        for axis in ("x", "y", "color"):
+            axis_cfg = preset.get(axis)
+            data_source_sel = getattr(self.gui, f"{axis}_data_source_selector")
+            material_sel = getattr(self.gui, f"{axis}_material_selector")
+            param_sel = getattr(self.gui, f"{axis}_param_selector")
+
+            if axis_cfg is None:
+                if axis == "color" and "None" in data_source_sel.options:
+                    data_source_sel.value = "None"
+                continue
+
+            data_source_sel.value = axis_cfg["source"]
+            self._load_data_for_source(axis_cfg["source"], axis)
+
+            material_sel.value = axis_cfg["material"]
+            if axis_cfg["source"] == "Results":
+                self._filter_results_parameters(axis, axis_cfg["material"])
+
+            param_sel.value = axis_cfg["param"]
+
+        self.gui.plot_type_selector.value = preset.get("plot_type", "Scatter")
+        self.gui.jv_aggregation_selector.value = preset.get("aggregation", "All Points")
+
+        self._rebuild_merged_data()
+        self._on_create_plot(None)
+
     def _on_create_plot(self, button):
         """Handle plot creation."""
         if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
@@ -947,12 +1090,16 @@ class SampleDataExplorer:
             colorscale = self.gui.colorscale_selector.value
 
             boxplot_warning = ""
-            if plot_type == "Boxplot" and pd.api.types.is_numeric_dtype(plot_df[x_col]):
+            numeric_x_boxplot = plot_type == "Boxplot" and pd.api.types.is_numeric_dtype(
+                plot_df[x_col]
+            )
+            if numeric_x_boxplot and not self.gui.boxplot_bin_toggle.value:
                 boxplot_warning = (
                     f"\n⚠️  Boxplot requires a categorical X axis.\n"
                     f"   '{x_param}' is numeric — falling back to Scatter.\n"
                     f"   Suggestion: use 'Material Type' or a categorical process\n"
-                    f"   parameter as X for a meaningful boxplot."
+                    f"   parameter as X for a meaningful boxplot, or tick\n"
+                    f"   'Bin numeric X into groups' to bin it automatically."
                 )
                 self.plot_manager.create_scatter_plot(
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
@@ -961,8 +1108,9 @@ class SampleDataExplorer:
                     self.data_manager.sample_entry_links, self.gui.click_output
                 )
             elif plot_type == "Boxplot":
+                bin_count = self.gui.boxplot_bin_count.value if numeric_x_boxplot else None
                 self.plot_manager.create_box_plot(
-                    plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
+                    plot_df, x_col, y_col, color_col, x_param, y_param, colorscale, bin_count
                 )
                 self.plot_manager.register_click_handler(
                     self.data_manager.sample_entry_links, self.gui.click_output
@@ -1027,46 +1175,89 @@ class SampleDataExplorer:
                     plot_type=self.gui.plot_type_selector.value,
                 )
 
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"plot_data_{timestamp}.csv"
-
-                # Convert to CSV and encode
-                csv_string = plot_df.to_csv(index=False)
-                b64 = base64.b64encode(csv_string.encode()).decode()
-
-                # JavaScript to trigger browser download
-                js_code = f"""
-                (function() {{
-                    var csvContent = atob('{b64}');
-                    var blob = new Blob([csvContent], {{ type: 'text/csv;charset=utf-8;' }});
-                    var link = document.createElement('a');
-                    var url = URL.createObjectURL(blob);
-                    link.setAttribute('href', url);
-                    link.setAttribute('download', '{filename}');
-                    link.style.visibility = 'hidden';
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                }})();
-                """
-
+                filename = trigger_csv_download(plot_df, "plot_data")
                 print(
                     f"✓ Downloading {filename} ({len(plot_df)} rows, {len(plot_df.columns)} columns)..."
                 )
-                ipy_display(Javascript(js_code))
 
             except Exception as e:
                 print(f"❌ Download error: {e}")
                 traceback.print_exc()
 
+    def _on_download_correlations(self, button):
+        """Download the last-computed correlation matrix as CSV via browser."""
+        with self.gui.download_output:
+            clear_output()
+
+            if not self._last_correlation_result:
+                print("⚠️ No correlation results yet - click Find Correlations first.")
+                return
+
+            corr_df = self._last_correlation_result["dataframe"]
+            filename = trigger_csv_download(corr_df, "correlations")
+            print(
+                f"✓ Downloading {filename} ({len(corr_df)} rows, {len(corr_df.columns)} columns)..."
+            )
+
+    def _on_download_rf_results(self, button):
+        """Download the last Random Forest feature importances as CSV via browser."""
+        with self.gui.download_output:
+            clear_output()
+
+            if not self._last_rf_result:
+                print("⚠️ No Random Forest results yet - click Run Random Forest first.")
+                return
+
+            importances_df = pd.DataFrame(
+                self._last_rf_result["importances"], columns=["parameter", "importance"]
+            )
+            filename = trigger_csv_download(importances_df, "random_forest_importances")
+            print(
+                f"✓ Downloading {filename} ({len(importances_df)} rows, "
+                f"{len(importances_df.columns)} columns)..."
+            )
+
+    def _on_download_bo_suggestions(self, button):
+        """Download the last Bayesian Optimization suggestions as CSV via browser."""
+        with self.gui.download_output:
+            clear_output()
+
+            if not self._last_bo_result:
+                print("⚠️ No suggestions yet - click Suggest Next Experiments first.")
+                return
+
+            suggestions_df = self._last_bo_result["suggestions"]
+            filename = trigger_csv_download(suggestions_df, "bo_suggestions")
+            print(
+                f"✓ Downloading {filename} ({len(suggestions_df)} rows, "
+                f"{len(suggestions_df.columns)} columns)..."
+            )
+
     def _on_find_correlations(self, button):
-        """Compute and render a correlation view over the currently merged dataset, in
-        whichever of the two formats (Heatmap / Scatter Matrix) is currently selected."""
+        """Compute and render a correlation view over the shared analysis dataset
+        (Analysis Data tab), in whichever of the two formats (Heatmap / Scatter
+        Matrix) is currently selected. Heatmap puts results on x, process metadata
+        on y; Scatter Matrix keeps its full mixed-column grid, just restricted to
+        the checked columns."""
         with self.gui.correlation_status_output:
             clear_output()
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
-                print("⚠️ No data available. Load batches and select data sources first.")
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                self._last_correlation_result = None
+                return
+
+            checked_results_set = set(self.gui.get_checked_results_columns())
+            checked_metadata_set = set(self.gui.get_checked_metadata_columns())
+            checked_results = [c for c in self.analysis_results_cols if c in checked_results_set]
+            checked_metadata = [c for c in self.analysis_metadata_cols if c in checked_metadata_set]
+
+            if not checked_results or not checked_metadata:
+                print(
+                    "⚠️ Check at least one Results column and one Process Metadata "
+                    "column in the Analysis Data tab."
+                )
+                self._last_correlation_result = None
                 return
 
             min_unique = self.gui.correlation_min_unique.value
@@ -1075,67 +1266,111 @@ class SampleDataExplorer:
             try:
                 if plot_type == "Heatmap":
                     self.gui.correlation_scatter_output.clear_output()
-                    used_cols = self.plot_manager.create_correlation_heatmap(
-                        self.data_manager.merged_data, min_unique=min_unique
+                    results_used, metadata_used = self.plot_manager.create_metadata_results_heatmap(
+                        self.analysis_df, checked_results, checked_metadata, min_unique=min_unique
                     )
-                    if len(used_cols) < 2:
+                    if not results_used or not metadata_used:
                         print(
-                            f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
-                            f"{min_unique} unique values - need at least 2 for a heatmap."
+                            f"⚠️ Not enough varying parameters (need >{min_unique} unique "
+                            "values) on both axes for a heatmap."
                         )
+                        self._last_correlation_result = None
                     else:
-                        print(f"✓ Correlation heatmap computed for {len(used_cols)} parameters.")
+                        print(
+                            f"✓ Correlation heatmap computed: {len(results_used)} result(s) "
+                            f"x {len(metadata_used)} metadata parameter(s)."
+                        )
+                        numeric_df = self.analysis_df.select_dtypes(include="number")
+                        corr_df = (
+                            pd.DataFrame(
+                                {
+                                    result_col: numeric_df[metadata_used].corrwith(
+                                        numeric_df[result_col]
+                                    )
+                                    for result_col in results_used
+                                }
+                            )
+                            .reset_index()
+                            .rename(columns={"index": "metadata_parameter"})
+                        )
+                        self._last_correlation_result = {
+                            "type": "heatmap",
+                            "results": results_used,
+                            "metadata": metadata_used,
+                            "dataframe": corr_df,
+                        }
                 else:
                     self.gui.correlation_widget.data = []
                     self.gui.correlation_widget.update_layout(
                         title='Switch "Format" to Heatmap to use this view'
                     )
+                    combined_df = self.analysis_df[checked_results + checked_metadata]
                     used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
-                        self.data_manager.merged_data, min_unique=min_unique
+                        combined_df, min_unique=min_unique
                     )
                     if len(used_cols) < 2:
                         print(
                             f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
                             f"{min_unique} unique values - need at least 2 for a scatter matrix."
                         )
+                        self._last_correlation_result = None
                     else:
                         note = " (showing the first 12)" if truncated else ""
                         print(f"✓ Scatter matrix computed for {len(used_cols)} parameters{note}.")
+                        corr_df = combined_df[used_cols].corr().reset_index()
+                        corr_df = corr_df.rename(columns={"index": "parameter"})
+                        self._last_correlation_result = {
+                            "type": "scatter_matrix",
+                            "columns": used_cols,
+                            "dataframe": corr_df,
+                        }
             except Exception as e:
                 print(f"❌ Error computing correlations: {e}")
                 logger.exception("Error computing correlations")
+                self._last_correlation_result = None
 
     def _on_run_random_forest(self, button):
-        """Fit a Random Forest to predict the chosen target from the currently loaded
-        process/preparation parameters, and report which of them matter most."""
+        """Fit a Random Forest to predict the chosen target (a Results column) from
+        the checked Process Metadata columns in the Analysis Data tab, and report
+        which of them matter most."""
         with self.gui.rf_output:
             clear_output(wait=True)
 
-            if not self.data_manager.current_metadata and not self.data_manager.current_results:
+            if self.analysis_df is None or self.analysis_df.empty:
                 print("⚠️ No data available. Load batches and select data sources first.")
+                self._last_rf_result = None
                 return
 
             target = self.gui.rf_target_selector.value
             if not target:
                 print("⚠️ Pick a target parameter first.")
+                self._last_rf_result = None
                 return
 
-            combined_df, feature_cols = self._build_optimization_dataframe(target)
-            if combined_df is None or not feature_cols:
+            checked_metadata = set(self.gui.get_checked_metadata_columns())
+            feature_cols = [
+                col
+                for col in self.analysis_metadata_cols
+                if col in checked_metadata and col != target
+            ]
+            if not feature_cols:
                 print(
-                    "⚠️ No process/preparation parameters available to use as features. "
-                    "Load batches with process step data (not just results) first."
+                    "⚠️ No Process Metadata columns checked. Check at least one in "
+                    "the Analysis Data tab."
                 )
+                self._last_rf_result = None
                 return
 
             try:
-                result = ml.run_random_forest(combined_df, target, feature_cols=feature_cols)
+                result = ml.run_random_forest(self.analysis_df, target, feature_cols=feature_cols)
             except ValueError as e:
                 print(f"⚠️ {e}")
+                self._last_rf_result = None
                 return
             except Exception as e:
                 print(f"❌ Error running Random Forest: {e}")
                 logger.exception("Error running Random Forest")
+                self._last_rf_result = None
                 return
 
             held_out_note = (
@@ -1156,46 +1391,57 @@ class SampleDataExplorer:
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_feature_importance_plot(result["importances"], target)
+            self._last_rf_result = result
 
     def _on_suggest_experiments(self, button):
         """Suggest next parameter combinations most likely to improve the chosen
-        target, using a Gaussian Process surrogate fit on the currently loaded
-        process/preparation parameters."""
+        target (a Results column), using a Gaussian Process surrogate fit on the
+        checked Process Metadata columns in the Analysis Data tab."""
         with self.gui.bo_output:
             clear_output(wait=True)
 
-            if not self.data_manager.current_metadata and not self.data_manager.current_results:
+            if self.analysis_df is None or self.analysis_df.empty:
                 print("⚠️ No data available. Load batches and select data sources first.")
+                self._last_bo_result = None
                 return
 
             target = self.gui.bo_target_selector.value
             if not target:
                 print("⚠️ Pick a target parameter first.")
+                self._last_bo_result = None
                 return
 
             direction = self.gui.bo_direction_selector.value.lower()
 
-            combined_df, feature_cols = self._build_optimization_dataframe(target)
-            if combined_df is None or not feature_cols:
+            checked_metadata = set(self.gui.get_checked_metadata_columns())
+            feature_cols = [
+                col
+                for col in self.analysis_metadata_cols
+                if col in checked_metadata and col != target
+            ]
+            if not feature_cols:
                 print(
-                    "⚠️ No process/preparation parameters available to use as features. "
-                    "Load batches with process step data (not just results) first."
+                    "⚠️ No Process Metadata columns checked. Check at least one in "
+                    "the Analysis Data tab."
                 )
+                self._last_bo_result = None
                 return
 
             try:
                 result = ml.suggest_next_experiments(
-                    combined_df,
+                    self.analysis_df,
                     target,
                     feature_cols=feature_cols,
                     direction=direction,
                 )
             except ValueError as e:
                 print(f"⚠️ {e}")
+                self._last_bo_result = None
                 return
             except Exception as e:
                 print(f"❌ Error suggesting experiments: {e}")
                 logger.exception("Error suggesting experiments")
+                self._last_bo_result = None
                 return
 
             suggestions = result["suggestions"]
@@ -1225,14 +1471,314 @@ class SampleDataExplorer:
                     f"| {row['expected_improvement']:.3g} |"
                 )
 
+            steps_estimate = ml.estimate_max_bo_steps(result["n_features"])
+
             summary = (
                 f"### Suggested next experiments to {result['direction']} `{target}`\n\n"
                 f"- Samples used: **{result['n_samples']}**\n"
-                f"- Best observed so far: **{result['best_observed']:.4g}**\n\n"
-                + "\n".join(table_lines)
+                f"- Best observed so far: **{result['best_observed']:.4g}**\n"
+                f"- {steps_estimate['rationale']}\n\n" + "\n".join(table_lines)
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_bo_suggestions_plot(suggestions, target)
+            self._last_bo_result = result
+
+    def _refresh_experimental_options(self):
+        """Keep the Experimental tab's dropdowns in sync with the checked columns
+        (mirrors _refresh_ml_target_options). ANOVA's grouping selector is the one
+        exception: it's populated from analysis_df's categorical columns directly,
+        not gated by the numeric-only Analysis Data checkboxes - see the plan's
+        "design gap" note on why there's no categorical checkbox to filter by."""
+        checked_results = set(self.gui.get_checked_results_columns())
+        checked_metadata = set(self.gui.get_checked_metadata_columns())
+        results_cols = sorted(c for c in self.analysis_results_cols if c in checked_results)
+        metadata_cols = sorted(c for c in self.analysis_metadata_cols if c in checked_metadata)
+
+        color_options = ["None"] + results_cols + metadata_cols
+        prev = self.gui.experimental_pca_color_selector.value
+        self.gui.experimental_pca_color_selector.options = color_options
+        self.gui.experimental_pca_color_selector.value = prev if prev in color_options else "None"
+
+        for selector in (
+            self.gui.experimental_pareto_target_a_selector,
+            self.gui.experimental_pareto_target_b_selector,
+        ):
+            prev = selector.value
+            selector.options = results_cols
+            selector.disabled = not results_cols
+            if results_cols:
+                selector.value = prev if prev in results_cols else results_cols[0]
+
+        selector = self.gui.experimental_drift_param_selector
+        prev = selector.value
+        selector.options = metadata_cols
+        selector.disabled = not metadata_cols
+        if metadata_cols:
+            selector.value = prev if prev in metadata_cols else metadata_cols[0]
+
+        categorical_cols = []
+        if self.analysis_df is not None:
+            # Exclude sample_id and anything else that's unique per row - not a
+            # real grouping variable, just an identifier.
+            n_rows = len(self.analysis_df)
+            categorical_cols = sorted(
+                col
+                for col in self.analysis_df.select_dtypes(include="object").columns
+                if col != "sample_id" and 2 <= self.analysis_df[col].nunique() < n_rows
+            )
+        selector = self.gui.experimental_anova_group_selector
+        prev = selector.value
+        selector.options = categorical_cols
+        selector.disabled = not categorical_cols
+        if categorical_cols:
+            selector.value = prev if prev in categorical_cols else categorical_cols[0]
+
+        selector = self.gui.experimental_anova_value_selector
+        prev = selector.value
+        selector.options = results_cols
+        selector.disabled = not results_cols
+        if results_cols:
+            selector.value = prev if prev in results_cols else results_cols[0]
+
+    def _on_run_pca(self, button):
+        """Run PCA over the checked Process Metadata columns and plot PC1 vs PC2."""
+        with self.gui.experimental_pca_output:
+            clear_output(wait=True)
+
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                return
+
+            checked_metadata = set(self.gui.get_checked_metadata_columns())
+            feature_cols = [c for c in self.analysis_metadata_cols if c in checked_metadata]
+
+            try:
+                result = experimental.run_pca(self.analysis_df, feature_cols=feature_cols)
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error running PCA: {e}")
+                logger.exception("Error running PCA")
+                return
+
+            color_col = self.gui.experimental_pca_color_selector.value
+            color_col = None if not color_col or color_col == "None" else color_col
+            scores_df = result["scores_df"]
+            if (
+                color_col
+                and color_col in self.analysis_df.columns
+                and "sample_id" in scores_df.columns
+            ):
+                scores_df = scores_df.merge(
+                    self.analysis_df[["sample_id", color_col]], on="sample_id", how="left"
+                )
+
+            variance_pct = ", ".join(f"{v:.1%}" for v in result["explained_variance_ratio"])
+            summary = (
+                f"### PCA over {len(result['feature_cols'])} checked Process Metadata parameters\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Explained variance (PC1, PC2, ...): **{variance_pct}**\n"
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_pca_scatter_plot(
+                scores_df, result["explained_variance_ratio"], color_col=color_col
+            )
+
+    def _on_find_pareto_front(self, button):
+        """Find the Pareto-optimal trade-off between two checked Results columns."""
+        with self.gui.experimental_pareto_output:
+            clear_output(wait=True)
+
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                return
+
+            target_a = self.gui.experimental_pareto_target_a_selector.value
+            target_b = self.gui.experimental_pareto_target_b_selector.value
+            if not target_a or not target_b:
+                print("⚠️ Pick two target parameters first.")
+                return
+            if target_a == target_b:
+                print("⚠️ Pick two different target parameters.")
+                return
+
+            direction_a = self.gui.experimental_pareto_direction_a_selector.value.lower()
+            direction_b = self.gui.experimental_pareto_direction_b_selector.value.lower()
+
+            try:
+                result = experimental.find_pareto_front(
+                    self.analysis_df, target_a, target_b, direction_a, direction_b
+                )
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error finding Pareto front: {e}")
+                logger.exception("Error finding Pareto front")
+                return
+
+            summary = (
+                f"### Pareto front: {direction_a} `{target_a}` vs {direction_b} `{target_b}`\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Samples on the front: **{result['n_on_front']}**\n"
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_pareto_front_plot(result["result_df"], target_a, target_b)
+
+    def _on_detect_outliers(self, button):
+        """Run Isolation Forest over the checked Process Metadata + Results columns
+        combined, to flag samples whose overall profile looks unusual."""
+        with self.gui.experimental_outlier_output:
+            clear_output(wait=True)
+
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                return
+
+            checked_metadata = set(self.gui.get_checked_metadata_columns())
+            checked_results = set(self.gui.get_checked_results_columns())
+            feature_cols = [
+                c
+                for c in (*self.analysis_metadata_cols, *self.analysis_results_cols)
+                if c in checked_metadata or c in checked_results
+            ]
+            if not feature_cols:
+                print("⚠️ No columns checked. Check at least one in the Analysis Data tab.")
+                return
+
+            contamination = self.gui.experimental_outlier_contamination_selector.value
+
+            try:
+                result = experimental.detect_outliers(
+                    self.analysis_df, feature_cols=feature_cols, contamination=contamination
+                )
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error detecting outliers: {e}")
+                logger.exception("Error detecting outliers")
+                return
+
+            try:
+                pca_result = experimental.run_pca(
+                    result["result_df"], feature_cols=result["feature_cols"]
+                )
+            except ValueError:
+                print(
+                    f"✓ Found {result['n_outliers']} outlier(s) out of {result['n_samples']} "
+                    "samples, but there aren't enough varying parameters to plot a 2D "
+                    "PCA view."
+                )
+                outlier_ids = result["result_df"].loc[
+                    result["result_df"]["is_outlier"], "sample_id"
+                ]
+                ipy_display(Markdown("Outlier sample IDs: " + ", ".join(outlier_ids.astype(str))))
+                return
+
+            summary = (
+                f"### Outlier detection over {len(result['feature_cols'])} checked parameters\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Outliers flagged: **{result['n_outliers']}** "
+                f"(contamination={contamination:.2f})\n"
+            )
+            ipy_display(Markdown(summary))
+            is_outlier = (
+                result["result_df"]
+                .set_index("sample_id")
+                .loc[pca_result["scores_df"]["sample_id"], "is_outlier"]
+            )
+            self.plot_manager.create_outlier_plot(
+                pca_result["scores_df"], is_outlier.reset_index(drop=True)
+            )
+
+    def _on_compute_process_drift(self, button):
+        """Check whether a checked Process Metadata parameter trends over time."""
+        with self.gui.experimental_drift_output:
+            clear_output(wait=True)
+
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                return
+
+            param_col = self.gui.experimental_drift_param_selector.value
+            if not param_col:
+                print("⚠️ Pick a parameter first.")
+                return
+
+            try:
+                result = experimental.compute_process_drift(self.analysis_df, param_col)
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error checking process drift: {e}")
+                logger.exception("Error checking process drift")
+                return
+
+            trend_note = (
+                "significant trend" if result["p_value"] < 0.05 else "no significant trend detected"
+            )
+            summary = (
+                f"### {param_col} over time\n\n"
+                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Slope: **{result['slope']:.3g}** per measurement "
+                f"(p={result['p_value']:.3g} - {trend_note})\n"
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_process_drift_plot(
+                result["trend_df"],
+                param_col,
+                result["datetime_col"],
+                result["slope"],
+                result["p_value"],
+            )
+
+    def _on_run_anova(self, button):
+        """One-way ANOVA: does a checked Results column differ significantly
+        across groups of a categorical process metadata column?"""
+        with self.gui.experimental_anova_output:
+            clear_output(wait=True)
+
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("⚠️ No data available. Load batches first.")
+                return
+
+            group_col = self.gui.experimental_anova_group_selector.value
+            value_col = self.gui.experimental_anova_value_selector.value
+            if not group_col or not value_col:
+                print("⚠️ Pick a group-by column and a measure first.")
+                return
+
+            try:
+                result = experimental.run_anova(self.analysis_df, group_col, value_col)
+            except ValueError as e:
+                print(f"⚠️ {e}")
+                return
+            except Exception as e:
+                print(f"❌ Error running ANOVA: {e}")
+                logger.exception("Error running ANOVA")
+                return
+
+            groups_line = ", ".join(f"{name} (n={n})" for name, n in result["groups"].items())
+            significance_note = "significant" if result["significant"] else "not significant"
+            summary = (
+                f"### ANOVA: `{value_col}` across `{group_col}`\n\n"
+                f"- Groups: {groups_line}\n"
+                f"- F-statistic: **{result['f_stat']:.3g}**\n"
+                f"- p-value: **{result['p_value']:.3g}** ({significance_note} at p<0.05)\n"
+            )
+            ipy_display(Markdown(summary))
+            self.plot_manager.create_box_plot(
+                self.analysis_df,
+                group_col,
+                value_col,
+                None,
+                group_col,
+                value_col,
+                target_widget=self.gui.experimental_anova_widget,
+            )
 
     def create_interface(self):
         """Create and return the complete interface."""

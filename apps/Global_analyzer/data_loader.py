@@ -135,6 +135,7 @@ class HySprintDataLoader:
                     "description": ijp_data.get("description", ""),
                     "location": ijp_data.get("location", ""),
                     "position_in_plan": ijp_data.get("positon_in_experimental_plan", None),
+                    "operator": ijp_data.get("operator", ""),
                 }
 
                 # Annealing information
@@ -422,6 +423,7 @@ class HySprintDataLoader:
                     "name": sdc_data.get("name", ""),
                     "location": sdc_data.get("location", ""),
                     "position_in_plan": sdc_data.get("positon_in_experimental_plan", None),
+                    "operator": sdc_data.get("operator", ""),
                 }
 
                 # Layer information
@@ -507,6 +509,7 @@ class HySprintDataLoader:
                     "description": spin_data.get("description", ""),
                     "location": spin_data.get("location", ""),
                     "position_in_plan": spin_data.get("positon_in_experimental_plan", None),
+                    "operator": spin_data.get("operator", ""),
                 }
 
                 # Layer information

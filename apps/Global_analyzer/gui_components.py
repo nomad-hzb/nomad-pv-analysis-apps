@@ -3,8 +3,10 @@ GUI Components for HySprint Data Analysis Tool
 Creates and manages all user interface widgets
 """
 
+import config
 import ipywidgets as widgets
 import plotly.graph_objects as go
+import utils
 from natsort import natsorted
 
 from hysprint_utils.api_calls import get_batch_ids_with_authors
@@ -136,6 +138,21 @@ class GUIManager:
             layout={"width": "400px"},
         )
 
+        self.boxplot_bin_toggle = widgets.Checkbox(
+            value=False,
+            description="Bin numeric X into groups (Boxplot only)",
+            style={"description_width": "initial"},
+        )
+
+        self.boxplot_bin_count = widgets.BoundedIntText(
+            value=5,
+            min=2,
+            max=20,
+            description="Bins:",
+            style={"description_width": "50px"},
+            layout={"width": "150px"},
+        )
+
         self.colorscale_selector = widgets.Dropdown(
             options=[
                 # ── Colorscales ──
@@ -192,6 +209,12 @@ class GUIManager:
 
         self.download_output = widgets.Output()
 
+        # ====================================================================
+        # PLOT PRESETS
+        # ====================================================================
+        self.preset_buttons: dict = {}
+        self.preset_accordion = self._create_preset_widgets()
+
         self.click_output = widgets.Output(
             layout={
                 "border": "1px solid #ddd",
@@ -213,6 +236,34 @@ class GUIManager:
         )
 
         self.param_summary_output = widgets.Output()
+
+        # ====================================================================
+        # ANALYSIS DATA (shared by Correlations / Random Forest / Bayesian Optimization)
+        # ====================================================================
+        self.results_checklist_box = widgets.VBox(
+            layout={
+                "max_height": "220px",
+                "overflow_y": "auto",
+                "border": "1px solid #ddd",
+                "padding": "4px",
+            }
+        )
+        self.metadata_checklist_box = widgets.VBox(
+            layout={
+                "max_height": "220px",
+                "overflow_y": "auto",
+                "border": "1px solid #ddd",
+                "padding": "4px",
+            }
+        )
+        self.recalculate_button = widgets.Button(
+            description="Recalculate",
+            button_style="success",
+            icon="refresh",
+            layout={"width": "160px"},
+        )
+        self.variation_warning_output = widgets.Output()
+        self.analysis_data_status_output = widgets.Output()
 
         # ====================================================================
         # CORRELATION MATRIX
@@ -238,6 +289,13 @@ class GUIManager:
             button_style="success",
             icon="table",
             layout={"width": "180px"},
+        )
+
+        self.correlation_download_button = widgets.Button(
+            description="Download CSV",
+            button_style="info",
+            icon="download",
+            layout={"width": "150px"},
         )
 
         self.correlation_status_output = widgets.Output()
@@ -266,6 +324,13 @@ class GUIManager:
             button_style="success",
             icon="tree",
             layout={"width": "200px"},
+        )
+
+        self.rf_download_button = widgets.Button(
+            description="Download CSV",
+            button_style="info",
+            icon="download",
+            layout={"width": "150px"},
         )
 
         self.rf_output = widgets.Output()
@@ -302,6 +367,13 @@ class GUIManager:
             layout={"width": "220px"},
         )
 
+        self.bo_download_button = widgets.Button(
+            description="Download CSV",
+            button_style="info",
+            icon="download",
+            layout={"width": "150px"},
+        )
+
         self.bo_output = widgets.Output()
 
         self.bo_widget = go.FigureWidget()
@@ -312,12 +384,193 @@ class GUIManager:
         )
 
         # ====================================================================
+        # EXPERIMENTAL: PCA
+        # ====================================================================
+        self.experimental_pca_color_selector = widgets.Dropdown(
+            description="Color by:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+        )
+
+        self.experimental_pca_run_button = widgets.Button(
+            description="Run PCA",
+            button_style="success",
+            icon="compress",
+            layout={"width": "160px"},
+        )
+
+        self.experimental_pca_output = widgets.Output()
+
+        self.experimental_pca_widget = go.FigureWidget()
+        self.experimental_pca_widget.update_layout(
+            height=500, template="plotly_white", title='Click "Run PCA"'
+        )
+
+        # ====================================================================
+        # EXPERIMENTAL: PARETO FRONT
+        # ====================================================================
+        self.experimental_pareto_target_a_selector = widgets.Dropdown(
+            description="Target A:",
+            style={"description_width": "100px"},
+            layout={"width": "300px"},
+            disabled=True,
+        )
+        self.experimental_pareto_direction_a_selector = widgets.Dropdown(
+            options=["Maximize", "Minimize"],
+            value="Maximize",
+            description="Goal A:",
+            style={"description_width": "80px"},
+            layout={"width": "180px"},
+        )
+        self.experimental_pareto_target_b_selector = widgets.Dropdown(
+            description="Target B:",
+            style={"description_width": "100px"},
+            layout={"width": "300px"},
+            disabled=True,
+        )
+        self.experimental_pareto_direction_b_selector = widgets.Dropdown(
+            options=["Maximize", "Minimize"],
+            value="Maximize",
+            description="Goal B:",
+            style={"description_width": "80px"},
+            layout={"width": "180px"},
+        )
+
+        self.experimental_pareto_run_button = widgets.Button(
+            description="Find Pareto Front",
+            button_style="success",
+            icon="balance-scale",
+            layout={"width": "180px"},
+        )
+
+        self.experimental_pareto_output = widgets.Output()
+
+        self.experimental_pareto_widget = go.FigureWidget()
+        self.experimental_pareto_widget.update_layout(
+            height=500,
+            template="plotly_white",
+            title='Pick two targets and click "Find Pareto Front"',
+        )
+
+        # ====================================================================
+        # EXPERIMENTAL: OUTLIER DETECTION
+        # ====================================================================
+        self.experimental_outlier_contamination_selector = widgets.BoundedFloatText(
+            value=0.05,
+            min=0.01,
+            max=0.5,
+            step=0.01,
+            description="Contamination:",
+            style={"description_width": "110px"},
+            layout={"width": "220px"},
+        )
+
+        self.experimental_outlier_run_button = widgets.Button(
+            description="Detect Outliers",
+            button_style="success",
+            icon="search",
+            layout={"width": "180px"},
+        )
+
+        self.experimental_outlier_output = widgets.Output()
+
+        self.experimental_outlier_widget = go.FigureWidget()
+        self.experimental_outlier_widget.update_layout(
+            height=500, template="plotly_white", title='Click "Detect Outliers"'
+        )
+
+        # ====================================================================
+        # EXPERIMENTAL: PROCESS DRIFT
+        # ====================================================================
+        self.experimental_drift_param_selector = widgets.Dropdown(
+            description="Parameter:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+            disabled=True,
+        )
+
+        self.experimental_drift_run_button = widgets.Button(
+            description="Check Drift",
+            button_style="success",
+            icon="line-chart",
+            layout={"width": "160px"},
+        )
+
+        self.experimental_drift_output = widgets.Output()
+
+        self.experimental_drift_widget = go.FigureWidget()
+        self.experimental_drift_widget.update_layout(
+            height=450, template="plotly_white", title='Pick a parameter and click "Check Drift"'
+        )
+
+        # ====================================================================
+        # EXPERIMENTAL: ANOVA
+        # ====================================================================
+        self.experimental_anova_group_selector = widgets.Dropdown(
+            description="Group by:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+            disabled=True,
+        )
+        self.experimental_anova_value_selector = widgets.Dropdown(
+            description="Measure:",
+            style={"description_width": "100px"},
+            layout={"width": "350px"},
+            disabled=True,
+        )
+
+        self.experimental_anova_run_button = widgets.Button(
+            description="Run ANOVA",
+            button_style="success",
+            icon="calculator",
+            layout={"width": "160px"},
+        )
+
+        self.experimental_anova_output = widgets.Output()
+
+        self.experimental_anova_widget = go.FigureWidget()
+        self.experimental_anova_widget.update_layout(
+            height=450,
+            template="plotly_white",
+            title='Pick a group and measure, then click "Run ANOVA"',
+        )
+
+        # ====================================================================
         # PLOT WIDGET
         # ====================================================================
         self.plot_widget = go.FigureWidget()
         self.plot_widget.update_layout(
             height=600, template="plotly_white", title='Select data and click "Create Plot"'
         )
+
+    def _create_preset_widgets(self) -> widgets.Accordion:
+        """Build one button per config.PRESET_PLOTS entry, in a collapsible
+        Accordion that starts open (a discovery aid, not something to hide once used).
+        """
+        buttons = []
+        for preset in config.PRESET_PLOTS:
+            button = widgets.Button(
+                description=preset["label"],
+                button_style="info",
+                icon="bolt",
+                layout={"width": "auto"},
+            )
+            self.preset_buttons[preset["id"]] = button
+            buttons.append(button)
+
+        accordion = widgets.Accordion(
+            children=[widgets.VBox(buttons)],
+            titles=("Plot Presets",),
+        )
+        accordion.selected_index = 0  # Start open
+        return accordion
+
+    def connect_preset_callbacks(self, handler):
+        """Wire each preset button to `handler(preset_dict)`."""
+        presets_by_id = {preset["id"]: preset for preset in config.PRESET_PLOTS}
+        for preset_id, button in self.preset_buttons.items():
+            preset = presets_by_id[preset_id]
+            button.on_click(lambda _button, preset=preset: handler(preset))
 
     def connect_callbacks(self, callbacks: dict):
         """
@@ -366,6 +619,45 @@ class GUIManager:
             self.run_rf_button.on_click(callbacks["run_random_forest"])
         if "suggest_experiments" in callbacks:
             self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
+        if "recalculate_analysis_data" in callbacks:
+            self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
+        if "download_correlations" in callbacks:
+            self.correlation_download_button.on_click(callbacks["download_correlations"])
+        if "download_rf_results" in callbacks:
+            self.rf_download_button.on_click(callbacks["download_rf_results"])
+        if "download_bo_suggestions" in callbacks:
+            self.bo_download_button.on_click(callbacks["download_bo_suggestions"])
+
+        # Experimental tab
+        if "run_pca" in callbacks:
+            self.experimental_pca_run_button.on_click(callbacks["run_pca"])
+        if "find_pareto_front" in callbacks:
+            self.experimental_pareto_run_button.on_click(callbacks["find_pareto_front"])
+        if "detect_outliers" in callbacks:
+            self.experimental_outlier_run_button.on_click(callbacks["detect_outliers"])
+        if "compute_process_drift" in callbacks:
+            self.experimental_drift_run_button.on_click(callbacks["compute_process_drift"])
+        if "run_anova" in callbacks:
+            self.experimental_anova_run_button.on_click(callbacks["run_anova"])
+
+    def set_analysis_columns(self, results_cols: list, metadata_cols: list):
+        """(Re)build the Results / Process Metadata checkbox lists on the Analysis
+        Data tab, all checked by default. Called whenever the shared analysis
+        dataframe is rebuilt (batch load or Recalculate)."""
+        self.results_checklist_box.children = [
+            widgets.Checkbox(value=True, description=col, indent=False) for col in results_cols
+        ]
+        self.metadata_checklist_box.children = [
+            widgets.Checkbox(value=True, description=col, indent=False) for col in metadata_cols
+        ]
+
+    def get_checked_results_columns(self) -> list:
+        """Column names currently checked in the Results checklist."""
+        return [cb.description for cb in self.results_checklist_box.children if cb.value]
+
+    def get_checked_metadata_columns(self) -> list:
+        """Column names currently checked in the Process Metadata checklist."""
+        return [cb.description for cb in self.metadata_checklist_box.children if cb.value]
 
     def setup_batch_selection(self, url, token, load_data_function):
         """
@@ -480,6 +772,7 @@ class GUIManager:
             [
                 widgets.HTML("<h3 style='color: #A23B72;'>Step 3: Configure Plot</h3>"),
                 self.plot_type_selector,
+                widgets.HBox([self.boxplot_bin_toggle, self.boxplot_bin_count]),
                 self.jv_aggregation_selector,
                 self.colorscale_selector,
                 self.debug_checkbox,
@@ -494,6 +787,7 @@ class GUIManager:
 
         plotting_tab = widgets.VBox(
             [
+                self.preset_accordion,
                 steps_2_and_3,
                 widgets.HTML("<h3 style='color: #A23B72;'>Visualization</h3>"),
                 self.plot_widget,
@@ -508,38 +802,86 @@ class GUIManager:
             [self.param_summary_output], layout={"padding": "20px"}
         )
 
+        analysis_data_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>This is the full dataset loaded on the Parameter "
+                    "Summary/Plotting tabs (independent of what's currently selected there), "
+                    "and it feeds Correlations, Random Forest, and Bayesian Optimization. "
+                    "<b>Targets are always measurement results; supporting variables are "
+                    "always process metadata.</b> Uncheck any column you want excluded from "
+                    "all three, then click Recalculate.</p>"
+                ),
+                widgets.Accordion(
+                    children=[
+                        widgets.VBox(
+                            [
+                                widgets.HTML("<h4 style='color: #666;'>Results (targets)</h4>"),
+                                self.results_checklist_box,
+                                widgets.HTML(
+                                    "<h4 style='color: #666;'>Process Metadata (supporting)</h4>"
+                                ),
+                                self.metadata_checklist_box,
+                            ]
+                        )
+                    ],
+                    titles=("Variable Selection",),
+                    selected_index=0,
+                ),
+                self.variation_warning_output,
+                self.recalculate_button,
+                self.analysis_data_status_output,
+            ],
+            layout={"padding": "20px"},
+        )
+
         correlations_tab = widgets.VBox(
             [
                 widgets.HTML(
-                    "<p style='color:#666;'>Correlation matrix over every numeric parameter "
-                    "in the currently loaded dataset (same data as the Plotting tab). "
-                    "Parameters with too few distinct values (e.g. flags/constants) are "
-                    "excluded via the threshold below.</p>"
+                    "<p style='color:#666;'>Cross-correlation between the checked Results "
+                    "(x-axis) and checked Process Metadata (y-axis) columns from the "
+                    "Analysis Data tab. Parameters with too few distinct values (e.g. "
+                    "flags/constants) are excluded via the threshold below.</p>"
                 ),
                 widgets.HBox(
                     [
                         self.correlation_min_unique,
                         self.correlation_plot_type,
                         self.find_correlations_button,
+                        self.correlation_download_button,
                     ]
                 ),
                 self.correlation_status_output,
                 self.correlation_widget,
                 self.correlation_scatter_output,
+                self.download_output,
             ],
             layout={"padding": "20px"},
         )
+
+        doe_user = utils.get_current_user()
+        doe_uploads_path = utils.get_uploads_path()
+        doe_voila_url = utils.build_doe_voila_url(doe_user, doe_uploads_path)
+        doe_full_url = utils.build_doe_full_url(doe_voila_url)
 
         random_forest_tab = widgets.VBox(
             [
                 widgets.HTML(
                     "<p style='color:#666;'>Fits a Random Forest to predict the chosen "
-                    "target from every other numeric parameter in the currently loaded "
-                    "dataset, and reports which parameters matter most.</p>"
+                    "target (a Results column) from the checked Process Metadata columns "
+                    "in the Analysis Data tab, and reports which parameters matter most.</p>"
                 ),
-                widgets.HBox([self.rf_target_selector, self.run_rf_button]),
+                widgets.HTML(
+                    f'<p><a href="{doe_voila_url}" target="_blank" title="{doe_full_url}">'
+                    "Open Design of Experiments tool</a> to plan the next batch of "
+                    "samples based on these results.</p>"
+                ),
+                widgets.HBox(
+                    [self.rf_target_selector, self.run_rf_button, self.rf_download_button]
+                ),
                 self.rf_output,
                 self.rf_widget,
+                self.download_output,
             ],
             layout={"padding": "20px"},
         )
@@ -548,36 +890,171 @@ class GUIManager:
             [
                 widgets.HTML(
                     "<p style='color:#666;'>Fits a Gaussian Process surrogate model on "
-                    "the currently loaded dataset and suggests parameter combinations "
-                    "most likely to improve the chosen target next.</p>"
+                    "the checked Process Metadata columns in the Analysis Data tab and "
+                    "suggests parameter combinations most likely to improve the chosen "
+                    "target (a Results column) next.</p>"
+                    "<p style='color:#666;'><b>This is a stateless, single-shot "
+                    "suggester, not a closed-loop optimizer</b> - it does not remember "
+                    "past suggestions or track which experiments came from which round. "
+                    "Re-run it after each new batch of real measurements comes in. If "
+                    "you need to track optimization rounds over time, that would need "
+                    "e.g. a 'round' sample tag added to the data - not implemented "
+                    "here.</p>"
                 ),
                 widgets.HBox(
                     [
                         self.bo_target_selector,
                         self.bo_direction_selector,
                         self.suggest_experiments_button,
+                        self.bo_download_button,
                     ]
                 ),
                 self.bo_output,
                 self.bo_widget,
+                self.download_output,
             ],
             layout={"padding": "20px"},
+        )
+
+        experimental_intro = widgets.HTML(
+            "<p style='color:#666;'><b>Experimental</b> - first-look tools being "
+            "evaluated for usefulness on this data. Not yet promoted to top-level "
+            "tabs; behavior/UI here may change or disappear. All read from the "
+            "shared Analysis Data tab.</p>"
+        )
+
+        experimental_pca_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>PCA over the checked Process Metadata "
+                    "columns - shows which process parameters vary/cluster "
+                    "together.</p>"
+                ),
+                widgets.HBox(
+                    [self.experimental_pca_color_selector, self.experimental_pca_run_button]
+                ),
+                self.experimental_pca_output,
+                self.experimental_pca_widget,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        experimental_pareto_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>Finds the Pareto-optimal trade-off "
+                    "between two checked Results columns - points where you can't "
+                    "improve one without making the other worse.</p>"
+                ),
+                widgets.HBox(
+                    [
+                        self.experimental_pareto_target_a_selector,
+                        self.experimental_pareto_direction_a_selector,
+                    ]
+                ),
+                widgets.HBox(
+                    [
+                        self.experimental_pareto_target_b_selector,
+                        self.experimental_pareto_direction_b_selector,
+                    ]
+                ),
+                self.experimental_pareto_run_button,
+                self.experimental_pareto_output,
+                self.experimental_pareto_widget,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        experimental_outlier_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>Isolation Forest over the checked "
+                    "Process Metadata + Results columns combined - flags samples "
+                    "whose overall parameter/result combination looks unusual, "
+                    "not just single-column extremes.</p>"
+                ),
+                widgets.HBox(
+                    [
+                        self.experimental_outlier_contamination_selector,
+                        self.experimental_outlier_run_button,
+                    ]
+                ),
+                self.experimental_outlier_output,
+                self.experimental_outlier_widget,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        experimental_drift_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>Checks whether a checked Process "
+                    "Metadata parameter trends up or down over time (parsed from "
+                    "the raw datetime field).</p>"
+                ),
+                widgets.HBox(
+                    [self.experimental_drift_param_selector, self.experimental_drift_run_button]
+                ),
+                self.experimental_drift_output,
+                self.experimental_drift_widget,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        experimental_anova_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>One-way ANOVA: does a checked Results "
+                    "column differ significantly across groups of a categorical "
+                    "process metadata column (e.g. layer material)?</p>"
+                ),
+                widgets.HBox(
+                    [self.experimental_anova_group_selector, self.experimental_anova_value_selector]
+                ),
+                self.experimental_anova_run_button,
+                self.experimental_anova_output,
+                self.experimental_anova_widget,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        experimental_sub_tabs = widgets.Tab(
+            children=[
+                experimental_pca_tab,
+                experimental_pareto_tab,
+                experimental_outlier_tab,
+                experimental_drift_tab,
+                experimental_anova_tab,
+            ]
+        )
+        experimental_sub_tabs.set_title(0, "PCA")
+        experimental_sub_tabs.set_title(1, "Pareto Front")
+        experimental_sub_tabs.set_title(2, "Outlier Detection")
+        experimental_sub_tabs.set_title(3, "Process Drift")
+        experimental_sub_tabs.set_title(4, "ANOVA")
+
+        experimental_tab = widgets.VBox(
+            [experimental_intro, experimental_sub_tabs], layout={"padding": "20px"}
         )
 
         self.main_tabs = widgets.Tab(
             children=[
                 parameter_summary_tab,
                 plotting_tab,
+                analysis_data_tab,
                 correlations_tab,
                 random_forest_tab,
                 bayesian_optimization_tab,
+                experimental_tab,
             ]
         )
         self.main_tabs.set_title(0, "Parameter Summary")
         self.main_tabs.set_title(1, "Plotting")
-        self.main_tabs.set_title(2, "Correlations")
-        self.main_tabs.set_title(3, "Random Forest")
-        self.main_tabs.set_title(4, "Bayesian Optimization")
+        self.main_tabs.set_title(2, "Analysis Data")
+        self.main_tabs.set_title(3, "Correlations")
+        self.main_tabs.set_title(4, "Random Forest")
+        self.main_tabs.set_title(5, "Bayesian Optimization")
+        self.main_tabs.set_title(6, "Experimental")
 
         return widgets.VBox(
             [

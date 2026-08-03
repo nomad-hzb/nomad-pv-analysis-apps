@@ -32,6 +32,13 @@ from hysprint_utils.api_calls import get_all_eqe
 logger = logging.getLogger(__name__)
 
 
+def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
+    """Return the subset of `columns` with fewer than min_unique distinct non-null
+    values in df. Advisory only - never blocks a correlation/RF/BO computation,
+    just flags columns unlikely to carry a useful signal."""
+    return [col for col in columns if col in df.columns and df[col].dropna().nunique() < min_unique]
+
+
 # ---------------------------------------------------------------------------
 # Pydantic validation model for measurement result rows
 # ---------------------------------------------------------------------------
@@ -241,6 +248,9 @@ class DataManager:
                 if measurement_type not in self.current_metadata:
                     metadata_df = loader_func(sample_ids, variation)
                     if metadata_df is not None and not metadata_df.empty:
+                        metadata_df["batch"] = metadata_df["sample_id"].apply(
+                            lambda sid: self.extract_subbatch(sid)[0]
+                        )
                         self.current_metadata[measurement_type] = metadata_df
             except Exception:
                 pass

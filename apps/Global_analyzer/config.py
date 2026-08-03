@@ -6,6 +6,7 @@ All user-configurable settings are defined here.
 
 Configuration Sections:
     - PARAMETER_BLACKLIST: Parameters to exclude from dropdowns
+    - PRESET_PLOTS: Quick-plot buttons shown on the Plotting tab
 
 Author: HySprint Team
 """
@@ -62,6 +63,25 @@ PARAMETER_BLACKLIST = {
         #'measurement_id',
     ],
 }
+
+# ============================================================================
+# PRESET PLOTS
+# ============================================================================
+# Each entry drives the X/Y/Color Data Source -> Material -> Parameter cascade
+# on the Plotting tab and then creates the plot. "color" may be None to leave
+# color off. Add more presets here - no code changes needed elsewhere.
+
+PRESET_PLOTS = [
+    {
+        "id": "jv_efficiency_vs_datetime",
+        "label": "JV Efficiency vs Datetime",
+        "x": {"source": "Results", "material": "JV", "param": "datetime (JV)"},
+        "y": {"source": "Results", "material": "JV", "param": "efficiency (JV)"},
+        "color": None,
+        "plot_type": "Scatter",
+        "aggregation": "All Points",
+    },
+]
 
 AI_JSON_BLACKLIST = [
     # Raw array data — too large and not useful as text
