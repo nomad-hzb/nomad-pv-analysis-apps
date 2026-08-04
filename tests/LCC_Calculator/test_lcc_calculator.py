@@ -5,13 +5,18 @@ import openpyxl
 import pytest
 from data_manager import (
     LABOR_ROLES,
+    BatchTotal,
     CostReference,
     LCCDataManager,
+    MaterialCostRow,
     MaterialRow,
+    ProcessCostRow,
     ProcessStepRow,
-    cost_per_sample,
+    compute_batch_totals,
+    compute_labor_cost,
+    compute_material_cost_rows,
+    compute_process_cost_rows,
     discover_entry_types,
-    effective_cost_range,
     extract_material_rows,
     extract_process_step_rows,
     fetch_process_entries,
@@ -21,10 +26,10 @@ from data_manager import (
     parse_cost_reference_workbook,
 )
 from excel_export import (
-    CAPITAL_HEADERS,
     LABOR_HEADERS,
     MATERIALS_HEADERS,
     PROCESSES_HEADERS,
+    SUMMARY_HEADERS,
     build_cost_reference_template,
     build_cost_reference_template_from_data,
     build_workbook,
@@ -88,8 +93,6 @@ def test_extract_process_step_rows_expands_recipe_steps():
         ],
     }
     rows = extract_process_step_rows(process_data, "HySprint_SpinCoating", "Batch1", 1, ["S1"])
-    # No fields exist outside recipe_steps here, so there is no separate
-    # base (step_index 0) row - just the two expanded recipe_steps rows.
     assert len(rows) == 2
     assert all(row.step_label == "recipe_steps" for row in rows)
     assert {row.duration_value for row in rows} == {30, 45}
@@ -97,8 +100,6 @@ def test_extract_process_step_rows_expands_recipe_steps():
 
 
 def test_extract_process_step_rows_skips_non_step_lists():
-    """solute/solvent lists must not be treated as process steps - they
-    belong on the Materials sheet instead."""
     process_data = {
         "positon_in_experimental_plan": 1,
         "solution": [
@@ -145,7 +146,7 @@ def test_extract_material_rows_solution_solute_and_solvent():
     pbi2 = next(row for row in rows if row.material_name == "PbI2")
     assert pbi2.molar_mass_g_per_mol == pytest.approx(461.01)
     assert pbi2.price_per_gram_est is not None
-    assert pbi2.cas_number == "10101-63-0"  # from the static table, NOMAD didn't have one
+    assert pbi2.cas_number == "10101-63-0"
     assert pbi2.num_samples_covered == 2
 
 
@@ -167,8 +168,6 @@ def test_extract_material_rows_evaporant():
 
 
 def test_extract_material_rows_prefers_real_nomad_cas_over_static_table():
-    """A real cas_number actually populated on NOMAD's chemical_2 reference
-    is authoritative and must win over the static guess table."""
     process_data = {
         "solution": [
             {
@@ -185,31 +184,6 @@ def test_extract_material_rows_prefers_real_nomad_cas_over_static_table():
     }
     rows = extract_material_rows(process_data, "HySprint_SpinCoating", "Batch1", 1, ["S1"])
     assert rows[0].cas_number == "REAL-CAS-FROM-NOMAD"
-
-
-# ---------------------------------------------------------------------------
-# Cost math
-# ---------------------------------------------------------------------------
-
-
-def test_effective_cost_range_falls_back_to_est():
-    assert effective_cost_range(None, 5.0, None) == (5.0, 5.0, 5.0)
-
-
-def test_effective_cost_range_keeps_explicit_bounds():
-    assert effective_cost_range(1.0, 5.0, 9.0) == (1.0, 5.0, 9.0)
-
-
-def test_cost_per_sample_divides_by_samples_covered():
-    assert cost_per_sample(16.0, 16) == pytest.approx(1.0)
-
-
-def test_cost_per_sample_none_when_cost_missing():
-    assert cost_per_sample(None, 4) is None
-
-
-def test_cost_per_sample_none_when_no_samples():
-    assert cost_per_sample(10.0, 0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +208,6 @@ def test_fetch_samples_per_batch(mocker):
 
 
 def test_fetch_samples_per_batch_skips_batch_that_raises_assertion_error(mocker):
-    """hysprint_utils.api_calls.get_ids_in_batch asserts exactly one batch
-    record comes back - confirmed against live data that at least one real
-    batch fails this. A single bad batch must not crash the whole scan."""
     mock_get_ids = mocker.patch("hysprint_utils.api_calls.get_ids_in_batch")
 
     def side_effect(url, token, batch_ids):
@@ -247,6 +218,24 @@ def test_fetch_samples_per_batch_skips_batch_that_raises_assertion_error(mocker)
     mock_get_ids.side_effect = side_effect
 
     result = fetch_samples_per_batch("http://x", "tok", ["GoodBatch", "BadBatch"])
+
+    assert result == {"GoodBatch": ["GoodBatch_S1"]}
+
+
+def test_fetch_samples_per_batch_skips_batch_that_raises_key_error(mocker):
+    """Confirmed against a full scan of every real batch on a live instance:
+    malformed/legacy batch data can make get_ids_in_batch raise KeyError
+    (an "entities" item missing "lab_id"), not just AssertionError."""
+    mock_get_ids = mocker.patch("hysprint_utils.api_calls.get_ids_in_batch")
+
+    def side_effect(url, token, batch_ids):
+        if batch_ids == ["MalformedBatch"]:
+            raise KeyError("lab_id")
+        return [f"{batch_ids[0]}_S1"]
+
+    mock_get_ids.side_effect = side_effect
+
+    result = fetch_samples_per_batch("http://x", "tok", ["GoodBatch", "MalformedBatch"])
 
     assert result == {"GoodBatch": ["GoodBatch_S1"]}
 
@@ -274,11 +263,7 @@ def test_fetch_process_entries_keeps_full_samples_list_and_filters_unpositioned(
                     "metadata": {"entry_type": "HySprint_SpinCoating"},
                 }
             },
-            {
-                # Missing positon_in_experimental_plan - not a real processing
-                # step, must be filtered out (same rule as get_processing_steps).
-                "archive": {"data": {"samples": [{"lab_id": "S1"}]}, "metadata": {}}
-            },
+            {"archive": {"data": {"samples": [{"lab_id": "S1"}]}, "metadata": {}}},
         ]
     }
     process_response.raise_for_status.return_value = None
@@ -340,11 +325,6 @@ def test_discover_entry_types_no_entries_returns_empty(mocker):
 
 
 def test_load_batches_populates_rows_and_batch_sample_counts(mocker):
-    # Patched via the already-imported module object, not by string name -
-    # "data_manager" is re-registered in sys.modules by every app's own
-    # conftest.py under this repo's test-loading convention, so a
-    # string-based mocker.patch("data_manager....") can silently resolve to
-    # a different app's module when the full multi-app suite runs.
     mocker.patch.object(
         data_manager,
         "fetch_samples_per_batch",
@@ -381,299 +361,250 @@ def test_load_batches_populates_rows_and_batch_sample_counts(mocker):
 
 
 # ---------------------------------------------------------------------------
-# excel_export.build_workbook
+# Cost computation - process rows
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def sample_data_manager():
-    manager = LCCDataManager()
-    manager.batch_sample_counts = {"Batch1": 2}
-    manager.all_sample_ids = ["S1", "S2"]
-    manager.process_rows = [
+def test_compute_process_cost_rows_aggregates_by_type_and_separates_costs():
+    process_rows = [
         ProcessStepRow(
             batch_id="Batch1",
-            process_type="HySprint_Evaporation",
-            location="HyVapBox",
-            position_in_plan=1,
+            process_type="HySprint_SpinCoating",
+            location="HySpinBox",
             step_index=0,
-            step_label="HySprint_Evaporation",
-            duration_value=60,
-            duration_unit="as provided by NOMAD",
-            num_samples_covered=2,
-            sample_ids=["S1", "S2"],
-        )
-    ]
-    manager.material_rows = [
-        MaterialRow(
+            num_samples_covered=3,
+        ),
+        ProcessStepRow(
             batch_id="Batch1",
-            process_type="HySprint_Evaporation",
-            material_name="PbI2",
-            role="layer",
-            cas_number="10101-63-0",
-            molar_mass_g_per_mol=461.01,
-            price_per_gram_est=3.0,
-            num_samples_covered=2,
-            sample_ids=["S1", "S2"],
-        )
+            process_type="HySprint_SpinCoating",
+            location="HySpinBox",
+            step_index=1,
+            num_samples_covered=3,
+        ),
     ]
-    return manager
+    reference = CostReference(
+        process_costs={"HySprint_SpinCoating": {"cost_est": 10.0, "verified": True, "notes": ""}},
+        location_costs={"HySpinBox": {"cost_est": 25.0, "verified": True, "notes": ""}},
+    )
+
+    rows = compute_process_cost_rows(process_rows, {"Batch1": 3}, reference)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.step_count == 2
+    assert row.process_cost == 10.0
+    assert row.equipment_cost == 25.0
+    assert row.total_cost == 35.0  # separate figures, summed only for total
+    assert row.num_samples == 3
 
 
-def test_build_workbook_sheet_names(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    assert workbook.sheetnames == [
-        "Guide",
-        "Processes",
-        "Materials",
-        "Labor",
-        "Capital_Overhead_Disposal",
-        "Summary",
+def test_compute_process_cost_rows_no_reference_leaves_costs_none():
+    process_rows = [ProcessStepRow(batch_id="Batch1", process_type="X", step_index=0)]
+    rows = compute_process_cost_rows(process_rows, {"Batch1": 1}, None)
+    assert rows[0].process_cost is None
+    assert rows[0].equipment_cost is None
+    assert rows[0].total_cost is None
+
+
+def test_compute_process_cost_rows_sums_multiple_locations():
+    process_rows = [
+        ProcessStepRow(batch_id="Batch1", process_type="X", location="BoxA", step_index=0),
+        ProcessStepRow(batch_id="Batch1", process_type="X", location="BoxB", step_index=1),
     ]
-
-
-def test_build_workbook_headers_match(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    assert [c.value for c in workbook["Processes"][1]] == PROCESSES_HEADERS
-    assert [c.value for c in workbook["Materials"][1]] == MATERIALS_HEADERS
-    assert [c.value for c in workbook["Labor"][1]] == LABOR_HEADERS
-    assert [c.value for c in workbook["Capital_Overhead_Disposal"][1]] == CAPITAL_HEADERS
-
-
-def test_build_workbook_processes_sheet_has_no_cost_columns(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    headers = [c.value for c in workbook["Processes"][1]]
-    assert "Cost_Est" not in headers
-    assert "Verified" not in headers
-    assert "Location" in headers
-
-
-def test_build_workbook_processes_row_has_location(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    ws = workbook["Processes"]
-    location_col = PROCESSES_HEADERS.index("Location") + 1
-    assert ws.cell(row=2, column=location_col).value == "HyVapBox"
-
-
-def test_build_workbook_labor_sheet_has_four_role_rows_per_batch(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    ws = workbook["Labor"]
-    role_col = LABOR_HEADERS.index("Role") + 1
-    roles = [ws.cell(row=r, column=role_col).value for r in range(2, ws.max_row + 1)]
-    assert roles == LABOR_ROLES
-
-
-def test_build_workbook_materials_verified_column_defaults_to_boolean_false(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    verified_col = MATERIALS_HEADERS.index("Verified") + 1
-    assert workbook["Materials"].cell(row=2, column=verified_col).value is False
-
-
-def test_build_workbook_has_verified_dropdown_validation(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    validations = workbook["Materials"].data_validations.dataValidation
-    assert any(dv.formula1 == '"TRUE,FALSE"' for dv in validations)
-
-
-def test_build_workbook_capital_overhead_disposal_location_dropdown(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    validations = workbook["Capital_Overhead_Disposal"].data_validations.dataValidation
-    assert any("HyVapBox" in (dv.formula1 or "") for dv in validations)
-
-
-def test_build_workbook_effective_cost_formula_present(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    col = MATERIALS_HEADERS.index("Effective_Cost_Low") + 1
-    cell = workbook["Materials"].cell(row=2, column=col)
-    assert isinstance(cell.value, str)
-    assert cell.value.startswith("=")
-
-
-def test_build_workbook_round_trips_through_bytes(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    buffer.seek(0)
-
-    reloaded = openpyxl.load_workbook(buffer)
-    assert reloaded.sheetnames == workbook.sheetnames
-    assert reloaded["Summary"].cell(row=2, column=1).value == "Batch1"
-
-
-def test_capital_overhead_disposal_seeds_from_real_location_and_materials(sample_data_manager):
-    workbook = build_workbook(sample_data_manager)
-    ws = workbook["Capital_Overhead_Disposal"]
-    item_col = CAPITAL_HEADERS.index("Item") + 1
-    items = [ws.cell(row=r, column=item_col).value for r in range(2, ws.max_row + 1)]
-    assert "Cleanroom / lab rent" in items
-    assert "Equipment depreciation - HyVapBox" in items
-    assert "Disposal - PbI2" in items
+    reference = CostReference(
+        location_costs={
+            "BoxA": {"cost_est": 5.0, "verified": True, "notes": ""},
+            "BoxB": {"cost_est": 7.0, "verified": False, "notes": ""},
+        }
+    )
+    rows = compute_process_cost_rows(process_rows, {"Batch1": 1}, reference)
+    assert rows[0].equipment_cost == 12.0
+    assert rows[0].equipment_cost_verified is False  # not all matched locations verified
 
 
 # ---------------------------------------------------------------------------
-# Cost reference carry-forward (per-batch export)
+# Cost computation - material rows
 # ---------------------------------------------------------------------------
 
 
-def test_build_workbook_carries_forward_material_price(sample_data_manager):
+def test_compute_material_cost_rows_uses_average_quantity_times_usage_count():
+    material_rows = [
+        MaterialRow(batch_id="Batch1", process_type="X", material_name="PbI2", role="solute"),
+        MaterialRow(batch_id="Batch1", process_type="Y", material_name="PbI2", role="solute"),
+    ]
     reference = CostReference(
         material_prices={
             "PbI2": {
                 "cas_number": "10101-63-0",
-                "price_per_gram_est": 7.25,
-                "verified": True,
-                "notes": "confirmed",
-            }
-        }
-    )
-    workbook = build_workbook(sample_data_manager, cost_reference=reference)
-    ws = workbook["Materials"]
-
-    price_col = MATERIALS_HEADERS.index("Price_per_Gram_Est") + 1
-    verified_col = MATERIALS_HEADERS.index("Verified") + 1
-    notes_col = MATERIALS_HEADERS.index("Notes") + 1
-    assert ws.cell(row=2, column=price_col).value == 7.25
-    assert ws.cell(row=2, column=verified_col).value is True
-    assert ws.cell(row=2, column=notes_col).value == "confirmed"
-
-
-def test_build_workbook_carries_forward_labor_rate(sample_data_manager):
-    reference = CostReference(
-        labor_rates={"PhD Researcher": {"hourly_rate_est": 45.0, "verified": True}}
-    )
-    workbook = build_workbook(sample_data_manager, cost_reference=reference)
-    ws = workbook["Labor"]
-
-    rate_col = LABOR_HEADERS.index("Hourly_Rate_Est") + 1
-    verified_col = LABOR_HEADERS.index("Verified") + 1
-    assert ws.cell(row=2, column=rate_col).value == 45.0  # first role row = PhD Researcher
-    assert ws.cell(row=2, column=verified_col).value is True
-
-
-def test_build_workbook_carries_forward_overhead_cost(sample_data_manager):
-    reference = CostReference(
-        overhead_costs={
-            "Cleanroom / lab rent": {
-                "cost_low": None,
-                "cost_est": 15.0,
-                "cost_high": None,
+                "price_per_gram_est": 3.0,
+                "average_quantity_grams": 0.5,
                 "verified": True,
                 "notes": "",
             }
         }
     )
-    workbook = build_workbook(sample_data_manager, cost_reference=reference)
-    ws = workbook["Capital_Overhead_Disposal"]
 
-    item_col = CAPITAL_HEADERS.index("Item") + 1
-    cost_est_col = CAPITAL_HEADERS.index("Cost_Est") + 1
-    verified_col = CAPITAL_HEADERS.index("Verified") + 1
-    row_values = {ws.cell(row=r, column=item_col).value: r for r in range(2, ws.max_row + 1)}
-    rent_row = row_values["Cleanroom / lab rent"]
-    assert ws.cell(row=rent_row, column=cost_est_col).value == 15.0
-    assert ws.cell(row=rent_row, column=verified_col).value is True
+    rows = compute_material_cost_rows(material_rows, reference)
 
-
-def test_build_workbook_unknown_material_not_carried_forward(sample_data_manager):
-    reference = CostReference(material_prices={"SomethingElse": {"price_per_gram_est": 9.0}})
-    workbook = build_workbook(sample_data_manager, cost_reference=reference)
-    ws = workbook["Materials"]
-
-    price_col = MATERIALS_HEADERS.index("Price_per_Gram_Est") + 1
-    verified_col = MATERIALS_HEADERS.index("Verified") + 1
-    # Falls back to the static CHEMICAL_REFERENCE default for PbI2, not the
-    # unrelated reference entry, and stays unverified.
-    assert ws.cell(row=2, column=price_col).value == pytest.approx(3.0)
-    assert ws.cell(row=2, column=verified_col).value is False
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.usage_count == 2
+    assert row.quantity_grams == pytest.approx(1.0)  # 0.5 x 2 uses
+    assert row.quantity_source == "average (reference)"
+    assert row.total_cost == pytest.approx(3.0)
 
 
-# ---------------------------------------------------------------------------
-# Cost reference template builders (admin single source of truth)
-# ---------------------------------------------------------------------------
-
-
-def test_build_cost_reference_template_sheet_names():
-    workbook = build_cost_reference_template()
-    assert workbook.sheetnames == [
-        "Guide",
-        "Materials",
-        "Processes",
-        "Labor",
-        "Capital_Overhead_Disposal",
+def test_compute_material_cost_rows_unknown_quantity_when_no_average_in_reference():
+    material_rows = [
+        MaterialRow(batch_id="Batch1", process_type="X", material_name="PbI2", role="solute")
     ]
+    rows = compute_material_cost_rows(material_rows, None)
+    assert rows[0].quantity_grams is None
+    assert rows[0].quantity_source == "unknown - not in cost reference yet"
+    assert rows[0].total_cost is None
 
 
-def test_build_cost_reference_template_materials_seeded_with_cas_and_price():
+# ---------------------------------------------------------------------------
+# Cost computation - labor and batch totals
+# ---------------------------------------------------------------------------
+
+
+def test_compute_labor_cost_multiplies_hours_by_rate():
+    reference = CostReference(labor_rates={"Postdoc": {"hourly_rate_est": 45.0, "verified": True}})
+    cost, verified = compute_labor_cost("Postdoc", 2.0, reference)
+    assert cost == 90.0
+    assert verified is True
+
+
+def test_compute_labor_cost_none_when_no_hours():
+    reference = CostReference(labor_rates={"Postdoc": {"hourly_rate_est": 45.0, "verified": True}})
+    cost, verified = compute_labor_cost("Postdoc", 0.0, reference)
+    assert cost is None
+    assert verified is False
+
+
+def test_compute_labor_cost_none_when_role_not_in_reference():
+    cost, verified = compute_labor_cost("Postdoc", 2.0, None)
+    assert cost is None
+    assert verified is False
+
+
+def test_compute_batch_totals_sums_and_counts_unverified():
+    process_rows = [
+        ProcessCostRow(
+            batch_id="Batch1",
+            process_type="X",
+            step_count=1,
+            locations=[],
+            process_cost=10.0,
+            process_cost_verified=True,
+            equipment_cost=None,
+            equipment_cost_verified=False,
+            num_samples=2,
+        )
+    ]
+    material_rows = [
+        MaterialCostRow(
+            batch_id="Batch1",
+            material_name="PbI2",
+            roles=["solute"],
+            usage_count=1,
+            cas_number=None,
+            quantity_grams=1.0,
+            quantity_source="average (reference)",
+            price_per_gram=3.0,
+            total_cost=3.0,
+            verified=False,
+            notes="",
+        )
+    ]
+    labor_costs = {"Batch1": (90.0, True)}
+
+    totals = compute_batch_totals(process_rows, material_rows, {"Batch1": 2}, labor_costs)
+
+    assert len(totals) == 1
+    total = totals[0]
+    assert total.process_total == 10.0
+    assert total.material_total == 3.0
+    assert total.labor_total == 90.0
+    assert total.grand_total == pytest.approx(103.0)
+    assert total.per_sample == pytest.approx(51.5)
+    assert total.unverified_count == 1  # only the unverified material row
+
+
+def test_batch_total_per_sample_none_when_zero_samples():
+    total = BatchTotal(
+        batch_id="B",
+        num_samples=0,
+        material_total=0.0,
+        process_total=0.0,
+        equipment_total=0.0,
+        labor_total=0.0,
+        unverified_count=0,
+    )
+    assert total.per_sample is None
+
+
+# ---------------------------------------------------------------------------
+# Cost reference parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_cost_reference_workbook_reads_all_sheets():
     workbook = build_cost_reference_template()
-    ws = workbook["Materials"]
-    names = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
-    assert "PbI2" in names
-    pbi2_row = next(r for r in range(2, ws.max_row + 1) if ws.cell(row=r, column=1).value == "PbI2")
-    assert ws.cell(row=pbi2_row, column=2).value == "10101-63-0"  # CAS_Number
-    assert ws.cell(row=pbi2_row, column=3).value == pytest.approx(3.0)  # Price
-    assert ws.cell(row=pbi2_row, column=4).value == 1  # Grams_on_Bottle
-
-
-def test_build_cost_reference_template_labor_has_four_fixed_roles():
-    workbook = build_cost_reference_template()
-    ws = workbook["Labor"]
-    roles = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
-    assert roles == LABOR_ROLES
-
-
-def test_build_cost_reference_template_capital_seeded_with_all_known_locations():
-    workbook = build_cost_reference_template()
-    ws = workbook["Capital_Overhead_Disposal"]
-    items = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
-    assert "Cleanroom / lab rent" in items
-    assert "Equipment depreciation - HyVapBox" in items
-    assert "Equipment depreciation - HyWeighBox" in items
-
-
-def test_build_cost_reference_template_from_data_uses_real_names(sample_data_manager):
-    workbook = build_cost_reference_template_from_data(sample_data_manager)
-
     materials_ws = workbook["Materials"]
-    names = {materials_ws.cell(row=r, column=1).value for r in range(2, materials_ws.max_row + 1)}
-    assert "PbI2" in names  # real, from the loaded batch
-    assert "MAI" in names  # static-only fallback, not seen in data but still offered
+    pbi2_row = next(
+        r
+        for r in range(2, materials_ws.max_row + 1)
+        if materials_ws.cell(row=r, column=1).value == "PbI2"
+    )
+    materials_ws.cell(row=pbi2_row, column=3, value=500.0)  # Price
+    materials_ws.cell(row=pbi2_row, column=4, value=250.0)  # Grams_on_Bottle
+    materials_ws.cell(row=pbi2_row, column=6, value=0.5)  # Average_Quantity_Grams
+    materials_ws.cell(row=pbi2_row, column=7, value=True)  # Verified
 
     processes_ws = workbook["Processes"]
-    process_rows = {
-        (processes_ws.cell(row=r, column=1).value, processes_ws.cell(row=r, column=2).value)
-        for r in range(2, processes_ws.max_row + 1)
-    }
-    assert ("HySprint_Evaporation", "HySprint_Evaporation") in process_rows
+    processes_ws.cell(row=2, column=1, value="HySprint_SpinCoating")
+    processes_ws.cell(row=2, column=2, value=10.0)
+    processes_ws.cell(row=2, column=3, value=True)
+
+    labor_ws = workbook["Labor"]
+    labor_ws.cell(row=2, column=2, value=45.0)  # PhD Researcher rate
+    labor_ws.cell(row=2, column=3, value=True)
 
     capital_ws = workbook["Capital_Overhead_Disposal"]
-    items = {capital_ws.cell(row=r, column=1).value for r in range(2, capital_ws.max_row + 1)}
-    assert "Equipment depreciation - HyVapBox" in items  # from KNOWN_LOCATIONS, not batch data
+    capital_ws.cell(row=2, column=5, value=15.0)  # Cost for "Cleanroom / lab rent"
+    capital_ws.cell(row=2, column=6, value=True)
 
-
-def test_build_cost_reference_template_from_data_includes_extra_schema_types(sample_data_manager):
-    workbook = build_cost_reference_template_from_data(
-        sample_data_manager, extra_schema_types=["HySprint_JVmeasurement"]
-    )
-    processes_ws = workbook["Processes"]
-    process_types = {
-        processes_ws.cell(row=r, column=1).value for r in range(2, processes_ws.max_row + 1)
-    }
-    assert "HySprint_JVmeasurement" in process_types
-
-
-def test_reference_template_round_trips_through_parser(sample_data_manager):
-    """The lean admin template must be readable by the same parser used for
-    full per-batch exports - both share header names, not fixed positions."""
-    workbook = build_cost_reference_template_from_data(sample_data_manager)
     buffer = io.BytesIO()
     workbook.save(buffer)
-
     reference = parse_cost_reference_workbook(buffer.getvalue())
 
-    assert "PbI2" in reference.material_prices
-    assert reference.material_prices["PbI2"]["cas_number"] == "10101-63-0"
-    assert set(reference.labor_rates) == set(LABOR_ROLES)
-    assert "Cleanroom / lab rent" in reference.overhead_costs
+    assert reference.material_prices["PbI2"]["price_per_gram_est"] == pytest.approx(2.0)
+    assert reference.material_prices["PbI2"]["average_quantity_grams"] == pytest.approx(0.5)
+    assert reference.material_prices["PbI2"]["verified"] is True
+
+    assert reference.process_costs["HySprint_SpinCoating"]["cost_est"] == 10.0
+    assert reference.process_costs["HySprint_SpinCoating"]["verified"] is True
+
+    assert reference.labor_rates["PhD Researcher"]["hourly_rate_est"] == 45.0
+
+    assert reference.overhead_costs["Cleanroom / lab rent"]["cost_est"] == 15.0
+
+
+def test_parse_cost_reference_workbook_populates_location_costs():
+    workbook = build_cost_reference_template()
+    capital_ws = workbook["Capital_Overhead_Disposal"]
+    # First KNOWN_LOCATIONS row after the rent row.
+    capital_ws.cell(row=3, column=5, value=25.0)
+    capital_ws.cell(row=3, column=6, value=True)
+    location = capital_ws.cell(row=3, column=2).value
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    reference = parse_cost_reference_workbook(buffer.getvalue())
+
+    assert reference.location_costs[location]["cost_est"] == 25.0
 
 
 # ---------------------------------------------------------------------------
@@ -705,20 +636,198 @@ def test_load_default_cost_reference_corrupt_file_returns_none(tmp_path):
     assert load_default_cost_reference(path=file_path) is None
 
 
-def test_parse_cost_reference_workbook_computes_price_per_gram_from_bottle(sample_data_manager):
-    workbook = build_cost_reference_template()
-    materials_ws = workbook["Materials"]
-    # Simulate an admin who bought a 250g bottle for 500.
-    row = next(
-        r
-        for r in range(2, materials_ws.max_row + 1)
-        if materials_ws.cell(row=r, column=1).value == "PbI2"
-    )
-    materials_ws.cell(row=row, column=3, value=500.0)  # Price
-    materials_ws.cell(row=row, column=4, value=250.0)  # Grams_on_Bottle
+# ---------------------------------------------------------------------------
+# excel_export.build_workbook (per-batch report, literal values)
+# ---------------------------------------------------------------------------
 
+
+@pytest.fixture
+def sample_cost_rows():
+    process_rows = [
+        ProcessCostRow(
+            batch_id="Batch1",
+            process_type="HySprint_SpinCoating",
+            step_count=2,
+            locations=["HySpinBox"],
+            process_cost=10.0,
+            process_cost_verified=True,
+            equipment_cost=25.0,
+            equipment_cost_verified=True,
+            num_samples=3,
+        )
+    ]
+    material_rows = [
+        MaterialCostRow(
+            batch_id="Batch1",
+            material_name="PbI2",
+            roles=["solute"],
+            usage_count=1,
+            cas_number="10101-63-0",
+            quantity_grams=0.5,
+            quantity_source="average (reference)",
+            price_per_gram=3.0,
+            total_cost=1.5,
+            verified=True,
+            notes="",
+        )
+    ]
+    labor_selections = {"Batch1": ("Postdoc", 2.0)}
+    cost_reference = CostReference(
+        labor_rates={"Postdoc": {"hourly_rate_est": 45.0, "verified": True}}
+    )
+    labor_costs = {
+        batch_id: compute_labor_cost(role, hours, cost_reference)
+        for batch_id, (role, hours) in labor_selections.items()
+    }
+    batch_totals = compute_batch_totals(process_rows, material_rows, {"Batch1": 3}, labor_costs)
+    return process_rows, material_rows, batch_totals, labor_selections, cost_reference
+
+
+def test_build_workbook_sheet_names(sample_cost_rows):
+    workbook = build_workbook(*sample_cost_rows)
+    assert workbook.sheetnames == ["Guide", "Processes", "Materials", "Labor", "Summary"]
+
+
+def test_build_workbook_headers_match(sample_cost_rows):
+    workbook = build_workbook(*sample_cost_rows)
+    assert [c.value for c in workbook["Processes"][1]] == PROCESSES_HEADERS
+    assert [c.value for c in workbook["Materials"][1]] == MATERIALS_HEADERS
+    assert [c.value for c in workbook["Labor"][1]] == LABOR_HEADERS
+    assert [c.value for c in workbook["Summary"][1]] == SUMMARY_HEADERS
+
+
+def test_build_workbook_processes_row_has_separate_process_and_equipment_cost(sample_cost_rows):
+    workbook = build_workbook(*sample_cost_rows)
+    ws = workbook["Processes"]
+    process_cost_col = PROCESSES_HEADERS.index("Process_Cost") + 1
+    equipment_cost_col = PROCESSES_HEADERS.index("Equipment_Cost") + 1
+    total_cost_col = PROCESSES_HEADERS.index("Total_Cost") + 1
+    assert ws.cell(row=2, column=process_cost_col).value == 10.0
+    assert ws.cell(row=2, column=equipment_cost_col).value == 25.0
+    assert ws.cell(row=2, column=total_cost_col).value == 35.0
+
+
+def test_build_workbook_cells_are_literal_values_not_formulas(sample_cost_rows):
+    """The per-batch report is a read-only computed snapshot - no formulas."""
+    workbook = build_workbook(*sample_cost_rows)
+    for sheet_name in ("Processes", "Materials", "Labor", "Summary"):
+        ws = workbook[sheet_name]
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                if isinstance(cell.value, str):
+                    assert not cell.value.startswith("="), f"{sheet_name}!{cell.coordinate}"
+
+
+def test_build_workbook_summary_includes_total_row(sample_cost_rows):
+    workbook = build_workbook(*sample_cost_rows)
+    ws = workbook["Summary"]
+    batch_id_col = SUMMARY_HEADERS.index("Batch_ID") + 1
+    last_row_value = ws.cell(row=ws.max_row, column=batch_id_col).value
+    assert last_row_value == "TOTAL (all selected)"
+
+
+def test_build_workbook_round_trips_through_bytes(sample_cost_rows):
+    workbook = build_workbook(*sample_cost_rows)
     buffer = io.BytesIO()
     workbook.save(buffer)
+    buffer.seek(0)
+
+    reloaded = openpyxl.load_workbook(buffer)
+    assert reloaded.sheetnames == workbook.sheetnames
+    assert reloaded["Summary"].cell(row=2, column=1).value == "Batch1"
+
+
+# ---------------------------------------------------------------------------
+# Cost reference template builders (admin single source of truth)
+# ---------------------------------------------------------------------------
+
+
+def test_build_cost_reference_template_sheet_names():
+    workbook = build_cost_reference_template()
+    assert workbook.sheetnames == [
+        "Guide",
+        "Materials",
+        "Processes",
+        "Labor",
+        "Capital_Overhead_Disposal",
+    ]
+
+
+def test_build_cost_reference_template_materials_seeded_with_cas_and_price():
+    workbook = build_cost_reference_template()
+    ws = workbook["Materials"]
+    pbi2_row = next(r for r in range(2, ws.max_row + 1) if ws.cell(row=r, column=1).value == "PbI2")
+    assert ws.cell(row=pbi2_row, column=2).value == "10101-63-0"  # CAS_Number
+    assert ws.cell(row=pbi2_row, column=3).value == pytest.approx(3.0)  # Price
+    assert ws.cell(row=pbi2_row, column=4).value == 1  # Grams_on_Bottle
+    assert ws.cell(row=pbi2_row, column=6).value is None  # Average_Quantity_Grams never guessed
+
+
+def test_build_cost_reference_template_labor_has_four_fixed_roles():
+    workbook = build_cost_reference_template()
+    ws = workbook["Labor"]
+    roles = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
+    assert roles == LABOR_ROLES
+
+
+def test_build_cost_reference_template_capital_seeded_with_all_known_locations():
+    workbook = build_cost_reference_template()
+    ws = workbook["Capital_Overhead_Disposal"]
+    items = [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)]
+    assert "Cleanroom / lab rent" in items
+    assert "Equipment depreciation - HyVapBox" in items
+    assert "Equipment depreciation - HyWeighBox" in items
+
+
+def test_build_cost_reference_template_from_data_uses_real_names():
+    workbook = build_cost_reference_template_from_data(
+        process_types=["HySprint_Evaporation"],
+        material_names_with_cas={"PbI2": None},
+        batch_count=1,
+    )
+
+    materials_ws = workbook["Materials"]
+    names = {materials_ws.cell(row=r, column=1).value for r in range(2, materials_ws.max_row + 1)}
+    assert "PbI2" in names  # real, from the scanned batch
+    assert "MAI" in names  # static-only fallback, offered anyway
+
+    processes_ws = workbook["Processes"]
+    process_types = {
+        processes_ws.cell(row=r, column=1).value for r in range(2, processes_ws.max_row + 1)
+    }
+    assert "HySprint_Evaporation" in process_types
+
+    capital_ws = workbook["Capital_Overhead_Disposal"]
+    items = {capital_ws.cell(row=r, column=1).value for r in range(2, capital_ws.max_row + 1)}
+    assert "Equipment depreciation - HyVapBox" in items  # from KNOWN_LOCATIONS, not batch data
+
+
+def test_build_cost_reference_template_from_data_includes_extra_schema_types():
+    workbook = build_cost_reference_template_from_data(
+        process_types=["HySprint_Evaporation"],
+        material_names_with_cas={},
+        batch_count=1,
+        extra_schema_types=["HySprint_JVmeasurement"],
+    )
+    processes_ws = workbook["Processes"]
+    process_types = {
+        processes_ws.cell(row=r, column=1).value for r in range(2, processes_ws.max_row + 1)
+    }
+    assert "HySprint_JVmeasurement" in process_types
+
+
+def test_reference_template_round_trips_through_parser():
+    workbook = build_cost_reference_template_from_data(
+        process_types=["HySprint_Evaporation"],
+        material_names_with_cas={"PbI2": "10101-63-0"},
+        batch_count=1,
+    )
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
     reference = parse_cost_reference_workbook(buffer.getvalue())
 
-    assert reference.material_prices["PbI2"]["price_per_gram_est"] == pytest.approx(2.0)
+    assert "PbI2" in reference.material_prices
+    assert reference.material_prices["PbI2"]["cas_number"] == "10101-63-0"
+    assert set(reference.labor_rates) == set(LABOR_ROLES)
+    assert "Cleanroom / lab rent" in reference.overhead_costs

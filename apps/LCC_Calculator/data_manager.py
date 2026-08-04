@@ -3,8 +3,9 @@ data_manager.py
 ----------------
 Pure Python / Pydantic layer for the LCC (Life Cycle Costing) Calculator.
 No widget imports. Fetches processes/materials for selected batches from
-NOMAD, extracts cost-relevant rows, and provides the cost-range/per-sample
-math used by excel_export.py.
+NOMAD, and computes cost line items/totals in Python so the same numbers
+feed both the in-app table (gui_components.py) and the exported workbook
+(excel_export.py).
 """
 
 from __future__ import annotations
@@ -242,8 +243,9 @@ def extract_process_step_rows(
     """One row for the process itself (step_index 0), plus one row per
     detected step-like sub-list (e.g. recipe_steps, cleaning) - not every
     multi-item list, since solute/solvent lists belong to Materials, not
-    Processes. Duration/rate only - no cost columns here (process cost is
-    captured via Materials + Labor + Capital_Overhead_Disposal instead).
+    Processes. Duration/rate/location only - no cost here. Cost is looked up
+    per process type (and per location, for equipment) later, by
+    compute_process_cost_rows, against the shared cost reference.
     """
     relevant = {k: v for k, v in process_data.items() if k not in _SKIP_TOP_LEVEL_KEYS}
     flat = flatten_entry(relevant)
@@ -388,11 +390,14 @@ def fetch_samples_per_batch(url: str, token: str, batch_ids: list[str]) -> dict[
     hysprint_utils.api_calls.get_ids_in_batch returns one flat list across
     all requested batches, which loses the per-batch grouping this app
     needs (batch sample counts, per-sample cost allocation) - so batches
-    are queried one at a time here instead. get_ids_in_batch asserts the
-    query returns exactly one batch record; confirmed against live data
-    that at least one real batch fails this (a stale/unusual batch entry),
-    which would otherwise crash the whole scan over an unrelated batch -
-    such a batch is skipped (logged), not fatal.
+    are queried one at a time here instead. Confirmed against a full scan
+    of every real batch on this instance that a handful of batches trip
+    get_ids_in_batch up in more than one way - an AssertionError (its
+    "exactly one batch record" check failing on a stale/unusual batch
+    entry) and a KeyError (an "entities" item missing "lab_id" entirely,
+    from malformed/legacy batch data). Either would otherwise crash the
+    whole scan over one unrelated bad batch - such a batch is skipped
+    (logged), not fatal.
     """
     from hysprint_utils.api_calls import get_ids_in_batch
 
@@ -400,9 +405,39 @@ def fetch_samples_per_batch(url: str, token: str, batch_ids: list[str]) -> dict[
     for batch_id in batch_ids:
         try:
             result[batch_id] = get_ids_in_batch(url, token, [batch_id])
-        except AssertionError:
+        except (AssertionError, KeyError):
             logger.warning("Skipping batch %s - could not resolve its samples via NOMAD.", batch_id)
     return result
+
+
+# NOMAD's search backend caps how many terms an :any query clause can hold
+# (confirmed against a live full-instance scan of ~400 batches / ~6000
+# samples: a single unchunked query raised "400 Bad Request"). Queries
+# built from an arbitrary-length sample/entry id list are chunked to this
+# size and the results merged, so a broad admin scan doesn't crash the way
+# a normal few-batch selection never would.
+_QUERY_CHUNK_SIZE = 300
+
+
+def _chunked(items: list[str], size: int = _QUERY_CHUNK_SIZE) -> list[list[str]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _fetch_entry_ids_for_samples(
+    url: str, token: str, headers: dict, sample_ids: list[str]
+) -> list[str]:
+    entry_ids: list[str] = []
+    for chunk in _chunked(sample_ids):
+        query = {
+            "required": {"metadata": "*"},
+            "owner": "visible",
+            "query": {"results.eln.lab_ids:any": chunk},
+            "pagination": {"page_size": 10000},
+        }
+        response = requests.post(f"{url}/entries/query", headers=headers, json=query)
+        response.raise_for_status()
+        entry_ids.extend(entry["entry_id"] for entry in response.json()["data"])
+    return entry_ids
 
 
 def fetch_process_entries(
@@ -420,39 +455,33 @@ def fetch_process_entries(
     here).
     """
     headers = {"Authorization": f"Bearer {token}"}
-
-    entry_id_query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    response = requests.post(f"{url}/entries/query", headers=headers, json=entry_id_query)
-    response.raise_for_status()
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
-
-    process_query = {
-        "required": {"data": "*", "metadata": "*"},
-        "owner": "visible",
-        "query": {
-            "entry_references.target_entry_id:any": entry_ids,
-            "section_defs.definition_qualified_name": process_type,
-        },
-        "pagination": {"page_size": 10000},
-    }
-    response = requests.post(f"{url}/entries/archive/query", headers=headers, json=process_query)
-    response.raise_for_status()
+    entry_ids = _fetch_entry_ids_for_samples(url, token, headers, sample_ids)
 
     entries = []
-    for entry in response.json()["data"]:
-        archive = entry["archive"]
-        process_data = archive.get("data") or {}
-        if "positon_in_experimental_plan" not in process_data:
-            continue
-        entry_type = (archive.get("metadata") or {}).get("entry_type") or process_data.get(
-            "name", "Unknown Process"
+    for chunk in _chunked(entry_ids):
+        process_query = {
+            "required": {"data": "*", "metadata": "*"},
+            "owner": "visible",
+            "query": {
+                "entry_references.target_entry_id:any": chunk,
+                "section_defs.definition_qualified_name": process_type,
+            },
+            "pagination": {"page_size": 10000},
+        }
+        response = requests.post(
+            f"{url}/entries/archive/query", headers=headers, json=process_query
         )
-        entries.append((process_data, entry_type))
+        response.raise_for_status()
+
+        for entry in response.json()["data"]:
+            archive = entry["archive"]
+            process_data = archive.get("data") or {}
+            if "positon_in_experimental_plan" not in process_data:
+                continue
+            entry_type = (archive.get("metadata") or {}).get("entry_type") or process_data.get(
+                "name", "Unknown Process"
+            )
+            entries.append((process_data, entry_type))
 
     entries.sort(key=lambda item: item[0]["positon_in_experimental_plan"])
     return entries
@@ -474,56 +503,26 @@ def discover_entry_types(url: str, token: str, sample_ids: list[str]) -> list[st
     which works for anything.
     """
     headers = {"Authorization": f"Bearer {token}"}
-
-    entry_id_query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    response = requests.post(f"{url}/entries/query", headers=headers, json=entry_id_query)
-    response.raise_for_status()
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entry_ids = _fetch_entry_ids_for_samples(url, token, headers, sample_ids)
     if not entry_ids:
         return []
 
-    aggregation_query = {
-        "owner": "visible",
-        "query": {"entry_references.target_entry_id:any": entry_ids},
-        "aggregations": {"entry_type_agg": {"terms": {"quantity": "entry_type", "size": 200}}},
-        "pagination": {"page_size": 0},
-    }
-    response = requests.post(f"{url}/entries/query", headers=headers, json=aggregation_query)
-    response.raise_for_status()
-    terms = response.json().get("aggregations", {}).get("entry_type_agg", {}).get("terms", {})
-    found_types = (entry["value"] for entry in terms.get("data", []))
+    found_types: set[str] = set()
+    for chunk in _chunked(entry_ids):
+        aggregation_query = {
+            "owner": "visible",
+            "query": {"entry_references.target_entry_id:any": chunk},
+            "aggregations": {"entry_type_agg": {"terms": {"quantity": "entry_type", "size": 200}}},
+            "pagination": {"page_size": 0},
+        }
+        response = requests.post(f"{url}/entries/query", headers=headers, json=aggregation_query)
+        response.raise_for_status()
+        terms = response.json().get("aggregations", {}).get("entry_type_agg", {}).get("terms", {})
+        found_types.update(entry["value"] for entry in terms.get("data", []))
+
     return sorted(
         entry_type for entry_type in found_types if entry_type not in _EXCLUDED_SCHEMA_TYPES
     )
-
-
-# ---------------------------------------------------------------------------
-# Cost math
-# ---------------------------------------------------------------------------
-
-
-def effective_cost_range(
-    low: float | None, est: float | None, high: float | None
-) -> tuple[float | None, float | None, float | None]:
-    """Cost range fallback: if only a single (Est) value is filled in, that
-    is the only value taken into account for both bounds."""
-    effective_low = low if low is not None else est
-    effective_high = high if high is not None else est
-    return effective_low, est, effective_high
-
-
-def cost_per_sample(cost_est: float | None, num_samples_covered: int) -> float | None:
-    """A cost shared across a process instance's covered samples, divided
-    evenly - the mechanism behind 'an evaporation run costs the same per
-    batch whether it covers 1 or 16 samples'."""
-    if cost_est is None or not num_samples_covered:
-        return None
-    return cost_est / num_samples_covered
 
 
 # ---------------------------------------------------------------------------
@@ -533,18 +532,28 @@ def cost_per_sample(cost_est: float | None, num_samples_covered: int) -> float |
 # with real prices/rates, marks them Verified, and saves it in place. Every
 # user's export automatically reads that same file and carries forward
 # anything that matches by name - no upload step, nothing for a regular
-# user to configure.
+# user to configure. No cost ranges (Low/Est/High) anymore - one figure per
+# line, kept simple per explicit feedback.
 
 
 @dataclass
 class CostReference:
+    process_costs: dict[str, dict] = field(default_factory=dict)  # by Process_Type
     material_prices: dict[str, dict] = field(default_factory=dict)  # by Material_Name
     labor_rates: dict[str, dict] = field(default_factory=dict)  # by Role (LABOR_ROLES)
     overhead_costs: dict[str, dict] = field(default_factory=dict)  # by Item
+    location_costs: dict[str, dict] = field(
+        default_factory=dict
+    )  # by Location, subset of overhead_costs
 
     @property
     def total_entries(self) -> int:
-        return len(self.material_prices) + len(self.labor_rates) + len(self.overhead_costs)
+        return (
+            len(self.process_costs)
+            + len(self.material_prices)
+            + len(self.labor_rates)
+            + len(self.overhead_costs)
+        )
 
 
 def _header_index_map(ws) -> dict[str, int]:
@@ -556,14 +565,26 @@ def parse_cost_reference_workbook(file_bytes: bytes) -> CostReference:
     in a fresh export. Works on either the lean admin cost-reference template
     (excel_export.build_cost_reference_template) or a full per-batch export -
     both use the same header names, looked up by name rather than fixed
-    position. Only reads literal, non-formula columns - formula cells
-    (Price_per_Gram_Est when computed from Price/Grams_on_Bottle, the
-    Effective_*/Total_Price_Est/Summary cells) are recomputed fresh here in
-    Python rather than trusting whatever Excel last cached, since openpyxl
-    can't evaluate formulas itself.
+    position. Only reads literal, non-formula columns - Price_per_Gram_Est is
+    recomputed here from Price/Grams_on_Bottle in Python rather than trusting
+    whatever Excel last cached, since openpyxl can't evaluate formulas itself.
     """
     workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=False)
     reference = CostReference()
+
+    if "Processes" in workbook.sheetnames:
+        ws = workbook["Processes"]
+        idx = _header_index_map(ws)
+        if "Cost" in idx:
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                process_type = row[idx["Process_Type"]]
+                if not process_type:
+                    continue
+                reference.process_costs[str(process_type).strip()] = {
+                    "cost_est": row[idx["Cost"]],
+                    "verified": bool(row[idx["Verified"]]),
+                    "notes": row[idx["Notes"]] or "",
+                }
 
     if "Materials" in workbook.sheetnames:
         ws = workbook["Materials"]
@@ -583,9 +604,15 @@ def parse_cost_reference_workbook(file_bytes: bytes) -> CostReference:
             else:
                 literal = row[idx["Price_per_Gram_Est"]] if "Price_per_Gram_Est" in idx else None
                 price_per_gram_est = literal if isinstance(literal, (int, float)) else None
+            average_quantity = (
+                row[idx["Average_Quantity_Grams"]] if "Average_Quantity_Grams" in idx else None
+            )
             reference.material_prices[str(name).strip()] = {
                 "cas_number": (row[idx["CAS_Number"]] if "CAS_Number" in idx else None) or None,
                 "price_per_gram_est": price_per_gram_est,
+                "average_quantity_grams": (
+                    average_quantity if isinstance(average_quantity, (int, float)) else None
+                ),
                 "verified": bool(row[idx["Verified"]]),
                 "notes": row[idx["Notes"]] or "",
             }
@@ -609,15 +636,253 @@ def parse_cost_reference_workbook(file_bytes: bytes) -> CostReference:
             item = row[idx["Item"]]
             if not item:
                 continue
-            reference.overhead_costs[str(item).strip()] = {
-                "cost_low": row[idx["Cost_Low"]],
-                "cost_est": row[idx["Cost_Est"]],
-                "cost_high": row[idx["Cost_High"]],
+            entry = {
+                "cost_est": row[idx["Cost"]],
                 "verified": bool(row[idx["Verified"]]),
                 "notes": row[idx["Notes"]] or "",
             }
+            reference.overhead_costs[str(item).strip()] = entry
+            location = row[idx["Location"]] if "Location" in idx else None
+            if location:
+                reference.location_costs[str(location).strip()] = entry
 
     return reference
+
+
+# ---------------------------------------------------------------------------
+# Cost computation (pure Python - the same numbers feed the in-app table and
+# the exported workbook, so there is exactly one place this math happens)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProcessCostRow:
+    batch_id: str
+    process_type: str
+    step_count: int
+    locations: list[str]
+    process_cost: float | None
+    process_cost_verified: bool
+    equipment_cost: float | None
+    equipment_cost_verified: bool
+    num_samples: int
+
+    @property
+    def total_cost(self) -> float | None:
+        parts = [c for c in (self.process_cost, self.equipment_cost) if c is not None]
+        return sum(parts) if parts else None
+
+
+@dataclass
+class MaterialCostRow:
+    batch_id: str
+    material_name: str
+    roles: list[str]
+    usage_count: int
+    cas_number: str | None
+    quantity_grams: float | None
+    quantity_source: str  # "average (reference)" or "unknown - not in cost reference yet"
+    price_per_gram: float | None
+    total_cost: float | None
+    verified: bool
+    notes: str
+
+
+@dataclass
+class BatchTotal:
+    batch_id: str
+    num_samples: int
+    material_total: float
+    process_total: float
+    equipment_total: float
+    labor_total: float
+    unverified_count: int
+
+    @property
+    def grand_total(self) -> float:
+        return self.material_total + self.process_total + self.equipment_total + self.labor_total
+
+    @property
+    def per_sample(self) -> float | None:
+        return self.grand_total / self.num_samples if self.num_samples else None
+
+
+def compute_process_cost_rows(
+    process_rows: list[ProcessStepRow],
+    batch_sample_counts: dict[str, int],
+    cost_reference: CostReference | None,
+) -> list[ProcessCostRow]:
+    """One row per (batch, process type), aggregating every step/instance of
+    that type found in the batch. Process cost and equipment cost are kept
+    separate (not summed into one blended figure) since they come from two
+    different reference sheets and mean different things."""
+    grouped: dict[tuple[str, str], list[ProcessStepRow]] = {}
+    for row in process_rows:
+        grouped.setdefault((row.batch_id, row.process_type), []).append(row)
+
+    results = []
+    for (batch_id, process_type), rows in grouped.items():
+        locations = sorted({row.location for row in rows if row.location})
+
+        process_ref = cost_reference.process_costs.get(process_type) if cost_reference else None
+        process_cost = process_ref["cost_est"] if process_ref else None
+        process_verified = bool(process_ref["verified"]) if process_ref else False
+
+        equipment_cost = None
+        equipment_verified = False
+        if cost_reference and locations:
+            matched = [
+                cost_reference.location_costs[loc]
+                for loc in locations
+                if loc in cost_reference.location_costs
+                and cost_reference.location_costs[loc].get("cost_est") is not None
+            ]
+            if matched:
+                equipment_cost = sum(entry["cost_est"] for entry in matched)
+                equipment_verified = all(entry.get("verified") for entry in matched)
+
+        results.append(
+            ProcessCostRow(
+                batch_id=batch_id,
+                process_type=process_type,
+                step_count=len(rows),
+                locations=locations,
+                process_cost=process_cost,
+                process_cost_verified=process_verified,
+                equipment_cost=equipment_cost,
+                equipment_cost_verified=equipment_verified,
+                num_samples=batch_sample_counts.get(batch_id, 0),
+            )
+        )
+    return sorted(results, key=lambda row: (row.batch_id, row.process_type))
+
+
+def compute_material_cost_rows(
+    material_rows: list[MaterialRow],
+    cost_reference: CostReference | None,
+) -> list[MaterialCostRow]:
+    """One row per (batch, material name), aggregating every time that
+    material was used across the batch's processes. Quantity is always the
+    reference file's average-per-use figure multiplied by how many times it
+    was used - NOMAD only gives concentration/volume/thickness for these
+    materials, never a directly usable gram amount (see Guide sheet), so an
+    "actual" grams figure is never available to use instead."""
+    grouped: dict[tuple[str, str], list[MaterialRow]] = {}
+    for row in material_rows:
+        grouped.setdefault((row.batch_id, row.material_name), []).append(row)
+
+    results = []
+    for (batch_id, material_name), rows in grouped.items():
+        ref = cost_reference.material_prices.get(material_name) if cost_reference else None
+        price = ref.get("price_per_gram_est") if ref else None
+        if price is None:
+            price = next((row.price_per_gram_est for row in rows if row.price_per_gram_est), None)
+        average_quantity = ref.get("average_quantity_grams") if ref else None
+
+        usage_count = len(rows)
+        if average_quantity is not None:
+            quantity_grams = average_quantity * usage_count
+            quantity_source = "average (reference)"
+        else:
+            quantity_grams = None
+            quantity_source = "unknown - not in cost reference yet"
+
+        total_cost = (
+            quantity_grams * price if quantity_grams is not None and price is not None else None
+        )
+        cas_number = (ref.get("cas_number") if ref else None) or next(
+            (row.cas_number for row in rows if row.cas_number), None
+        )
+        if ref and ref.get("notes"):
+            notes = ref["notes"]
+        elif price is not None:
+            notes = CHEMICAL_REFERENCE_NOTE
+        else:
+            notes = ""
+
+        results.append(
+            MaterialCostRow(
+                batch_id=batch_id,
+                material_name=material_name,
+                roles=sorted({row.role for row in rows}),
+                usage_count=usage_count,
+                cas_number=cas_number,
+                quantity_grams=quantity_grams,
+                quantity_source=quantity_source,
+                price_per_gram=price,
+                total_cost=total_cost,
+                verified=bool(ref["verified"]) if ref else False,
+                notes=notes,
+            )
+        )
+    return sorted(results, key=lambda row: (row.batch_id, row.material_name))
+
+
+def compute_labor_cost(
+    role: str, hours: float | None, cost_reference: CostReference | None
+) -> tuple[float | None, bool]:
+    """hours x the role's hourly rate from the shared cost reference file."""
+    if not hours or not role:
+        return None, False
+    ref = cost_reference.labor_rates.get(role) if cost_reference else None
+    rate = ref.get("hourly_rate_est") if ref else None
+    if rate is None:
+        return None, False
+    return hours * rate, bool(ref.get("verified"))
+
+
+def compute_batch_totals(
+    process_cost_rows: list[ProcessCostRow],
+    material_cost_rows: list[MaterialCostRow],
+    batch_sample_counts: dict[str, int],
+    labor_costs: dict[str, tuple[float | None, bool]],  # batch_id -> (cost, verified)
+) -> list[BatchTotal]:
+    """One row per batch, plus a grand total is just sum(BatchTotal.grand_total)
+    across the returned list - "total cost of everything selected"."""
+    totals: dict[str, BatchTotal] = {
+        batch_id: BatchTotal(
+            batch_id=batch_id,
+            num_samples=num_samples,
+            material_total=0.0,
+            process_total=0.0,
+            equipment_total=0.0,
+            labor_total=0.0,
+            unverified_count=0,
+        )
+        for batch_id, num_samples in batch_sample_counts.items()
+    }
+
+    for row in process_cost_rows:
+        total = totals.get(row.batch_id)
+        if total is None:
+            continue
+        if row.process_cost is not None:
+            total.process_total += row.process_cost
+            if not row.process_cost_verified:
+                total.unverified_count += 1
+        if row.equipment_cost is not None:
+            total.equipment_total += row.equipment_cost
+            if not row.equipment_cost_verified:
+                total.unverified_count += 1
+
+    for row in material_cost_rows:
+        total = totals.get(row.batch_id)
+        if total is None:
+            continue
+        if row.total_cost is not None:
+            total.material_total += row.total_cost
+            if not row.verified:
+                total.unverified_count += 1
+
+    for batch_id, (labor_cost, labor_verified) in labor_costs.items():
+        total = totals.get(batch_id)
+        if total is None or labor_cost is None:
+            continue
+        total.labor_total += labor_cost
+        if not labor_verified:
+            total.unverified_count += 1
+
+    return [totals[batch_id] for batch_id in sorted(totals)]
 
 
 # The single source of truth: one admin-maintained workbook living alongside

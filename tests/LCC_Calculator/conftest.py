@@ -23,5 +23,4 @@ def _load(unique_name: str, filename: str):
 
 _load("dm_lcc_calculator", "data_manager")
 _load("excel_export_lcc_calculator", "excel_export")
-_load("pm_lcc_calculator", "plot_manager")
 _load("gui_lcc_calculator", "gui_components")
