@@ -1,0 +1,28 @@
+[project]
+name = "lcc-calculator"
+version = "0.1.0"
+description = "Life Cycle Costing calculator for NOMAD batches/experiments"
+requires-python = ">=3.10"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "pandas>=2.0",
+    "pydantic>=2.0",
+    "requests>=2.28",
+    "natsort>=8.0",
+    "openpyxl>=3.1",
+    "plotly>=5.0",
+    "ipywidgets>=8.0",
+    "ipython>=8.0",
+    "notebook>=7.0",
+    "voila>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.metadata]
+allow-direct-references = true
