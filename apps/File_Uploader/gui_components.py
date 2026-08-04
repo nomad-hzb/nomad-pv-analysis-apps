@@ -155,7 +155,13 @@ def create_measurement_type_dropdown():
 def create_auto_match_button():
     return widgets.Button(
         description="Auto-match files to samples by number",
-        layout=widgets.Layout(width="260px", height="32px"),
+        button_style="warning",
+        tooltip=(
+            "Matches unassigned files to sample IDs by their trailing number "
+            "(e.g. S8.txt -> a sample ID ending in 8). Ambiguous or numberless "
+            "files are left for manual assignment."
+        ),
+        layout=widgets.Layout(width="320px", height="36px"),
     )
 
 
@@ -189,7 +195,7 @@ def create_file_type_dropdown_for_file(measurement_types, default_type="hy"):
         options=measurement_types,
         value=default_type,
         description="",
-        layout=widgets.Layout(width="90px", height="32px"),
+        layout=widgets.Layout(width="90px", height="26px"),
     )
 
 
@@ -587,7 +593,7 @@ def on_sample_button_first_click(
                     rows.append(
                         widgets.HBox(
                             [dropdown, widgets.HTML(label_html)],
-                            layout=widgets.Layout(margin="0", padding="0", height="25px"),
+                            layout=widgets.Layout(margin="0", padding="0", height="30px"),
                         )
                     )
                 file_type_container.children = tuple(rows)
@@ -710,19 +716,9 @@ def upload_files_for_samples(
 ):
     """Build per-upload ZIP archives and push them to NOMAD."""
     upload_ids = {}
-    total_uploads = len([s for s, files in sample_files_dict.items() if files])
 
-    progress = widgets.FloatProgress(
-        value=0.0,
-        min=0.0,
-        max=float(total_uploads),
-        description="Uploading:",
-        bar_style="info",
-        orientation="horizontal",
-        layout=widgets.Layout(width="500px"),
-    )
     with out_widget:
-        display(progress)
+        print("Preparing archives...")
 
     for sample_id, file_names in sample_files_dict.items():
         if not file_names:
@@ -756,6 +752,20 @@ def upload_files_for_samples(
 
             with ZipFile(upload_ids[upload_id], "a") as zf:
                 zf.writestr(new_file_name, file_content)
+
+    # Sized to the number of distinct uploads (not sample count -- many
+    # samples commonly share one upload_id), so the bar actually reaches 100%.
+    progress = widgets.FloatProgress(
+        value=0.0,
+        min=0.0,
+        max=float(max(len(upload_ids), 1)),
+        description="Uploading:",
+        bar_style="info",
+        orientation="horizontal",
+        layout=widgets.Layout(width="500px"),
+    )
+    with out_widget:
+        display(progress)
 
     for i, (upload_id, zip_file) in enumerate(upload_ids.items()):
         base = float(i)

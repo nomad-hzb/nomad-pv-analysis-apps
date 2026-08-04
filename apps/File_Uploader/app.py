@@ -247,8 +247,14 @@ def _on_load_button_clicked(
             ),
         )
 
+        auto_match_hint = widgets.HTML(
+            "<div style='margin:0 0 5px;font-style:italic;color:#555;'>"
+            "Files named with a matching number (e.g. S8.txt) can be auto-assigned below."
+            "</div>"
+        )
+
         right_panel = widgets.VBox(
-            [dropdown_all_files, auto_match_button] + state.sample_id_buttons,
+            [auto_match_hint, auto_match_button, dropdown_all_files] + state.sample_id_buttons,
             layout=widgets.Layout(
                 width="600px",
                 height="600px",
