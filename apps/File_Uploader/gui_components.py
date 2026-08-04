@@ -156,7 +156,7 @@ def create_measurement_type_dropdown():
 def create_auto_match_button():
     return widgets.Button(
         description="Auto-match files to samples by number",
-        button_style="warning",
+        style=widgets.ButtonStyle(button_color="#5DADE2", text_color="black"),
         tooltip=(
             "Matches unassigned files to sample IDs by number (e.g. S8.txt, "
             "S8_1.txt -> a sample ID ending in 8). File naming varies a lot, so "
@@ -170,7 +170,7 @@ def create_auto_match_button():
 def create_reset_assignments_button():
     return widgets.Button(
         description="Reset all assignments",
-        button_style="danger",
+        style=widgets.ButtonStyle(button_color="#D6EAF8", text_color="black"),
         tooltip=(
             "Unassigns every file from every sample (including manual "
             "assignments) and returns them to the file list. Does not affect "
