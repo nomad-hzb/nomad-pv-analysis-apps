@@ -23,6 +23,7 @@ from data_manager import (
     get_file_extension,
     get_normalized_type,
     match_files_to_samples,
+    natural_sort_key,
     read_file_from_widget,
     split_json_by_sample,
     state,
@@ -333,8 +334,8 @@ def _make_json_read_job(fname, file_index, file_input, file_selector, status_dis
                 current = list(file_selector.options)
                 if fname in current:
                     current.remove(fname)
-                current.extend(sorted(samples.keys()))
-                file_selector.options = sorted(current)
+                current.extend(samples.keys())
+                file_selector.options = sorted(current, key=natural_sort_key)
                 finish("done")
             except Exception as exc:
                 logger.error("Parsing %s: %s", fname, exc)
@@ -447,7 +448,7 @@ def on_file_input_change(
 
         _run_read_queue(read_jobs)
 
-        file_selector.options = sorted(all_display_files)
+        file_selector.options = sorted(all_display_files, key=natural_sort_key)
         file_count = len(filenames)
         file_count_display.value = (
             f"<b>{file_count} files selected</b>" if file_count > 0 else "<i>No files selected</i>"
@@ -508,7 +509,9 @@ def on_remove_button_click(sample_id, sample_select, file_selector, update_callb
         selected_files = list(sample_select.value)
         if selected_files:
             state.remove_files_from_sample(sample_id, selected_files)
-            file_selector.options = list(file_selector.options) + selected_files
+            file_selector.options = sorted(
+                list(file_selector.options) + selected_files, key=natural_sort_key
+            )
             update_callback()
             with out_widget:
                 out_widget.clear_output()

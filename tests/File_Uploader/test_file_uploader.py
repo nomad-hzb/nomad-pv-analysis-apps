@@ -18,6 +18,7 @@ from data_manager import (
     get_normalized_type,
     get_samples_from_json,
     match_files_to_samples,
+    natural_sort_key,
     prepare_json_file_content,
     split_json_by_sample,
 )
@@ -164,6 +165,28 @@ def test_detect_type_from_content_no_match_returns_none():
 def test_detect_type_from_content_empty_returns_none():
     assert detect_type_from_content(None) is None
     assert detect_type_from_content(b"") is None
+
+
+# ---------------------------------------------------------------------------
+# natural_sort_key
+# ---------------------------------------------------------------------------
+
+
+def test_natural_sort_key_orders_numbers_naturally():
+    filenames = ["S1.txt", "S10.txt", "S11.txt", "S12.txt", "S2.txt", "S20.txt"]
+    assert sorted(filenames, key=natural_sort_key) == [
+        "S1.txt",
+        "S2.txt",
+        "S10.txt",
+        "S11.txt",
+        "S12.txt",
+        "S20.txt",
+    ]
+
+
+def test_natural_sort_key_mixed_text_and_numbers():
+    names = ["sample10_jv", "sample2_jv", "sample1_eqe"]
+    assert sorted(names, key=natural_sort_key) == ["sample1_eqe", "sample2_jv", "sample10_jv"]
 
 
 # ---------------------------------------------------------------------------

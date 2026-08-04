@@ -180,6 +180,11 @@ def categorize_files(filenames, measurement_types):
     return recognized, unrecognized, files_with_dots
 
 
+def natural_sort_key(text):
+    """Sort key for human/natural ordering: 'S2' before 'S10', not after."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
+
+
 def extract_trailing_number(text):
     """Return the last run of digits found in `text` as an int, or None."""
     matches = re.findall(r"\d+", text)
