@@ -233,7 +233,10 @@ def _on_load_button_clicked(
         left_panel = widgets.VBox(
             [
                 widgets.HBox([file_count_display]),
-                file_status_display,
+                widgets.HBox(
+                    [file_status_display, auto_match_button],
+                    layout=widgets.Layout(align_items="center", margin="5px 0"),
+                ),
                 state.file_input_widget,
                 widgets.HTML(
                     "<div style='margin-bottom:5px;margin-top:10px;font-style:italic;color:#555;'>"
@@ -247,17 +250,11 @@ def _on_load_button_clicked(
             ),
         )
 
-        auto_match_hint = widgets.HTML(
-            "<div style='margin:0 0 5px;font-style:italic;color:#555;'>"
-            "Files named with a matching number (e.g. S8.txt) can be auto-assigned below."
-            "</div>"
-        )
-
         right_panel = widgets.VBox(
-            [auto_match_hint, auto_match_button, dropdown_all_files] + state.sample_id_buttons,
+            [dropdown_all_files] + state.sample_id_buttons,
             layout=widgets.Layout(
                 width="600px",
-                height="600px",
+                height="800px",
                 overflow="scroll",
                 padding="10px",
                 border="1px solid #ddd",
