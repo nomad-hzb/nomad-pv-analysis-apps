@@ -5,7 +5,9 @@ upload orchestration, and the user guide.
 
 import json
 import logging
+import threading
 import time
+from collections import defaultdict
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -20,6 +22,7 @@ from data_manager import (
     extract_filenames_from_vuetify,
     get_file_extension,
     get_normalized_type,
+    match_files_to_samples,
     read_file_from_widget,
     split_json_by_sample,
     state,
@@ -32,6 +35,14 @@ except ImportError:
     _FileInput = None
 
 logger = logging.getLogger(__name__)
+
+# Cap on simultaneous chunked file reads in flight. Firing every file's read
+# at once (the old behaviour) could overwhelm the comm channel on large
+# batches and make the whole upload look frozen with no visible cause.
+MAX_CONCURRENT_READS = 6
+# A read that hasn't settled within this many seconds is treated as stuck so
+# it surfaces as a visible error instead of hanging the queue forever.
+READ_TIMEOUT_S = 30
 
 # ---------------------------------------------------------------------------
 # Guide content
@@ -117,6 +128,11 @@ def create_file_count_display():
     return widgets.HTML(value="<i>No files selected</i>")
 
 
+def create_file_status_display():
+    """Live status line for in-progress/failed chunked file reads."""
+    return widgets.HTML(value="")
+
+
 def create_file_selector():
     return widgets.SelectMultiple(
         options=[],
@@ -133,6 +149,13 @@ def create_measurement_type_dropdown():
         description="Override all types:",
         layout=widgets.Layout(width="400px", height="50px"),
         style={"description_width": "initial"},
+    )
+
+
+def create_auto_match_button():
+    return widgets.Button(
+        description="Auto-match files to samples by number",
+        layout=widgets.Layout(width="260px", height="32px"),
     )
 
 
@@ -166,7 +189,7 @@ def create_file_type_dropdown_for_file(measurement_types, default_type="hy"):
         options=measurement_types,
         value=default_type,
         description="",
-        layout=widgets.Layout(width="80px", height="22px"),
+        layout=widgets.Layout(width="90px", height="32px"),
     )
 
 
@@ -180,9 +203,160 @@ def create_sample_file_selector(files_list):
 
 
 # ---------------------------------------------------------------------------
+# Bounded, visible chunked-read orchestration
+# ---------------------------------------------------------------------------
+def _run_read_queue(jobs, max_concurrent=MAX_CONCURRENT_READS):
+    """Run chunked-read jobs with bounded concurrency.
+
+    Each job is a callable taking `on_done`; it must call `on_done()` exactly
+    once when its read settles (success, error, or timeout). Previously every
+    file in a batch started reading at once, which could overwhelm the comm
+    channel on large selections and make the upload look frozen with no
+    visible cause.
+    """
+    pending = list(jobs)
+    in_flight = [0]
+
+    def start_next():
+        while pending and in_flight[0] < max_concurrent:
+            job = pending.pop(0)
+            in_flight[0] += 1
+            job(on_job_done)
+
+    def on_job_done():
+        in_flight[0] -= 1
+        start_next()
+
+    start_next()
+
+
+def _render_file_status_html(status_dict):
+    if not status_dict:
+        return ""
+    reading = [f for f, s in status_dict.items() if s == "reading"]
+    done = [f for f, s in status_dict.items() if s == "done"]
+    problems = {f: s for f, s in status_dict.items() if s not in ("reading", "done")}
+
+    parts = [f"{len(done)} loaded"]
+    if reading:
+        parts.append(f"{len(reading)} in progress")
+    if problems:
+        parts.append(f"{len(problems)} failed")
+    html = f"<div><b>File read status:</b> {', '.join(parts)}</div>"
+
+    if problems:
+        items = "".join(f"<li>{fname}: {status}</li>" for fname, status in problems.items())
+        html += (
+            "<div style='color:#d9534f;'><b>Problem files (re-select them to retry):</b>"
+            f"<ul style='max-height:120px;overflow-y:auto;'>{items}</ul></div>"
+        )
+    return html
+
+
+def _set_file_status(fname, status_text, status_display):
+    state.file_read_status[fname] = status_text
+    if status_display is None:
+        return
+    try:
+        status_display.value = _render_file_status_html(state.file_read_status)
+    except Exception:
+        logger.exception("Failed to update file status display for %s", fname)
+
+
+def _make_regular_read_job(fname, file_index, file_input, status_display):
+    def job(on_done):
+        settled = {"flag": False}
+
+        def finish(status_text):
+            if settled["flag"]:
+                return
+            settled["flag"] = True
+            timer.cancel()
+            _set_file_status(fname, status_text, status_display)
+            on_done()
+
+        def on_complete(content_bytes):
+            state.uploaded_files_data[fname]["file_content"] = content_bytes
+            logger.info("Loaded regular file: %s (%d bytes)", fname, len(content_bytes))
+            finish("done")
+
+        def on_error(msg):
+            logger.error("Reading %s: %s", fname, msg)
+            finish(f"error: {msg}")
+
+        def on_timeout():
+            logger.error("Timed out reading %s after %ds", fname, READ_TIMEOUT_S)
+            finish("timed out")
+
+        timer = threading.Timer(READ_TIMEOUT_S, on_timeout)
+        timer.daemon = True
+        timer.start()
+        _set_file_status(fname, "reading", status_display)
+        read_file_from_widget(file_input, file_index, on_complete, on_error)
+
+    return job
+
+
+def _make_json_read_job(fname, file_index, file_input, file_selector, status_display):
+    json_base = fname.rsplit(".", 1)[0]
+
+    def job(on_done):
+        settled = {"flag": False}
+
+        def finish(status_text):
+            if settled["flag"]:
+                return
+            settled["flag"] = True
+            timer.cancel()
+            _set_file_status(fname, status_text, status_display)
+            on_done()
+
+        def on_complete(content_bytes):
+            try:
+                json_data = json.loads(content_bytes.decode("utf-8"))
+                samples = split_json_by_sample(json_data)
+                logger.info("%s: %d samples found: %s", fname, len(samples), list(samples.keys()))
+                for sample_id, sample_data in samples.items():
+                    output_filename = f"{sample_id}.{sample_id}-{json_base}.jv.json"
+                    state.uploaded_files_data[sample_id] = {
+                        "name": output_filename,
+                        "is_json": True,
+                        "file_content": sample_data["json_content"],
+                        "source_file": fname,
+                    }
+                current = list(file_selector.options)
+                if fname in current:
+                    current.remove(fname)
+                current.extend(sorted(samples.keys()))
+                file_selector.options = sorted(current)
+                finish("done")
+            except Exception as exc:
+                logger.error("Parsing %s: %s", fname, exc)
+                finish(f"error: {exc}")
+
+        def on_error(msg):
+            logger.error("Reading JSON %s: %s", fname, msg)
+            finish(f"error: {msg}")
+
+        def on_timeout():
+            logger.error("Timed out reading %s after %ds", fname, READ_TIMEOUT_S)
+            finish("timed out")
+
+        timer = threading.Timer(READ_TIMEOUT_S, on_timeout)
+        timer.daemon = True
+        timer.start()
+        _set_file_status(fname, "reading", status_display)
+        read_file_from_widget(file_input, file_index, on_complete, on_error)
+
+    return job
+
+
+# ---------------------------------------------------------------------------
 # Callbacks
 # ---------------------------------------------------------------------------
-def on_file_input_change(change, file_input, file_selector, file_count_display, out_widget):
+def on_file_input_change(
+    change, file_input, file_selector, file_count_display, out_widget, file_status_display=None
+):
     """Handle file input change from the FileInput widget."""
     logger.info("on_file_input_change triggered")
     try:
@@ -203,6 +377,7 @@ def on_file_input_change(change, file_input, file_selector, file_count_display, 
         logger.debug("JSON: %d, regular: %d", len(json_files), len(regular_files))
 
         state.uploaded_files_data = {}
+        state.file_read_status = {}
         state.file_input_widget = file_input
 
         recognized_files, unrecognized_files, files_with_dots = categorize_files(
@@ -222,61 +397,49 @@ def on_file_input_change(change, file_input, file_selector, file_count_display, 
                 "epoch_time": epoch_s,
             }
 
-        regular_file_start_index = len(json_files)
-        for i, regular_file_name in enumerate(regular_files):
-            file_index = regular_file_start_index + i
+        # Map each filename to its real position(s) in file_input.file_info so
+        # chunked reads always target the right file, even when JSON and
+        # regular files are interleaved in the original selection order
+        # (recomputing the index by counting within a filtered sublist, as
+        # before, silently reads the wrong file or collides two files onto
+        # the same index once that assumption breaks).
+        name_to_indices = defaultdict(list)
+        for idx, fd in enumerate(file_data_list):
+            if isinstance(fd, dict) and "name" in fd:
+                name_to_indices[fd["name"]].append(idx)
 
-            def make_regular_handlers(fname):
-                def on_complete(content_bytes):
-                    state.uploaded_files_data[fname]["file_content"] = content_bytes
-                    logger.info("Loaded regular file: %s (%d bytes)", fname, len(content_bytes))
+        def next_index_for(name):
+            indices = name_to_indices.get(name)
+            return indices.pop(0) if indices else None
 
-                def on_error(msg):
-                    logger.error("Reading %s: %s", fname, msg)
+        read_jobs = []
 
-                return on_complete, on_error
-
-            oc, oe = make_regular_handlers(regular_file_name)
-            read_file_from_widget(file_input, file_index, oc, oe, out_widget=out_widget)
+        for regular_file_name in regular_files:
+            file_index = next_index_for(regular_file_name)
+            if file_index is None:
+                logger.error("No file_info index found for %s", regular_file_name)
+                continue
+            read_jobs.append(
+                _make_regular_read_job(
+                    regular_file_name, file_index, file_input, file_status_display
+                )
+            )
 
         all_display_files = list(recognized_files) + list(unrecognized_files)
 
-        for i, json_file_name in enumerate(json_files):
+        for json_file_name in json_files:
             all_display_files.append(json_file_name)
+            file_index = next_index_for(json_file_name)
+            if file_index is None:
+                logger.error("No file_info index found for %s", json_file_name)
+                continue
+            read_jobs.append(
+                _make_json_read_job(
+                    json_file_name, file_index, file_input, file_selector, file_status_display
+                )
+            )
 
-            def make_json_handlers(fname):
-                json_base = fname.rsplit(".", 1)[0]
-
-                def on_complete(content_bytes):
-                    try:
-                        json_data = json.loads(content_bytes.decode("utf-8"))
-                        samples = split_json_by_sample(json_data)
-                        logger.info(
-                            "%s: %d samples found: %s", fname, len(samples), list(samples.keys())
-                        )
-                        for sample_id, sample_data in samples.items():
-                            output_filename = f"{sample_id}.{sample_id}-{json_base}.jv.json"
-                            state.uploaded_files_data[sample_id] = {
-                                "name": output_filename,
-                                "is_json": True,
-                                "file_content": sample_data["json_content"],
-                                "source_file": fname,
-                            }
-                        current = list(file_selector.options)
-                        if fname in current:
-                            current.remove(fname)
-                        current.extend(sorted(samples.keys()))
-                        file_selector.options = sorted(current)
-                    except Exception as exc:
-                        logger.error("Parsing %s: %s", fname, exc)
-
-                def on_error(msg):
-                    logger.error("Reading JSON %s: %s", fname, msg)
-
-                return on_complete, on_error
-
-            oc, oe = make_json_handlers(json_file_name)
-            read_file_from_widget(file_input, i, oc, oe, out_widget=out_widget)
+        _run_read_queue(read_jobs)
 
         file_selector.options = sorted(all_display_files)
         file_count = len(filenames)
@@ -286,14 +449,16 @@ def on_file_input_change(change, file_input, file_selector, file_count_display, 
 
         with out_widget:
             out_widget.clear_output()
-            print(f"Uploaded {len(filenames)} files. JSON files loading asynchronously...")
+            print(f"Uploaded {len(filenames)} files. Reading in background, see status above.")
 
             if unrecognized_files:
                 unrecognized_html = (
                     "<div style='color:#d9534f;padding:10px;border:1px solid #d9534f;"
                     "border-radius:5px;margin-top:10px;'>"
-                    "<p><strong>The following files were not recognised:</strong></p>"
-                    "<p>Select the correct type: jv, eqe, mppt, sem, xrd, pes, nmr, trpl, trspv</p>"
+                    "<p><strong>The following files were not recognised by filename:</strong></p>"
+                    "<p>Content-based detection may still identify some of these once they finish "
+                    "loading; otherwise select the correct type: "
+                    "jv, eqe, mppt, sem, xrd, pes, nmr, trpl, trspv</p>"
                     "<ul style='max-height:150px;overflow-y:auto;'>"
                 )
                 for f in unrecognized_files:
@@ -395,7 +560,10 @@ def on_sample_button_first_click(
                     if override_type:
                         default_type = override_type
                     else:
-                        normalized = get_normalized_type(file_name)
+                        file_content = state.uploaded_files_data.get(file_name, {}).get(
+                            "file_content"
+                        )
+                        normalized = get_normalized_type(file_name, file_content)
                         default_type = normalized if normalized else "hy"
                     if file_name not in state.file_type_dict[sample_id]:
                         state.set_file_type(sample_id, file_name, default_type)
@@ -489,6 +657,40 @@ def on_sample_button_first_click(
             raise
 
     return handle_first_click
+
+
+def on_auto_match_click(file_selector, out_widget):
+    """Return a click handler that assigns unassigned files to samples by trailing number."""
+
+    def handle_click(b):
+        filenames = list(file_selector.options)
+        sample_ids = list(state.sample_files_dict.keys())
+        matches, unmatched = match_files_to_samples(filenames, sample_ids)
+
+        for filename, sample_id in matches.items():
+            state.add_files_to_sample(sample_id, [filename])
+
+        if matches:
+            file_selector.options = [f for f in file_selector.options if f not in matches]
+
+        affected_samples = sorted({sample_id for sample_id in matches.values()})
+        for sample_id in affected_samples:
+            button = state.sample_buttons.get(sample_id)
+            if button is not None:
+                button.click()
+
+        with out_widget:
+            out_widget.clear_output()
+            print(
+                f"Auto-matched {len(matches)} file(s) to "
+                f"{len(affected_samples)} sample(s) by number."
+            )
+            if unmatched:
+                print(f"Left {len(unmatched)} file(s) for manual assignment:")
+                for filename, reason in unmatched.items():
+                    print(f"  {filename}: {reason}")
+
+    return handle_click
 
 
 def on_search_field_change(change, batch_ids_list, batch_ids):

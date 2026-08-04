@@ -10,11 +10,14 @@ import json
 from data_manager import (
     categorize_files,
     create_nomad_filename,
+    detect_type_from_content,
     extract_filenames_from_vuetify,
     extract_measurements_from_json,
+    extract_trailing_number,
     get_file_extension,
     get_normalized_type,
     get_samples_from_json,
+    match_files_to_samples,
     prepare_json_file_content,
     split_json_by_sample,
 )
@@ -120,6 +123,100 @@ def test_get_normalized_type_pes_aliases():
 
 def test_get_normalized_type_unknown_returns_hy():
     assert get_normalized_type("randomfile.dat") == "hy"
+
+
+def test_get_normalized_type_falls_back_to_content_sniff():
+    content = b"J_sc [mA/cm2]:\t-3.13\nV_oc [V]:\t0.82\nFill factor [pct.]:\t38.9\n"
+    assert get_normalized_type("S8.txt", content) == "jv"
+
+
+def test_get_normalized_type_filename_match_wins_over_content():
+    content = b"V_oc [V]:\t0.82\nFill factor [pct.]:\t38.9\n"
+    assert get_normalized_type("eqe_scan.txt", content) == "eqe"
+
+
+def test_get_normalized_type_no_content_still_returns_hy():
+    assert get_normalized_type("S8.txt", None) == "hy"
+
+
+# ---------------------------------------------------------------------------
+# detect_type_from_content
+# ---------------------------------------------------------------------------
+
+
+def test_detect_type_from_content_keithley_jv_export():
+    content = (
+        b"Keithley, SerialNo, Firmware:\tKEITHLEY INSTRUMENTS INC.\n"
+        b"J_sc [mA/cm2]:\t-3.13\nV_oc [V]:\t0.82\nFill factor [pct.]:\t38.9\n"
+    )
+    assert detect_type_from_content(content) == "jv"
+
+
+def test_detect_type_from_content_sosim_jv_export():
+    content = b"Setup:\tSoSim PVcomB\nV_oc [V]:\t1.078\nEfficiency [%]:\t17.4\n"
+    assert detect_type_from_content(content) == "jv"
+
+
+def test_detect_type_from_content_no_match_returns_none():
+    assert detect_type_from_content(b"just some unrelated text\n") is None
+
+
+def test_detect_type_from_content_empty_returns_none():
+    assert detect_type_from_content(None) is None
+    assert detect_type_from_content(b"") is None
+
+
+# ---------------------------------------------------------------------------
+# extract_trailing_number / match_files_to_samples
+# ---------------------------------------------------------------------------
+
+
+def test_extract_trailing_number_simple():
+    assert extract_trailing_number("S8") == 8
+
+
+def test_extract_trailing_number_with_delimiter():
+    assert extract_trailing_number("HZB_Batch_Sample_08") == 8
+
+
+def test_extract_trailing_number_no_digits():
+    assert extract_trailing_number("no_number_here") is None
+
+
+def test_match_files_to_samples_unambiguous():
+    filenames = ["S1.txt", "S2.txt", "S8.txt"]
+    sample_ids = ["HZB_Batch_1", "HZB_Batch_2", "HZB_Batch_8"]
+    matches, unmatched = match_files_to_samples(filenames, sample_ids)
+    assert matches == {
+        "S1.txt": "HZB_Batch_1",
+        "S2.txt": "HZB_Batch_2",
+        "S8.txt": "HZB_Batch_8",
+    }
+    assert unmatched == {}
+
+
+def test_match_files_to_samples_ambiguous_sample_numbers():
+    filenames = ["S1.txt"]
+    sample_ids = ["Batch1_1", "Batch2_1"]
+    matches, unmatched = match_files_to_samples(filenames, sample_ids)
+    assert matches == {}
+    assert "S1.txt" in unmatched
+
+
+def test_match_files_to_samples_no_matching_sample():
+    filenames = ["S99.txt"]
+    sample_ids = ["HZB_Batch_1"]
+    matches, unmatched = match_files_to_samples(filenames, sample_ids)
+    assert matches == {}
+    assert unmatched["S99.txt"] == "no sample ID ends with 99"
+
+
+def test_match_files_to_samples_no_number_in_filename():
+    filenames = ["notes.txt"]
+    sample_ids = ["HZB_Batch_1"]
+    matches, unmatched = match_files_to_samples(filenames, sample_ids)
+    assert matches == {}
+    assert unmatched["notes.txt"] == "no number found in filename"
 
 
 # ---------------------------------------------------------------------------

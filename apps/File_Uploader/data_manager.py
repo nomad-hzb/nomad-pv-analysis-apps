@@ -9,6 +9,8 @@ No widget imports in this module.
 import json
 import logging
 import os
+import re
+from collections import defaultdict
 from pathlib import Path
 
 try:
@@ -52,6 +54,18 @@ MEASUREMENT_TYPES = ["hy"] + sorted(
 )
 PES_ALIASES = ["nups", "he-ups", "cfsys", "xps"]
 
+# Marker sets used to identify a measurement type from file content when the
+# filename gives no hint. A type matches if ALL markers in any one of its
+# sets are found (case-insensitive) in the sniffed text. Covers different
+# instrument/software export formats for the same measurement type (e.g. a
+# Keithley IV-tester export and a SoSim PVcomB export both count as "jv").
+CONTENT_TYPE_SIGNATURES = {
+    "jv": (
+        {"v_oc", "fill factor"},
+        {"v_oc", "efficiency"},
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Application state
@@ -62,6 +76,7 @@ class AppState:
     def __init__(self):
         self.upload_files = []
         self.sample_id_buttons = []
+        self.sample_buttons = {}
         self.output_areas = {}
         self.sample_files_dict = {}
         self.file_type_dict = {}
@@ -69,14 +84,17 @@ class AppState:
         self.raw_upload_data = None
         self.uploaded_files_data = {}
         self.file_input_widget = None
+        self.file_read_status = {}
 
     def reset_upload(self):
         self.sample_id_buttons = []
+        self.sample_buttons = {}
         self.output_areas = {}
         self.sample_files_dict = {}
         self.file_type_dict = {}
         self.selected_sample_id = None
         self.uploaded_files_data = {}
+        self.file_read_status = {}
 
     def set_sample_files(self, sample_id, files):
         self.sample_files_dict[sample_id] = files
@@ -109,13 +127,38 @@ state = AppState()
 # ---------------------------------------------------------------------------
 # File utility functions
 # ---------------------------------------------------------------------------
-def get_normalized_type(file_name):
-    """Determine measurement type from filename; returns alias-resolved type."""
+def get_normalized_type(file_name, file_content=None):
+    """Determine measurement type from filename, falling back to content sniffing.
+
+    Filename keyword match takes priority; when it fails and `file_content` is
+    available, the first bytes are checked against CONTENT_TYPE_SIGNATURES
+    (handles files like Keithley JV exports that carry no type hint in the
+    filename at all).
+    """
     file_lower = file_name.lower()
     for mtype in MEASUREMENT_TYPES:
         if mtype in file_lower:
             return "pes" if mtype in PES_ALIASES else mtype
+    sniffed = detect_type_from_content(file_content)
+    if sniffed:
+        return sniffed
     return "hy"
+
+
+def detect_type_from_content(file_content, sniff_bytes=4096):
+    """Return a measurement type inferred from the start of `file_content`, or None."""
+    if not file_content:
+        return None
+    try:
+        text = file_content[:sniff_bytes].decode("utf-8", errors="ignore").lower()
+    except Exception as exc:
+        logger.debug("detect_type_from_content: decode failed: %s", exc)
+        return None
+    for mtype, marker_sets in CONTENT_TYPE_SIGNATURES.items():
+        for markers in marker_sets:
+            if all(marker in text for marker in markers):
+                return mtype
+    return None
 
 
 def extract_filenames_from_vuetify(file_data_list):
@@ -135,6 +178,42 @@ def categorize_files(filenames, measurement_types):
         else:
             unrecognized.append(filename)
     return recognized, unrecognized, files_with_dots
+
+
+def extract_trailing_number(text):
+    """Return the last run of digits found in `text` as an int, or None."""
+    matches = re.findall(r"\d+", text)
+    return int(matches[-1]) if matches else None
+
+
+def match_files_to_samples(filenames, sample_ids):
+    """Match files to samples by the last number in each name (e.g. S8.txt -> ..._8).
+
+    Returns (matches, unmatched):
+        matches: {filename: sample_id} for unambiguous matches
+        unmatched: {filename: reason} for files left for manual assignment
+    """
+    sample_numbers = defaultdict(list)
+    for sample_id in sample_ids:
+        number = extract_trailing_number(sample_id)
+        if number is not None:
+            sample_numbers[number].append(sample_id)
+
+    matches = {}
+    unmatched = {}
+    for filename in filenames:
+        number = extract_trailing_number(filename)
+        if number is None:
+            unmatched[filename] = "no number found in filename"
+            continue
+        candidates = sample_numbers.get(number, [])
+        if not candidates:
+            unmatched[filename] = f"no sample ID ends with {number}"
+        elif len(candidates) > 1:
+            unmatched[filename] = f"ambiguous: {len(candidates)} sample IDs end with {number}"
+        else:
+            matches[filename] = candidates[0]
+    return matches, unmatched
 
 
 def create_nomad_filename(sample_id, original_filename, measurement_type, file_extension):

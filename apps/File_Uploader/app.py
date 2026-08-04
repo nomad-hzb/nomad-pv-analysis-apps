@@ -6,9 +6,11 @@ import time
 import ipywidgets as widgets
 from data_manager import TOKEN, URL_API, state
 from gui_components import (
+    create_auto_match_button,
     create_file_count_display,
     create_file_input,
     create_file_selector,
+    create_file_status_display,
     create_load_button,
     create_measurement_type_dropdown,
     create_output_widgets,
@@ -16,6 +18,7 @@ from gui_components import (
     create_sample_output_area,
     create_upload_button,
     create_upload_button_container,
+    on_auto_match_click,
     on_file_input_change,
     on_sample_button_first_click,
     on_search_field_change,
@@ -89,8 +92,10 @@ def initialize_ui(
     batch_ids = batch_selection_container.children[1]
 
     file_count_display = create_file_count_display()
+    file_status_display = create_file_status_display()
     file_selector = create_file_selector()
     dropdown_all_files = create_measurement_type_dropdown()
+    auto_match_button = create_auto_match_button()
     file_input = create_file_input()
     state.file_input_widget = file_input
 
@@ -101,11 +106,13 @@ def initialize_ui(
             batch_ids,
             file_selector,
             file_count_display,
+            file_status_display,
             out,
             out2,
             get_ids_in_batch,
             get_sample_description,
             dropdown_all_files,
+            auto_match_button,
             on_sample_button_first_click,
             upload_button_container,
             upload_and_process,
@@ -116,7 +123,9 @@ def initialize_ui(
         _on_upload_file(upload_and_process, out2, get_nomad_ids_of_entry)
 
     def on_file_change(change):
-        on_file_input_change(change, file_input, file_selector, file_count_display, out2)
+        on_file_input_change(
+            change, file_input, file_selector, file_count_display, out2, file_status_display
+        )
 
     def on_selection_change_wrapper(change):
         on_selection_change(change, out2)
@@ -126,6 +135,7 @@ def initialize_ui(
 
     load_button.on_click(on_load_button_clicked)
     upload_and_process.on_click(on_upload_file)
+    auto_match_button.on_click(on_auto_match_click(file_selector, out2))
     file_input.observe(on_file_change, names="file_info")
     file_selector.observe(on_selection_change_wrapper, names="value")
     search_field.observe(on_search_change, names="value")
@@ -143,11 +153,13 @@ def _on_load_button_clicked(
     batch_ids,
     file_selector,
     file_count_display,
+    file_status_display,
     out,
     out2,
     get_ids_in_batch,
     get_sample_description,
     dropdown_all_files,
+    auto_match_button,
     on_sample_button_first_click_func,
     upload_button_container,
     upload_and_process,
@@ -200,6 +212,7 @@ def _on_load_button_clicked(
                 sample_button = create_sample_button(sample_id, description)
                 output_area = create_sample_output_area()
                 state.output_areas[sample_id] = output_area
+                state.sample_buttons[sample_id] = sample_button
 
                 sample_button.on_click(
                     on_sample_button_first_click_func(
@@ -220,6 +233,7 @@ def _on_load_button_clicked(
         left_panel = widgets.VBox(
             [
                 widgets.HBox([file_count_display]),
+                file_status_display,
                 state.file_input_widget,
                 widgets.HTML(
                     "<div style='margin-bottom:5px;margin-top:10px;font-style:italic;color:#555;'>"
@@ -234,7 +248,7 @@ def _on_load_button_clicked(
         )
 
         right_panel = widgets.VBox(
-            [dropdown_all_files] + state.sample_id_buttons,
+            [dropdown_all_files, auto_match_button] + state.sample_id_buttons,
             layout=widgets.Layout(
                 width="600px",
                 height="600px",
