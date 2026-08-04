@@ -158,9 +158,23 @@ def create_auto_match_button():
         description="Auto-match files to samples by number",
         button_style="warning",
         tooltip=(
-            "Matches unassigned files to sample IDs by their trailing number "
-            "(e.g. S8.txt -> a sample ID ending in 8). Ambiguous or numberless "
-            "files are left for manual assignment."
+            "Matches unassigned files to sample IDs by number (e.g. S8.txt, "
+            "S8_1.txt -> a sample ID ending in 8). File naming varies a lot, so "
+            "this won't catch every case -- ambiguous or numberless files are "
+            "left for manual assignment, and Reset undoes it if it guesses wrong."
+        ),
+        layout=widgets.Layout(width="320px", height="36px"),
+    )
+
+
+def create_reset_assignments_button():
+    return widgets.Button(
+        description="Reset all assignments",
+        button_style="danger",
+        tooltip=(
+            "Unassigns every file from every sample (including manual "
+            "assignments) and returns them to the file list. Does not affect "
+            "anything already uploaded to NOMAD."
         ),
         layout=widgets.Layout(width="320px", height="36px"),
     )
@@ -238,26 +252,20 @@ def _run_read_queue(jobs, max_concurrent=MAX_CONCURRENT_READS):
 
 
 def _render_file_status_html(status_dict):
-    if not status_dict:
-        return ""
-    reading = [f for f, s in status_dict.items() if s == "reading"]
-    done = [f for f, s in status_dict.items() if s == "done"]
+    """Stay blank in the normal case; only surface files that failed or hung.
+
+    Kept deliberately silent while reads are in progress or succeeding --
+    it exists purely so a stuck/failed chunked read (the original cause of
+    uploads silently freezing) is still visible instead of invisible.
+    """
     problems = {f: s for f, s in status_dict.items() if s not in ("reading", "done")}
-
-    parts = [f"{len(done)} loaded"]
-    if reading:
-        parts.append(f"{len(reading)} in progress")
-    if problems:
-        parts.append(f"{len(problems)} failed")
-    html = f"<div><b>File read status:</b> {', '.join(parts)}</div>"
-
-    if problems:
-        items = "".join(f"<li>{fname}: {status}</li>" for fname, status in problems.items())
-        html += (
-            "<div style='color:#d9534f;'><b>Problem files (re-select them to retry):</b>"
-            f"<ul style='max-height:120px;overflow-y:auto;'>{items}</ul></div>"
-        )
-    return html
+    if not problems:
+        return ""
+    items = "".join(f"<li>{fname}: {status}</li>" for fname, status in problems.items())
+    return (
+        "<div style='color:#d9534f;'><b>File read problems (re-select them to retry):</b>"
+        f"<ul style='max-height:120px;overflow-y:auto;'>{items}</ul></div>"
+    )
 
 
 def _set_file_status(fname, status_text, status_display):
@@ -383,9 +391,13 @@ def on_file_input_change(
         regular_files = [f for f in filenames if not f.lower().endswith(".json")]
         logger.debug("JSON: %d, regular: %d", len(json_files), len(regular_files))
 
-        state.uploaded_files_data = {}
-        state.file_read_status = {}
+        # Add to, never wipe, the existing pool: people commonly load files in
+        # several rounds (some jv now, more jv later, then PL). Previously this
+        # reset uploaded_files_data/file_read_status wholesale on every new
+        # selection, silently discarding already-loaded content for files a
+        # prior round had already assigned to a sample.
         state.file_input_widget = file_input
+        already_assigned = {f for files in state.sample_files_dict.values() for f in files}
 
         recognized_files, unrecognized_files, files_with_dots = categorize_files(
             regular_files, MEASUREMENT_TYPES
@@ -448,10 +460,15 @@ def on_file_input_change(
 
         _run_read_queue(read_jobs)
 
-        file_selector.options = sorted(all_display_files, key=natural_sort_key)
-        file_count = len(filenames)
+        new_unassigned = [f for f in all_display_files if f not in already_assigned]
+        file_selector.options = sorted(
+            set(file_selector.options) | set(new_unassigned), key=natural_sort_key
+        )
+        file_count = len(file_selector.options)
         file_count_display.value = (
-            f"<b>{file_count} files selected</b>" if file_count > 0 else "<i>No files selected</i>"
+            f"<b>{file_count} files waiting to be assigned</b>"
+            if file_count > 0
+            else "<i>No files selected</i>"
         )
 
         with out_widget:
@@ -698,6 +715,41 @@ def on_auto_match_click(file_selector, out_widget):
                 print(f"Left {len(unmatched)} file(s) for manual assignment:")
                 for filename, reason in unmatched.items():
                     print(f"  {filename}: {reason}")
+
+    return handle_click
+
+
+def on_reset_assignments_click(file_selector, out_widget):
+    """Return a click handler that unassigns every file from every sample."""
+
+    def handle_click(b):
+        reclaimed = []
+        affected_samples = []
+        for sample_id, files in state.sample_files_dict.items():
+            if files:
+                reclaimed.extend(files)
+                affected_samples.append(sample_id)
+
+        for sample_id in affected_samples:
+            state.sample_files_dict[sample_id] = []
+            state.file_type_dict.pop(sample_id, None)
+
+        if reclaimed:
+            file_selector.options = sorted(
+                set(file_selector.options) | set(reclaimed), key=natural_sort_key
+            )
+
+        for sample_id in affected_samples:
+            button = state.sample_buttons.get(sample_id)
+            if button is not None:
+                button.click()
+
+        with out_widget:
+            out_widget.clear_output()
+            print(
+                f"Reset {len(reclaimed)} file assignment(s) across "
+                f"{len(affected_samples)} sample(s)."
+            )
 
     return handle_click
 

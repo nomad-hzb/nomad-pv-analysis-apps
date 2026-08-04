@@ -11,6 +11,7 @@ from data_manager import (
     categorize_files,
     create_nomad_filename,
     detect_type_from_content,
+    extract_file_sample_number,
     extract_filenames_from_vuetify,
     extract_measurements_from_json,
     extract_trailing_number,
@@ -240,6 +241,41 @@ def test_match_files_to_samples_no_number_in_filename():
     matches, unmatched = match_files_to_samples(filenames, sample_ids)
     assert matches == {}
     assert unmatched["notes.txt"] == "no number found in filename"
+
+
+# ---------------------------------------------------------------------------
+# extract_file_sample_number -- suffix numbers (exposure time, cell index, ...)
+# must not be mistaken for the sample number
+# ---------------------------------------------------------------------------
+
+
+def test_extract_file_sample_number_prefers_s_prefix_over_trailing_number():
+    assert extract_file_sample_number("S3_1min") == 3
+    assert extract_file_sample_number("S1_1min") == 1
+
+
+def test_extract_file_sample_number_ignores_cell_suffix():
+    assert extract_file_sample_number("S1_1") == 1
+    assert extract_file_sample_number("S1_2") == 1
+    assert extract_file_sample_number("S1_3") == 1
+
+
+def test_extract_file_sample_number_falls_back_without_s_prefix():
+    assert extract_file_sample_number("run_5min_25C.txt") == 25
+
+
+def test_match_files_to_samples_suffix_numbers_do_not_cause_misassignment():
+    filenames = ["S1_1min", "S3_1min", "S1_1", "S1_2", "S1_3"]
+    sample_ids = ["HZB_Batch_1", "HZB_Batch_3"]
+    matches, unmatched = match_files_to_samples(filenames, sample_ids)
+    assert matches == {
+        "S1_1min": "HZB_Batch_1",
+        "S3_1min": "HZB_Batch_3",
+        "S1_1": "HZB_Batch_1",
+        "S1_2": "HZB_Batch_1",
+        "S1_3": "HZB_Batch_1",
+    }
+    assert unmatched == {}
 
 
 # ---------------------------------------------------------------------------

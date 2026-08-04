@@ -14,12 +14,14 @@ from gui_components import (
     create_load_button,
     create_measurement_type_dropdown,
     create_output_widgets,
+    create_reset_assignments_button,
     create_sample_button,
     create_sample_output_area,
     create_upload_button,
     create_upload_button_container,
     on_auto_match_click,
     on_file_input_change,
+    on_reset_assignments_click,
     on_sample_button_first_click,
     on_search_field_change,
     on_selection_change,
@@ -96,6 +98,7 @@ def initialize_ui(
     file_selector = create_file_selector()
     dropdown_all_files = create_measurement_type_dropdown()
     auto_match_button = create_auto_match_button()
+    reset_assignments_button = create_reset_assignments_button()
     file_input = create_file_input()
     state.file_input_widget = file_input
 
@@ -113,6 +116,7 @@ def initialize_ui(
             get_sample_description,
             dropdown_all_files,
             auto_match_button,
+            reset_assignments_button,
             on_sample_button_first_click,
             upload_button_container,
             upload_and_process,
@@ -136,6 +140,7 @@ def initialize_ui(
     load_button.on_click(on_load_button_clicked)
     upload_and_process.on_click(on_upload_file)
     auto_match_button.on_click(on_auto_match_click(file_selector, out2))
+    reset_assignments_button.on_click(on_reset_assignments_click(file_selector, out2))
     file_input.observe(on_file_change, names="file_info")
     file_selector.observe(on_selection_change_wrapper, names="value")
     search_field.observe(on_search_change, names="value")
@@ -160,6 +165,7 @@ def _on_load_button_clicked(
     get_sample_description,
     dropdown_all_files,
     auto_match_button,
+    reset_assignments_button,
     on_sample_button_first_click_func,
     upload_button_container,
     upload_and_process,
@@ -233,10 +239,9 @@ def _on_load_button_clicked(
         left_panel = widgets.VBox(
             [
                 widgets.HBox([file_count_display]),
-                widgets.HBox(
-                    [file_status_display, auto_match_button],
-                    layout=widgets.Layout(align_items="center", margin="5px 0"),
-                ),
+                file_status_display,
+                auto_match_button,
+                reset_assignments_button,
                 state.file_input_widget,
                 widgets.HTML(
                     "<div style='margin-bottom:5px;margin-top:10px;font-style:italic;color:#555;'>"

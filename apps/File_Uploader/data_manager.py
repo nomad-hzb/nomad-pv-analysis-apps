@@ -191,8 +191,23 @@ def extract_trailing_number(text):
     return int(matches[-1]) if matches else None
 
 
+def extract_file_sample_number(filename):
+    """Return the sample number embedded in a filename.
+
+    Prefers the number directly after a leading 'S'/'s' token (the common
+    "S1", "S2", ... convention), since a trailing number elsewhere in the
+    name -- an exposure time, a cell/pixel index, e.g. "S3_1min", "S1_2"
+    -- is not the sample number. Falls back to the last run of digits in
+    the name when no such token exists.
+    """
+    match = re.search(r"(?:^|[_\-\s])[Ss](\d+)", filename)
+    if match:
+        return int(match.group(1))
+    return extract_trailing_number(filename)
+
+
 def match_files_to_samples(filenames, sample_ids):
-    """Match files to samples by the last number in each name (e.g. S8.txt -> ..._8).
+    """Match files to samples by number (e.g. S8.txt / S8_1.txt -> sample ID ending in 8).
 
     Returns (matches, unmatched):
         matches: {filename: sample_id} for unambiguous matches
@@ -207,7 +222,7 @@ def match_files_to_samples(filenames, sample_ids):
     matches = {}
     unmatched = {}
     for filename in filenames:
-        number = extract_trailing_number(filename)
+        number = extract_file_sample_number(filename)
         if number is None:
             unmatched[filename] = "no number found in filename"
             continue
