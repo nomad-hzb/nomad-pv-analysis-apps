@@ -69,7 +69,12 @@ PARAMETER_BLACKLIST = {
 # ============================================================================
 # Each entry drives the X/Y/Color Data Source -> Material -> Parameter cascade
 # on the Plotting tab and then creates the plot. "color" may be None to leave
-# color off. Add more presets here - no code changes needed elsewhere.
+# color off. An axis's "source" may be "any_metadata" - resolved at apply time
+# to whichever process-metadata data source happens to be loaded (batch/
+# Material Type don't depend on which specific process type they're read
+# from), since the actual process types available vary per NOMAD upload and
+# can't be hardcoded here. Add more presets here - no code changes needed
+# elsewhere.
 
 PRESET_PLOTS = [
     {
@@ -77,8 +82,35 @@ PRESET_PLOTS = [
         "label": "JV Efficiency vs Datetime",
         "x": {"source": "Results", "material": "JV", "param": "datetime (JV)"},
         "y": {"source": "Results", "material": "JV", "param": "efficiency (JV)"},
-        "color": None,
+        "color": {"source": "any_metadata", "material": "All", "param": "batch"},
         "plot_type": "Scatter",
+        "aggregation": "All Points",
+    },
+    {
+        "id": "jv_efficiency_vs_voc",
+        "label": "Efficiency vs Voc",
+        "x": {"source": "Results", "material": "JV", "param": "open_circuit_voltage (JV)"},
+        "y": {"source": "Results", "material": "JV", "param": "efficiency (JV)"},
+        "color": {"source": "any_metadata", "material": "All", "param": "batch"},
+        "plot_type": "Scatter",
+        "aggregation": "All Points",
+    },
+    {
+        "id": "jv_efficiency_vs_fill_factor",
+        "label": "Efficiency vs Fill Factor",
+        "x": {"source": "Results", "material": "JV", "param": "fill_factor (JV)"},
+        "y": {"source": "Results", "material": "JV", "param": "efficiency (JV)"},
+        "color": {"source": "any_metadata", "material": "All", "param": "batch"},
+        "plot_type": "Scatter",
+        "aggregation": "All Points",
+    },
+    {
+        "id": "jv_efficiency_by_batch",
+        "label": "Efficiency by Batch",
+        "x": {"source": "any_metadata", "material": "All", "param": "batch"},
+        "y": {"source": "Results", "material": "JV", "param": "efficiency (JV)"},
+        "color": None,
+        "plot_type": "Boxplot",
         "aggregation": "All Points",
     },
 ]

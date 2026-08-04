@@ -1002,11 +1002,21 @@ class SampleDataExplorer:
         change-event firing (a preset may set a dropdown to the value it already
         holds, which does not fire an observer), so every axis is force-refreshed
         via the same internal methods the observers call.
+
+        A "source" of "any_metadata" (used for e.g. batch/Material Type, which
+        don't depend on which specific process type they're read from) resolves
+        to whichever process-metadata data source happens to be loaded for this
+        batch - the actual process types available vary per NOMAD upload.
+        Values not actually present in a selector's options (e.g. a metadata
+        parameter this dataset doesn't have) are skipped with a warning rather
+        than raising, since presets are meant to work across differently-shaped
+        datasets on a best-effort basis.
         """
         if not self.current_sample_ids:
             self._update_status("⚠️ Load batches before applying a preset plot.")
             return
 
+        skipped = []
         for axis in ("x", "y", "color"):
             axis_cfg = preset.get(axis)
             data_source_sel = getattr(self.gui, f"{axis}_data_source_selector")
@@ -1016,22 +1026,50 @@ class SampleDataExplorer:
             if axis_cfg is None:
                 if axis == "color" and "None" in data_source_sel.options:
                     data_source_sel.value = "None"
+                    # _on_create_plot keys off color_param_selector.value, not
+                    # the data source - reset it too, or a "no color" preset
+                    # can silently inherit whatever was last selected.
+                    if "None" in param_sel.options:
+                        param_sel.value = "None"
                 continue
 
-            data_source_sel.value = axis_cfg["source"]
-            self._load_data_for_source(axis_cfg["source"], axis)
+            source = axis_cfg["source"]
+            if source == "any_metadata":
+                metadata_options = [
+                    opt for opt in data_source_sel.options if opt not in ("None", "Results")
+                ]
+                if not metadata_options:
+                    skipped.append(
+                        f"{axis.upper()} ({axis_cfg['param']} - no process metadata loaded)"
+                    )
+                    continue
+                source = metadata_options[0]
 
-            material_sel.value = axis_cfg["material"]
-            if axis_cfg["source"] == "Results":
-                self._filter_results_parameters(axis, axis_cfg["material"])
+            if source not in data_source_sel.options:
+                skipped.append(f"{axis.upper()} ({source} not available)")
+                continue
 
-            param_sel.value = axis_cfg["param"]
+            data_source_sel.value = source
+            self._load_data_for_source(source, axis)
+
+            if axis_cfg["material"] in material_sel.options:
+                material_sel.value = axis_cfg["material"]
+            if source == "Results":
+                self._filter_results_parameters(axis, material_sel.value)
+
+            if axis_cfg["param"] in param_sel.options:
+                param_sel.value = axis_cfg["param"]
+            else:
+                skipped.append(f"{axis.upper()} ({axis_cfg['param']} not available)")
 
         self.gui.plot_type_selector.value = preset.get("plot_type", "Scatter")
         self.gui.jv_aggregation_selector.value = preset.get("aggregation", "All Points")
 
         self._rebuild_merged_data()
         self._on_create_plot(None)
+
+        if skipped:
+            self._update_status("⚠️ Preset applied, but skipped: " + "; ".join(skipped))
 
     def _on_create_plot(self, button):
         """Handle plot creation."""

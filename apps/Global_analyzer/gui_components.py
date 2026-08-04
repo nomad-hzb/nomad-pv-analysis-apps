@@ -558,8 +558,14 @@ class GUIManager:
             self.preset_buttons[preset["id"]] = button
             buttons.append(button)
 
+        # flex_flow "row wrap" + align_items "flex-start" - without these a
+        # Box's children stretch to the full container width by default, which
+        # turns short preset buttons into full-width bars.
+        button_row = widgets.HBox(
+            buttons, layout={"flex_flow": "row wrap", "align_items": "flex-start", "gap": "8px"}
+        )
         accordion = widgets.Accordion(
-            children=[widgets.VBox(buttons)],
+            children=[button_row],
             titles=("Plot Presets",),
         )
         accordion.selected_index = 0  # Start open
@@ -842,6 +848,13 @@ class GUIManager:
                     "(x-axis) and checked Process Metadata (y-axis) columns from the "
                     "Analysis Data tab. Parameters with too few distinct values (e.g. "
                     "flags/constants) are excluded via the threshold below.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> a quick way to spot which "
+                    "process settings tend to move together with your results - a strong "
+                    "correlation is a hint (not proof) of a relationship worth testing "
+                    "deliberately.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Correlation" target="_blank">'
+                    "Correlation (Wikipedia)</a></p>"
                 ),
                 widgets.HBox(
                     [
@@ -870,6 +883,12 @@ class GUIManager:
                     "<p style='color:#666;'>Fits a Random Forest to predict the chosen "
                     "target (a Results column) from the checked Process Metadata columns "
                     "in the Analysis Data tab, and reports which parameters matter most.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> tells you which process "
+                    "parameters matter most for your outcome - useful for deciding what to "
+                    "control tightly during fabrication and what to deprioritize.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Random_forest" target="_blank">'
+                    "Random forest (Wikipedia)</a></p>"
                 ),
                 widgets.HTML(
                     f'<p><a href="{doe_voila_url}" target="_blank" title="{doe_full_url}">'
@@ -900,6 +919,12 @@ class GUIManager:
                     "you need to track optimization rounds over time, that would need "
                     "e.g. a 'round' sample tag added to the data - not implemented "
                     "here.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> suggests which parameter "
+                    "combination to try next to improve your target, usually reaching a "
+                    "good result in far fewer experiments than a full grid search.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Bayesian_optimization" target="_blank">'
+                    "Bayesian optimization (Wikipedia)</a></p>"
                 ),
                 widgets.HBox(
                     [
@@ -929,6 +954,12 @@ class GUIManager:
                     "<p style='color:#666;'>PCA over the checked Process Metadata "
                     "columns - shows which process parameters vary/cluster "
                     "together.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> spots redundant knobs "
+                    "(e.g. two temperatures that always move together) and can reveal "
+                    "batches with a similar overall process 'fingerprint' at a glance.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Principal_component_analysis" '
+                    'target="_blank">Principal component analysis (Wikipedia)</a></p>'
                 ),
                 widgets.HBox(
                     [self.experimental_pca_color_selector, self.experimental_pca_run_button]
@@ -945,6 +976,13 @@ class GUIManager:
                     "<p style='color:#666;'>Finds the Pareto-optimal trade-off "
                     "between two checked Results columns - points where you can't "
                     "improve one without making the other worse.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> highlights the best "
+                    "trade-off samples between two competing goals (e.g. efficiency vs. "
+                    "stability) - the front tells you what's actually achievable "
+                    "together, not just what's best for each goal individually.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Pareto_front" target="_blank">'
+                    "Pareto front (Wikipedia)</a></p>"
                 ),
                 widgets.HBox(
                     [
@@ -972,6 +1010,12 @@ class GUIManager:
                     "Process Metadata + Results columns combined - flags samples "
                     "whose overall parameter/result combination looks unusual, "
                     "not just single-column extremes.</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> a fast way to catch "
+                    "mismeasured, mislabeled, or genuinely anomalous samples before they "
+                    "skew a correlation, Random Forest, or other analysis downstream.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Isolation_forest" target="_blank">'
+                    "Isolation forest (Wikipedia)</a></p>"
                 ),
                 widgets.HBox(
                     [
@@ -991,6 +1035,12 @@ class GUIManager:
                     "<p style='color:#666;'>Checks whether a checked Process "
                     "Metadata parameter trends up or down over time (parsed from "
                     "the raw datetime field).</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> catches tool drift, "
+                    "calibration issues, or slow environmental changes before they show "
+                    "up as an unexplained dip in yield.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Trend_estimation" target="_blank">'
+                    "Trend estimation (Wikipedia)</a></p>"
                 ),
                 widgets.HBox(
                     [self.experimental_drift_param_selector, self.experimental_drift_run_button]
@@ -1007,6 +1057,13 @@ class GUIManager:
                     "<p style='color:#666;'>One-way ANOVA: does a checked Results "
                     "column differ significantly across groups of a categorical "
                     "process metadata column (e.g. layer material)?</p>"
+                    "<p style='color:#444;'><b>Why it helps:</b> tells you whether a "
+                    "categorical choice (e.g. which material or which tool) makes a "
+                    "statistically real difference in your results, or whether the "
+                    "difference you're seeing is just noise.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>Learn more: "
+                    '<a href="https://en.wikipedia.org/wiki/Analysis_of_variance" '
+                    'target="_blank">Analysis of variance (Wikipedia)</a></p>'
                 ),
                 widgets.HBox(
                     [self.experimental_anova_group_selector, self.experimental_anova_value_selector]
