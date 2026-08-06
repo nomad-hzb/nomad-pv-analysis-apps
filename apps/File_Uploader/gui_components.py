@@ -586,11 +586,18 @@ def on_sample_button_first_click(
                     if override_type:
                         default_type = override_type
                     else:
-                        file_content = state.uploaded_files_data.get(file_name, {}).get(
-                            "file_content"
-                        )
-                        normalized = get_normalized_type(file_name, file_content)
-                        default_type = normalized if normalized else "hy"
+                        file_info = state.uploaded_files_data.get(file_name, {})
+                        if file_info.get("is_json"):
+                            # JSON mode is exclusively the JV-scan format (output
+                            # always ends in ".jv.json") -- the file_name here is the
+                            # sample ID, not the real filename, so it carries no "jv"
+                            # hint for get_normalized_type to find.
+                            default_type = "jv"
+                        else:
+                            normalized = get_normalized_type(
+                                file_name, file_info.get("file_content")
+                            )
+                            default_type = normalized if normalized else "hy"
                     if file_name not in state.file_type_dict[sample_id]:
                         state.set_file_type(sample_id, file_name, default_type)
                     if override_type:
