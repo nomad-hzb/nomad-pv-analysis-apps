@@ -63,7 +63,7 @@ def _current_user_name() -> str:
 
 
 def _quick_fill_button_for(field_key: str, value_widget: widgets.Text) -> widgets.Button | None:
-    """Shared by _build_field_row (non-varying fields) and VaryingFieldsMatrix's
+    """Shared by _FieldRow (non-varying fields) and VaryingFieldsMatrix's
     per-sample cells (varying fields moved into the matrix) - a "Today" button for
     Date/Datetime fields (see data_manager.DATE_FIELD_FORMATS), a "Me" button for
     Operator. Writes straight into value_widget.value, which fires the same observe chain
@@ -163,7 +163,11 @@ def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets
     containing a data_manager.FORBIDDEN_VALUE_CHARACTERS character: shows a red border +
     warning message instead of calling on_valid, so nothing downstream (Excel generation,
     Nomad ID) ever sees it. The widget still shows whatever the user typed - only the
-    underlying state write is skipped - so typing isn't fought mid-keystroke."""
+    underlying state write is skipped - so typing isn't fought mid-keystroke.
+
+    Returns the observer callback so a caller that later needs to write into
+    text_widget.value programmatically (e.g. _FieldRow syncing from external state) can
+    unobserve/reobserve around that write instead of looping back through on_valid."""
 
     def _on_change(change):
         new_value = change["new"]
@@ -177,15 +181,10 @@ def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets
         on_valid(new_value)
 
     text_widget.observe(_on_change, names="value")
+    return _on_change
 
 
-def _build_field_row(
-    field_key: str,
-    spec: ProcessFieldSpec,
-    on_varies_change,
-    on_value_change,
-    preview_value=None,
-) -> widgets.Widget:
+class _FieldRow(widgets.HBox):
     """Shared by ProcessFieldsPanel and ExperimentInfoPanel: a 'varies' checkbox, the
     field label (with a trailing '*' when required_for_progress), a value input (with a
     quick-fill button for Date/Datetime/Operator fields), and an 'outlier' flag when
@@ -194,65 +193,124 @@ def _build_field_row(
     autofilled field stays editable here, per the product requirement that autofill never
     locks a field.
 
-    `preview_value`, when the field is still empty, is shown as the input's placeholder
-    (native greyed-out text, not an official value) - a hint of what the active source
-    batch would supply if adopted; falls back to a generic "value" placeholder when no
-    preview is available.
+    Built once per field_key and refreshed in place via update() afterwards, instead of
+    being torn down and rebuilt on every edit. The panels used to call a plain
+    `_build_field_row()` function inside their `_render()`, which - since editing any one
+    field re-renders the whole panel - discarded and recreated every row's Checkbox/Text
+    widgets on every keystroke-commit. That destroyed the DOM element the user had just
+    clicked/tabbed into out from under them (needing a second click, dropping the first
+    characters typed into the next field) and left tab order to whatever order the
+    recreated widgets happened to re-attach in. Keeping the same widget instances alive
+    and only mutating the traits that actually changed avoids both.
 
     required_for_progress is no longer editable from this row (see
     config/required_fields.json) - it's shown as a '*' after the label instead of a
     checkbox, per the product ask to keep "what's required" out of the day-to-day UI."""
-    varies_checkbox = widgets.Checkbox(
-        value=spec.varies, indent=False, layout=widgets.Layout(width="24px")
-    )
-    varies_checkbox.observe(
-        lambda change, key=field_key: on_varies_change(key, change["new"]), names="value"
-    )
 
-    label_text = f"{field_key} *" if spec.required_for_progress else field_key
-    label = widgets.Label(value=label_text, layout=widgets.Layout(width="220px"))
+    def __init__(self, field_key: str, spec: ProcessFieldSpec, on_varies_change, on_value_change):
+        self.field_key = field_key
+        self._on_varies_change = on_varies_change
+        self._on_value_change = on_value_change
+        self._varies = spec.varies
 
-    quick_fill_button = None
-    warning_html = widgets.HTML(value="")
-    if spec.varies:
-        value_widget = widgets.HTML(value="<i>varies - see matrix</i>")
-    else:
+        self.varies_checkbox = widgets.Checkbox(
+            value=spec.varies, indent=False, layout=widgets.Layout(width="24px")
+        )
+        # Not in the Tab cycle: with one checkbox ahead of every value input, leaving it
+        # tabbable meant Tab-ing out of one field landed on the NEXT field's checkbox
+        # instead of the next field itself. Still reachable by click or Shift+Tab.
+        self.varies_checkbox.tabbable = False
+        self.varies_checkbox.observe(self._handle_varies_change, names="value")
+
+        self.label = widgets.Label(layout=widgets.Layout(width="220px"))
+        self.outlier_html = widgets.HTML(value="")
+        self.warning_html = widgets.HTML(value="")
+        self.value_widget: widgets.Widget | None = None
+        self.quick_fill_button: widgets.Button | None = None
+        self._value_observer = None
+
+        super().__init__([], layout=widgets.Layout(align_items="center", margin="1px 0"))
+        self.update(spec)
+
+    def _handle_varies_change(self, change) -> None:
+        self._on_varies_change(self.field_key, change["new"])
+
+    def _handle_value_change(self, new_value) -> None:
+        self._on_value_change(self.field_key, new_value)
+
+    def update(self, spec: ProcessFieldSpec, preview_value=None) -> None:
+        """`preview_value`, when the field is still empty, is shown as the input's
+        placeholder (native greyed-out text, not an official value) - a hint of what the
+        active source batch would supply if adopted; falls back to a generic "value"
+        placeholder when no preview is available."""
+        self.label.value = f"{self.field_key} *" if spec.required_for_progress else self.field_key
+        self.outlier_html.value = _outlier_flag_html(spec).value
+        if self.varies_checkbox.value != spec.varies:
+            self.varies_checkbox.value = spec.varies
+
+        if self.value_widget is None or spec.varies != self._varies:
+            self._varies = spec.varies
+            self._rebuild_value_cell(spec, preview_value)
+        elif not spec.varies:
+            self._sync_value_widget(spec, preview_value)
+
+        row_children = [self.varies_checkbox, self.label, self.value_widget]
+        if self.quick_fill_button is not None:
+            row_children.append(self.quick_fill_button)
+        row_children.append(self.outlier_html)
+        row_children.append(self.warning_html)
+        self.children = row_children
+
+    def _rebuild_value_cell(self, spec: ProcessFieldSpec, preview_value) -> None:
+        self.warning_html.value = ""
+        self._value_observer = None
+        if spec.varies:
+            self.value_widget = widgets.HTML(value="<i>varies - see matrix</i>")
+            self.quick_fill_button = None
+            return
+
         placeholder = "value" if preview_value is None else str(preview_value)
-        value_widget = widgets.Text(
+        self.value_widget = widgets.Text(
             value="" if spec.value is None else str(spec.value),
             placeholder=placeholder,
             layout=widgets.Layout(width="200px"),
-            # continuous_update=False: on_value_change ultimately triggers a full panel
-            # re-render (see _notify_change), which discards and rebuilds this very
-            # widget. With the ipywidgets default (True, fires on every keystroke), that
-            # rebuild raced with the browser's own IME/typing state on every character -
-            # reported as "typing lags, and often only the first character or two of a
-            # fast-typed word survive." Committing on blur/Enter instead avoids the
-            # mid-keystroke rebuild entirely.
+            # continuous_update=False: on_value_change writes into state and refreshes
+            # the panel's rows; committing on blur/Enter instead of every keystroke keeps
+            # that from firing (and racing the browser's own typing/IME state) on every
+            # character - see the class docstring for what that broke.
             continuous_update=False,
         )
-        if field_key in DATE_FIELD_FORMATS:
+        if self.field_key in DATE_FIELD_FORMATS:
             # Exempt: colons in "HH:MM:SS" are legitimate here, and this field never
             # feeds into an ID/filename - see _guard_forbidden_characters' docstring.
-            value_widget.observe(
-                lambda change, key=field_key: on_value_change(key, change["new"]), names="value"
-            )
+            def _observer(change):
+                self._handle_value_change(change["new"])
+
+            self.value_widget.observe(_observer, names="value")
+            self._value_observer = _observer
         else:
-            _guard_forbidden_characters(
-                value_widget,
-                warning_html,
-                lambda new_value, key=field_key: on_value_change(key, new_value),
+            self._value_observer = _guard_forbidden_characters(
+                self.value_widget, self.warning_html, self._handle_value_change
             )
 
-        quick_fill_button = _quick_fill_button_for(field_key, value_widget)
+        self.quick_fill_button = _quick_fill_button_for(self.field_key, self.value_widget)
 
-    row_children = [varies_checkbox, label, value_widget]
-    if quick_fill_button is not None:
-        row_children.append(quick_fill_button)
-    row_children.append(_outlier_flag_html(spec))
-    row_children.append(warning_html)
-
-    return widgets.HBox(row_children, layout=widgets.Layout(align_items="center", margin="1px 0"))
+    def _sync_value_widget(self, spec: ProcessFieldSpec, preview_value) -> None:
+        placeholder = "value" if preview_value is None else str(preview_value)
+        if self.value_widget.placeholder != placeholder:
+            self.value_widget.placeholder = placeholder
+        new_value = "" if spec.value is None else str(spec.value)
+        if self.value_widget.value == new_value:
+            return
+        # Programmatic sync (state changed some other way than this widget's own edit,
+        # e.g. a direct on_value_change call or a future non-widget autofill path) -
+        # unobserve around the write so it doesn't loop back through on_valid/on_change a
+        # second time for a value that's already been persisted.
+        if self._value_observer is not None:
+            self.value_widget.unobserve(self._value_observer, names="value")
+        self.value_widget.value = new_value
+        if self._value_observer is not None:
+            self.value_widget.observe(self._value_observer, names="value")
 
 
 _REAL_PROCESS_TYPES = [p for p in AVAILABLE_PROCESSES if p != "Experiment Info"]
@@ -277,6 +335,8 @@ class ProcessFieldsPanel(widgets.VBox):
         self.process = process
         self.cache = cache
         self.on_change = on_change
+        self._rows: dict[str, _FieldRow] = {}
+        self._provenance_widget = widgets.HTML(value="")
         super().__init__([])
         self._render()
 
@@ -296,19 +356,22 @@ class ProcessFieldsPanel(widgets.VBox):
         # checkbox was unchecked again - see that function's docstring), so this filters
         # back down to only what the process's CURRENT config actually has a column for.
         visible_specs = relevant_field_specs(self.process)
-        self.children = [
-            _provenance_summary_html(visible_specs.values()),
-            *(
-                _build_field_row(
-                    field_key,
-                    spec,
-                    self._on_varies_change,
-                    self._on_value_change,
-                    preview_value=self._preview_for(field_key, spec),
-                )
-                for field_key, spec in visible_specs.items()
-            ),
-        ]
+        self._provenance_widget.value = _provenance_summary_html(visible_specs.values()).value
+
+        # Row widgets are kept alive across renders (see _FieldRow) - only the field set
+        # actually changing (added/removed field) touches self.children; a plain value or
+        # varies edit just updates the existing rows' traits in place.
+        for field_key in list(self._rows):
+            if field_key not in visible_specs:
+                del self._rows[field_key]
+        for field_key, spec in visible_specs.items():
+            row = self._rows.get(field_key)
+            if row is None:
+                row = _FieldRow(field_key, spec, self._on_varies_change, self._on_value_change)
+                self._rows[field_key] = row
+            row.update(spec, preview_value=self._preview_for(field_key, spec))
+
+        self.children = [self._provenance_widget, *(self._rows[key] for key in visible_specs)]
 
     def _on_varies_change(self, field_key: str, varies: bool) -> None:
         spec = self.process.field_specs[field_key]
@@ -335,6 +398,8 @@ class ExperimentInfoPanel(widgets.VBox):
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
+        self._rows: dict[str, _FieldRow] = {}
+        self._provenance_widget = widgets.HTML(value="")
         super().__init__([])
         self._render()
 
@@ -349,13 +414,21 @@ class ExperimentInfoPanel(widgets.VBox):
             for field_key, spec in self.state.experiment_info_fields.items()
             if field_key not in EXPERIMENT_INFO_COMPUTED_KEYS
         }
-        self.children = [
-            _provenance_summary_html(relevant.values()),
-            *(
-                _build_field_row(field_key, spec, self._on_varies_change, self._on_value_change)
-                for field_key, spec in relevant.items()
-            ),
-        ]
+        self._provenance_widget.value = _provenance_summary_html(relevant.values()).value
+
+        # See ProcessFieldsPanel._render: rows are kept alive across renders so a plain
+        # value/varies edit never tears down and rebuilds every field's widgets.
+        for field_key in list(self._rows):
+            if field_key not in relevant:
+                del self._rows[field_key]
+        for field_key, spec in relevant.items():
+            row = self._rows.get(field_key)
+            if row is None:
+                row = _FieldRow(field_key, spec, self._on_varies_change, self._on_value_change)
+                self._rows[field_key] = row
+            row.update(spec)
+
+        self.children = [self._provenance_widget, *(self._rows[key] for key in relevant)]
 
     def _on_varies_change(self, field_key: str, varies: bool) -> None:
         spec = self.state.experiment_info_fields[field_key]
@@ -397,7 +470,7 @@ class SampleSetupPanel(widgets.VBox):
             description="Total samples:",
             style={"description_width": "initial"},
             # continuous_update=False: every change rebuilds sets_inputs_box's per-Subbatch
-            # widgets from scratch (_render_set_inputs) - see _build_field_row's
+            # widgets from scratch (_render_set_inputs) - see _FieldRow's
             # value_widget for why firing that on every keystroke, not on blur/Enter,
             # caused typing lag/dropped digits.
             continuous_update=False,
@@ -925,7 +998,7 @@ class VaryingFieldsMatrix(widgets.VBox):
             cell = widgets.Text(
                 value="" if value is None else str(value),
                 layout=widgets.Layout(width="180px"),
-                # continuous_update=False - see _build_field_row's value_widget for why.
+                # continuous_update=False - see _FieldRow's value_widget for why.
                 # Here the cost is much worse: a per-keystroke change rebuilds the ENTIRE
                 # matrix (every sample x every varying column), which is very likely the
                 # real cause behind "the table sometimes doesn't appear" - large-matrix
@@ -1627,7 +1700,7 @@ class ProcessSequenceBuilder(widgets.VBox):
                 description=f"{label}:",
                 style={"description_width": "initial"},
                 layout=widgets.Layout(width="120px"),
-                # continuous_update=False - see _build_field_row's value_widget for why.
+                # continuous_update=False - see _FieldRow's value_widget for why.
                 # This one is the worst case in the app: _on_config_change triggers a full
                 # rebuild_field_specs() PLUS a re-render of every row in the whole
                 # ProcessSequenceBuilder, not just this process - firing that per
