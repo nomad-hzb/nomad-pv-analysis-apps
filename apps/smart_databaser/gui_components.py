@@ -184,6 +184,23 @@ def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets
     return _on_change
 
 
+def _sync_text_value(text_widget: widgets.Text, observer, new_value: str) -> None:
+    """Writes text_widget.value only if it actually differs from new_value, unobserving/
+    reobserving `observer` (the callback _guard_forbidden_characters or an equivalent
+    observe() call returned) around the write. Used whenever a persistent Text widget
+    (_FieldRow, matrix cells) needs to be brought back in sync with state that changed
+    some other way than this exact widget's own edit - without the unobserve/reobserve,
+    the write would loop back through the same on_valid/on_change chain a second time for
+    a value that has already been persisted."""
+    if text_widget.value == new_value:
+        return
+    if observer is not None:
+        text_widget.unobserve(observer, names="value")
+    text_widget.value = new_value
+    if observer is not None:
+        text_widget.observe(observer, names="value")
+
+
 class _FieldRow(widgets.HBox):
     """Shared by ProcessFieldsPanel and ExperimentInfoPanel: a 'varies' checkbox, the
     field label (with a trailing '*' when required_for_progress), a value input (with a
@@ -300,17 +317,7 @@ class _FieldRow(widgets.HBox):
         if self.value_widget.placeholder != placeholder:
             self.value_widget.placeholder = placeholder
         new_value = "" if spec.value is None else str(spec.value)
-        if self.value_widget.value == new_value:
-            return
-        # Programmatic sync (state changed some other way than this widget's own edit,
-        # e.g. a direct on_value_change call or a future non-widget autofill path) -
-        # unobserve around the write so it doesn't loop back through on_valid/on_change a
-        # second time for a value that's already been persisted.
-        if self._value_observer is not None:
-            self.value_widget.unobserve(self._value_observer, names="value")
-        self.value_widget.value = new_value
-        if self._value_observer is not None:
-            self.value_widget.observe(self._value_observer, names="value")
+        _sync_text_value(self.value_widget, self._value_observer, new_value)
 
 
 _REAL_PROCESS_TYPES = [p for p in AVAILABLE_PROCESSES if p != "Experiment Info"]
@@ -344,6 +351,14 @@ class ProcessFieldsPanel(widgets.VBox):
         self._render()
         if self.on_change:
             self.on_change()
+
+    def refresh(self) -> None:
+        """Re-renders from the current state without treating it as a local edit (no
+        on_change) - call when ProcessSequenceBuilder reuses this same panel instance
+        across its own re-renders, so it still picks up state changed by something other
+        than this panel's own rows (e.g. rebuild_field_specs adding a column after a
+        process-type change)."""
+        self._render()
 
     def _preview_for(self, field_key: str, spec: ProcessFieldSpec):
         if spec.is_filled() or self.cache is None:
@@ -407,6 +422,11 @@ class ExperimentInfoPanel(widgets.VBox):
         self._render()
         if self.on_change:
             self.on_change()
+
+    def refresh(self) -> None:
+        """See ProcessFieldsPanel.refresh - re-renders without treating it as a local
+        edit, for when ProcessSequenceBuilder reuses this same panel instance."""
+        self._render()
 
     def _render(self) -> None:
         relevant = {
@@ -888,6 +908,103 @@ def _split_varying_field_label(combined_label: str) -> tuple[str, str]:
     return (process_part, field_part) if field_part else ("", process_part)
 
 
+class _MatrixCell:
+    """One (sample, varying-field) cell in VaryingFieldsMatrix: a persistent Text input
+    (+ optional quick-fill button, for a Date/Datetime/Operator field moved into the
+    matrix - see _quick_fill_button_for's docstring for why it keeps the button), kept
+    alive across matrix re-renders instead of rebuilt on every edit. Mirrors _FieldRow;
+    see its class docstring for why. Here the win is much bigger: a per-keystroke change
+    used to rebuild the ENTIRE matrix (every sample x every varying column), which was
+    very likely the real cause behind "the table sometimes doesn't appear"."""
+
+    def __init__(self, field_key: str, warning_html: widgets.HTML, on_change):
+        self.text = widgets.Text(
+            layout=widgets.Layout(width="180px"),
+            # continuous_update=False - see _FieldRow's value_widget for why.
+            continuous_update=False,
+        )
+        self._observer = _guard_forbidden_characters(self.text, warning_html, on_change)
+        quick_fill_button = _quick_fill_button_for(field_key, self.text)
+        self.widget: widgets.Widget = (
+            self.text
+            if quick_fill_button is None
+            else widgets.HBox(
+                [self.text, quick_fill_button], layout=widgets.Layout(align_items="center")
+            )
+        )
+
+    def sync(self, value) -> None:
+        _sync_text_value(self.text, self._observer, "" if value is None else str(value))
+
+
+class _MatrixRow(widgets.HBox):
+    """One sample's row in VaryingFieldsMatrix: Sample/Subbatch labels, one _MatrixCell
+    per currently-varying field, the Variation cell, and a shared warning line. Built
+    once per sample_number and refreshed in place - see _MatrixCell and _FieldRow for why
+    (this is the same "keep widgets alive across re-renders" fix, applied to the matrix's
+    rows instead of a field panel's rows)."""
+
+    def __init__(self, sample_number: int, on_cell_change, on_variation_change):
+        self.sample_number = sample_number
+        self._on_cell_change = on_cell_change
+        self._on_variation_change = on_variation_change
+        self.sample_label = widgets.Label(
+            value=str(sample_number), layout=widgets.Layout(width="70px")
+        )
+        self.subbatch_label = widgets.Label(layout=widgets.Layout(width="70px"))
+        # One shared warning line for the whole row (space is tight, one column per
+        # varying field) - an invalid cell also gets its own red border, so which cell is
+        # bad stays visible even after the message itself is superseded by a later edit.
+        self.row_warning = widgets.HTML(value="")
+        self._cells: dict[int, _MatrixCell] = {}
+        self.variation_text = widgets.Text(
+            layout=widgets.Layout(width="180px"), continuous_update=False
+        )
+        self._variation_observer = _guard_forbidden_characters(
+            self.variation_text,
+            self.row_warning,
+            lambda new_value: self._on_variation_change(self.sample_number, new_value),
+        )
+        super().__init__([])
+
+    def update(self, set_index, varying_fields, variation_spec: ProcessFieldSpec | None) -> None:
+        self.subbatch_label.value = "" if set_index is None else str(set_index + 1)
+
+        live_ids = {id(spec) for _label, spec in varying_fields}
+        for key in list(self._cells):
+            if key not in live_ids:
+                del self._cells[key]
+
+        cell_widgets = []
+        for label, spec in varying_fields:
+            cell = self._cells.get(id(spec))
+            if cell is None:
+                _process_part, field_part = _split_varying_field_label(label)
+                cell = _MatrixCell(
+                    field_part,
+                    self.row_warning,
+                    lambda new_value, s=spec: self._on_cell_change(
+                        s, self.sample_number, new_value
+                    ),
+                )
+                self._cells[id(spec)] = cell
+            cell.sync(spec.per_sample_values.get(self.sample_number))
+            cell_widgets.append(cell.widget)
+
+        variation_value = ""
+        if variation_spec is not None:
+            variation_value = variation_spec.per_sample_values.get(self.sample_number) or ""
+        _sync_text_value(self.variation_text, self._variation_observer, str(variation_value))
+
+        self.children = [
+            self.sample_label,
+            self.subbatch_label,
+            *cell_widgets,
+            self.variation_text,
+            self.row_warning,
+        ]
+
+
 class VaryingFieldsMatrix(widgets.VBox):
     """One column per currently-varying field, one row per sample, plus a leading
     Subbatch column (the sample's variation_group_index from Sample Setup, shown 1-based
@@ -902,6 +1019,7 @@ class VaryingFieldsMatrix(widgets.VBox):
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
+        self._rows: dict[int, _MatrixRow] = {}
         super().__init__([])
         self._render()
 
@@ -909,12 +1027,15 @@ class VaryingFieldsMatrix(widgets.VBox):
         self._render()
 
     def hard_refresh(self) -> None:
-        """Clears children before rebuilding, instead of replacing them in place - for
-        large datasets (many samples x many varying fields), the frontend has been
-        reported to sometimes not finish rendering a big .children replacement; forcing
-        an empty state first, then repopulating, is a common ipywidgets workaround for
-        that class of stuck render. Wired to the 'Refresh Table' button in app.py."""
+        """Clears children AND the cached row widgets before rebuilding fresh, instead of
+        the normal refresh()'s reuse-in-place - for large datasets (many samples x many
+        varying fields), the frontend has been reported to sometimes not finish
+        rendering a big .children replacement; forcing a genuinely empty state first,
+        then repopulating with brand new widgets, is a common ipywidgets workaround for
+        that class of stuck render (reusing the same, possibly-stuck widget models
+        wouldn't help). Wired to the 'Refresh Table' button in app.py."""
         self.children = []
+        self._rows = {}
         self._render()
 
     def _notify_change(self) -> None:
@@ -927,6 +1048,7 @@ class VaryingFieldsMatrix(widgets.VBox):
         sample_numbers = self.state.sample_numbers()
 
         if not varying_fields or not sample_numbers:
+            self._rows = {}
             self.children = [
                 widgets.HTML(
                     value="<i>Mark fields as varying, and add samples, to see the matrix.</i>"
@@ -949,14 +1071,24 @@ class VaryingFieldsMatrix(widgets.VBox):
         )
 
         set_by_sample = {s.sample_number: s.variation_group_index for s in self.state.samples}
-        rows = [widgets.HBox(header_cells)]
+
+        live_samples = set(sample_numbers)
+        for key in list(self._rows):
+            if key not in live_samples:
+                del self._rows[key]
+
+        body_rows = []
         for sample_number in sample_numbers:
-            rows.append(
-                self._build_sample_row(
-                    sample_number, set_by_sample.get(sample_number), varying_fields, variation_spec
+            row = self._rows.get(sample_number)
+            if row is None:
+                row = _MatrixRow(
+                    sample_number, self._on_cell_change, self._on_variation_cell_change
                 )
-            )
-        self.children = rows
+                self._rows[sample_number] = row
+            row.update(set_by_sample.get(sample_number), varying_fields, variation_spec)
+            body_rows.append(row)
+
+        self.children = [widgets.HBox(header_cells), *body_rows]
 
     def _build_column_header(
         self, label: str, spec: ProcessFieldSpec | None, sample_numbers: list[int], label_text=None
@@ -978,66 +1110,6 @@ class VaryingFieldsMatrix(widgets.VBox):
             lambda _button, s=spec, sns=sample_numbers: self._on_populate_column(s, sns)
         )
         return widgets.VBox([text, populate_button], layout=widgets.Layout(align_items="center"))
-
-    def _build_sample_row(
-        self, sample_number, set_index, varying_fields, variation_spec
-    ) -> widgets.HBox:
-        # One shared warning line for the whole row (space is tight, one column per
-        # varying field) - an invalid cell also gets its own red border, so which cell is
-        # bad stays visible even after the message itself is superseded by a later edit.
-        row_warning = widgets.HTML(value="")
-        cells = [
-            widgets.Label(value=str(sample_number), layout=widgets.Layout(width="70px")),
-            widgets.Label(
-                value="" if set_index is None else str(set_index + 1),
-                layout=widgets.Layout(width="70px"),
-            ),
-        ]
-        for label, spec in varying_fields:
-            value = spec.per_sample_values.get(sample_number)
-            cell = widgets.Text(
-                value="" if value is None else str(value),
-                layout=widgets.Layout(width="180px"),
-                # continuous_update=False - see _FieldRow's value_widget for why.
-                # Here the cost is much worse: a per-keystroke change rebuilds the ENTIRE
-                # matrix (every sample x every varying column), which is very likely the
-                # real cause behind "the table sometimes doesn't appear" - large-matrix
-                # re-renders were being triggered on every character typed into any cell.
-                continuous_update=False,
-            )
-            _guard_forbidden_characters(
-                cell,
-                row_warning,
-                lambda new_value, s=spec, sn=sample_number: self._on_cell_change(s, sn, new_value),
-            )
-            _process_part, field_part = _split_varying_field_label(label)
-            cells.append(self._wrap_cell_with_quick_fill(field_part, cell))
-
-        variation_value = ""
-        if variation_spec is not None:
-            variation_value = variation_spec.per_sample_values.get(sample_number) or ""
-        variation_cell = widgets.Text(
-            value=str(variation_value),
-            layout=widgets.Layout(width="180px"),
-            continuous_update=False,
-        )
-        _guard_forbidden_characters(
-            variation_cell,
-            row_warning,
-            lambda new_value, sn=sample_number: self._on_variation_cell_change(sn, new_value),
-        )
-        cells.append(variation_cell)
-        cells.append(row_warning)
-        return widgets.HBox(cells)
-
-    def _wrap_cell_with_quick_fill(self, field_key: str, cell: widgets.Text) -> widgets.Widget:
-        """A Date/Datetime/Operator field marked "varies" moves into this matrix - see
-        _quick_fill_button_for's docstring for why it should still get the same
-        Today/Me button it would have had as a plain (non-varying) field row."""
-        quick_fill_button = _quick_fill_button_for(field_key, cell)
-        if quick_fill_button is None:
-            return cell
-        return widgets.HBox([cell, quick_fill_button], layout=widgets.Layout(align_items="center"))
 
     def _on_cell_change(self, spec: ProcessFieldSpec, sample_number: int, new_value) -> None:
         set_field_manual(spec, new_value, sample_number=sample_number)
@@ -1429,11 +1501,35 @@ class ProcessSequenceBuilder(widgets.VBox):
         # successful action (which discards and rebuilds the row's status widgets).
         self._adopt_status: dict[int, str] = {}
         self._override_status: dict[int, str] = {}
+        # ExperimentInfoPanel/ProcessFieldsPanel instances, kept alive across renders and
+        # keyed by id(process) rather than sequence_index (which shifts on every add/
+        # remove elsewhere in the sequence - see ExperimentState.renumber_sequence_
+        # indices). Every _render() used to build these from scratch, which meant a
+        # single field edit anywhere - which already re-renders itself locally, see
+        # ProcessFieldsPanel/ExperimentInfoPanel._notify_change - triggered a second,
+        # much bigger teardown/rebuild of every OTHER process's field-row widgets too
+        # (via on_change -> app.py's refresh_all -> this widget's own refresh()). With
+        # more than a couple of processes that compounded into the multi-second "table
+        # takes forever to catch up" stalls reported after the per-row edit fix. Reusing
+        # the same panel instances and just calling their own refresh() (which only
+        # touches the field rows whose spec actually changed - see _FieldRow) avoids that
+        # second layer of teardown.
+        self._info_panel: ExperimentInfoPanel | None = None
+        self._process_panels: dict[int, ProcessFieldsPanel] = {}
         self.experiment_info_box = widgets.VBox([])
         self.rows_box = widgets.VBox([])
         rebuild_field_specs(self.state)
         super().__init__([self.experiment_info_box, self.rows_box])
         self._render()
+
+    def _dispatch_on_change(self) -> None:
+        # A trampoline, not self.on_change passed by value: app.py constructs this widget
+        # before it has built refresh_all, then assigns sequence_builder.on_change =
+        # refresh_all afterwards. A cached child panel built during that window would
+        # otherwise be handed a permanently-None callback and silently stop propagating
+        # its edits to the progress bar / matrix / variation legend.
+        if self.on_change:
+            self.on_change()
 
     def _notify_change(self) -> None:
         rebuild_field_specs(self.state)
@@ -1455,6 +1551,10 @@ class ProcessSequenceBuilder(widgets.VBox):
         self.rows_box.children = [
             self._build_row(process) for process in self.state.process_sequence
         ]
+        live_ids = {id(process) for process in self.state.process_sequence}
+        for key in list(self._process_panels):
+            if key not in live_ids:
+                del self._process_panels[key]
 
     def _on_toggle(self, sequence_index: int) -> None:
         self._expanded[sequence_index] = not self._expanded.get(sequence_index, True)
@@ -1498,7 +1598,13 @@ class ProcessSequenceBuilder(widgets.VBox):
         rows: list[widgets.Widget] = [main_row]
         if is_expanded:
             rows.append(_field_row_caption())
-            rows.append(ExperimentInfoPanel(self.state, on_change=self.on_change))
+            if self._info_panel is None:
+                self._info_panel = ExperimentInfoPanel(
+                    self.state, on_change=self._dispatch_on_change
+                )
+            else:
+                self._info_panel.refresh()
+            rows.append(self._info_panel)
         return widgets.VBox(
             rows, layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
         )
@@ -1573,9 +1679,15 @@ class ProcessSequenceBuilder(widgets.VBox):
         rows.append(self._build_override_section(process))
         if is_expanded:
             rows.append(_field_row_caption())
-            rows.append(
-                ProcessFieldsPanel(self.state, process, cache=self.cache, on_change=self.on_change)
-            )
+            panel = self._process_panels.get(id(process))
+            if panel is None:
+                panel = ProcessFieldsPanel(
+                    self.state, process, cache=self.cache, on_change=self._dispatch_on_change
+                )
+                self._process_panels[id(process)] = panel
+            else:
+                panel.refresh()
+            rows.append(panel)
 
         return widgets.VBox(
             rows, layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
