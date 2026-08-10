@@ -79,7 +79,11 @@
       "Bash(PYTHONPATH=\"apps/JV-Analysis\" python -m pytest \"tests/JV-Analysis/\" -q -m \"not live\")",
       "Bash(PYTHONPATH=shared python -m pytest tests/shared/ -q -m \"not live\")",
       "Bash(gh run *)",
-      "Bash(PYTHONPATH=shared python -m pytest tests/shared/test_consistency.py -v -m \"not live\")"
+      "Bash(PYTHONPATH=shared python -m pytest tests/shared/test_consistency.py -v -m \"not live\")",
+      "Bash(python -m ruff format apps/Global_analyzer/app.py apps/Global_analyzer/gui_components.py apps/Global_analyzer/plot_manager.py apps/Global_analyzer/ml_analysis.py)",
+      "Bash(python -m ruff check apps/Global_analyzer/app.py apps/Global_analyzer/gui_components.py apps/Global_analyzer/plot_manager.py apps/Global_analyzer/ml_analysis.py)",
+      "Bash(python -m pytest tests/Global_analyzer/ -q)",
+      "Bash(python -m ruff check apps/Global_analyzer/ tests/Global_analyzer/)"
     ],
     "additionalDirectories": [
       "\\tmp"

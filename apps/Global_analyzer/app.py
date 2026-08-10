@@ -481,129 +481,23 @@ class SampleDataExplorer:
 
         try:
             if data_source == "Results":
-                # Load results if not already loaded
+                # Load results if not already loaded. Always goes through
+                # DataManager.load_all_data_for_summary (the one place this
+                # extraction logic lives - it validates rows via MeasurementRow
+                # and expands multi-row measurements, e.g. multiple JV scan
+                # directions/pixels) rather than duplicating that logic here.
+                # This matters because the X/Y data-source dropdowns default
+                # to "Results" as soon as their options are assigned (an
+                # ipywidgets Dropdown auto-selects the first option when it
+                # had none before), which fires this method *before*
+                # _on_load_batches gets a chance to call
+                # load_all_data_for_summary itself - a second, independent
+                # results-loading implementation here previously won that
+                # race every time, so the more thorough loader never ran.
                 if not self.data_manager.current_results:
-                    self.data_manager.current_results = {}
-
-                    # Map measurement types to their data extraction keys
-                    measurement_configs = {
-                        "jv_measurement": {
-                            "api_type": "HySprint_JVmeasurement",
-                            "data_key": "jv_curve",  # Extract from jv_curve array
-                        },
-                        "eqe_measurement": {
-                            "api_type": "HySprint_EQEmeasurement",
-                            "data_key": "eqe_data",
-                        },
-                        "mpp_tracking": {
-                            "api_type": "HySprint_MPPTracking",
-                            "data_key": "properties",
-                        },
-                        "simple_mpp_tracking": {
-                            "api_type": "HySprint_SimpleMPPTracking",
-                            "data_key": "properties",
-                        },
-                        "pl_measurement": {
-                            "api_type": "HySprint_PLmeasurement",
-                            "data_key": None,  # Use top-level data
-                        },
-                        "trpl_measurement": {
-                            "api_type": "HySprint_TimeResolvedPhotoluminescence",
-                            "data_key": None,
-                        },
-                        "abspl_measurement": {
-                            "api_type": "HySprint_AbsPLMeasurement",
-                            "data_key": "results",  # HySprint_AbsPLResult
-                        },
-                        "pl_imaging": {"api_type": "HySprint_PLImaging", "data_key": None},
-                        "sem": {"api_type": "HySprint_SEM", "data_key": None},
-                        "uvvis_measurement": {
-                            "api_type": "HySprint_UVvismeasurement",
-                            "data_key": None,
-                        },
-                        "pes": {"api_type": "HySprint_PES", "data_key": None},
-                        "cyclic_voltammetry": {
-                            "api_type": "HySprint_CyclicVoltammetry",
-                            "data_key": "properties",
-                        },
-                        "eis": {
-                            "api_type": "HySprint_ElectrochemicalImpedanceSpectroscopy",
-                            "data_key": None,
-                        },
-                        "trspv_measurement": {
-                            "api_type": "HySprint_trSPVmeasurement",
-                            "data_key": None,
-                        },
-                        "nmr": {"api_type": "HySprint_Simple_NMR", "data_key": "data"},
-                        "xrd": {"api_type": "HySprint_XRD_XY", "data_key": None},
-                    }
-
-                    for measurement_key, config in measurement_configs.items():
-                        try:
-                            data = get_all_eqe(
-                                self.url, self.token, self.current_sample_ids, config["api_type"]
-                            )
-                            if data is not None and isinstance(data, dict) and data:
-                                rows = []
-                                for sample_id, measurements in data.items():
-                                    if measurements and len(measurements) > 0:
-                                        measurement_data = measurements[0][
-                                            0
-                                        ]  # First tuple, first element
-
-                                        # Extract data based on measurement type
-                                        data_key = config["data_key"]
-
-                                        if data_key and data_key in measurement_data:
-                                            # Extract from specific key
-                                            extracted_data = measurement_data[data_key]
-
-                                            # Handle different data structures
-                                            if isinstance(extracted_data, list) and extracted_data:
-                                                # For jv_curve: it's a list of dicts, use first or aggregate
-                                                if isinstance(extracted_data[0], dict):
-                                                    result_data = extracted_data[0].copy()
-                                                else:
-                                                    result_data = {data_key: extracted_data}
-                                            elif isinstance(extracted_data, dict):
-                                                result_data = extracted_data.copy()
-                                            else:
-                                                result_data = {data_key: extracted_data}
-
-                                            # ADD TOP-LEVEL FIELDS (datetime, name, description, etc.)
-                                            # These are at the measurement level, not inside jv_curve
-                                            top_level_fields = [
-                                                "datetime",
-                                                "name",
-                                                "description",
-                                                "data_file",
-                                                "lab_id",
-                                            ]
-                                            for field in top_level_fields:
-                                                if (
-                                                    field in measurement_data
-                                                    and field not in result_data
-                                                ):
-                                                    result_data[field] = measurement_data[field]
-
-                                            result_data["sample_id"] = sample_id
-                                            rows.append(result_data)
-                                        else:
-                                            # Use top-level measurement data
-                                            measurement_data["sample_id"] = sample_id
-                                            rows.append(measurement_data)
-
-                                if rows:
-                                    df = pd.DataFrame(rows)
-                                    self.data_manager.current_results[measurement_key] = df
-                                    logger.debug(
-                                        "Loaded %s: %d rows, %d columns",
-                                        measurement_key,
-                                        len(df),
-                                        len(df.columns),
-                                    )
-                        except Exception as e:
-                            logger.debug("Error loading %s: %s", measurement_key, e)
+                    self.data_manager.load_all_data_for_summary(
+                        self.current_sample_ids, self.current_variation
+                    )
                 else:
                     logger.debug(
                         "Results already loaded: %d measurement types",

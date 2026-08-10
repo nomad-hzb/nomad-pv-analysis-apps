@@ -520,8 +520,14 @@ class PlotManager:
 
         self.plot_widget.update_layout(
             title=f"{y_label} vs {x_label}",
-            xaxis_title=x_label,
-            yaxis_title=y_label,
+            # type="-" forces Plotly to re-detect the axis type (date/linear/
+            # category) from this call's data instead of keeping whatever
+            # type a previous plot left behind - a FigureWidget's layout
+            # persists across calls (only .data is cleared above), so e.g. a
+            # datetime x-axis would otherwise "stick" the next time X is a
+            # numeric parameter.
+            xaxis=dict(title=x_label, type="-"),
+            yaxis=dict(title=y_label, type="-"),
             legend=dict(
                 orientation="v",
                 yanchor="top",
@@ -1190,8 +1196,10 @@ class PlotManager:
 
         widget.update_layout(
             title=f"Distribution of {y_label} grouped by {x_label}",
-            xaxis_title=x_label,
-            yaxis_title=y_label,
+            # type="-" re-detects the axis type fresh each call - see the
+            # matching comment in create_scatter_plot for why that matters.
+            xaxis=dict(title=x_label, type="-"),
+            yaxis=dict(title=y_label, type="-"),
             boxmode="group",
             legend=dict(
                 orientation="v",

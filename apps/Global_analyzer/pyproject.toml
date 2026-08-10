@@ -19,6 +19,10 @@ dependencies = [
     "scipy>=1.17",
     # Visualisation
     "plotly>=5.0",
+    # plotly>=6.1's go.FigureWidget (used throughout gui_components.py) is
+    # implemented on top of anywidget rather than bundling its own
+    # ipywidgets comm - without it FigureWidget() raises ImportError.
+    "anywidget>=0.9",
     "ipywidgets>=8.0",
     "ipython>=8.0",
     # Notebook / Voilà
