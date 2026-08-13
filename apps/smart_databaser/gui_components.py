@@ -1468,6 +1468,127 @@ def _field_row_caption() -> widgets.HTML:
     )
 
 
+class _ProcessRow(widgets.VBox):
+    """One process's row in ProcessSequenceBuilder: toggle/index/type dropdown/progress/
+    add-remove buttons, config controls, the adopt-from-template and override-from-batch
+    sections, and (when expanded) the process's ProcessFieldsPanel. Built once per
+    process (keyed by id(process) in ProcessSequenceBuilder._process_rows - sequence_index
+    isn't a stable key, it shifts on every add/remove elsewhere in the sequence - see
+    ExperimentState.renumber_sequence_indices) and refreshed in place afterwards.
+
+    Needed for the same reason as _FieldRow/_MatrixRow: ProcessFieldsPanel itself stopped
+    being rebuilt from scratch on every field edit, but it was still being reinserted
+    under a brand new outer VBox every time (the old _build_row rebuilt everything around
+    it too) - which still tore down its on-screen DOM (a fresh parent means a fresh
+    frontend view for every descendant, even an unchanged child widget) and kept losing
+    focus/scroll position on every keystroke-commit. Config controls (numeric/checkbox)
+    and the adopt/override sections are cheap (a handful of widgets, not one per field)
+    and stay rebuilt fresh on every update() - see _build_config_controls/
+    _build_adopt_section/_build_override_section - matching the existing
+    ProcessSequenceBuilder._adopt_status/_override_status workaround, which already
+    assumes those get discarded and rebuilt on every edit."""
+
+    def __init__(self, builder: "ProcessSequenceBuilder", process: ProcessInstance):
+        self._builder = builder
+        self.process = process
+        self._numeric_controls: list[widgets.Widget] = []
+        self._checkbox_controls: list[widgets.Widget] = []
+
+        self.toggle_button = widgets.Button(layout=widgets.Layout(width="28px"))
+        self.toggle_button.on_click(lambda _b: builder._on_toggle(self.process.sequence_index))
+
+        self.index_label = widgets.Label(layout=widgets.Layout(width="25px"))
+
+        self.process_dropdown = widgets.Dropdown(
+            options=_REAL_PROCESS_TYPES, layout=widgets.Layout(width="180px")
+        )
+        self.process_dropdown.value = process.process_type
+        self.process_dropdown.observe(self._handle_process_type_change, names="value")
+
+        self.progress_label = widgets.HTML(value="")
+
+        self.add_button = widgets.Button(
+            icon="plus", button_style="success", layout=widgets.Layout(width="30px")
+        )
+        self.add_button.on_click(lambda _b: builder._add_after(self.process.sequence_index))
+
+        self.remove_button = widgets.Button(
+            icon="minus", button_style="danger", layout=widgets.Layout(width="30px")
+        )
+        self.remove_button.on_click(lambda _b: builder._remove(self.process.sequence_index))
+
+        self.main_row = widgets.HBox(
+            layout=widgets.Layout(
+                margin="1px 0", padding="5px", border="1px solid #e0e0e0", align_items="center"
+            )
+        )
+        self.checkbox_controls_row = widgets.HBox(
+            layout=widgets.Layout(margin="0", padding="5px 5px 5px 210px", align_items="center")
+        )
+        self.caption = _field_row_caption()
+        self.panel: ProcessFieldsPanel | None = None
+
+        super().__init__(
+            [], layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
+        )
+        self.update()
+
+    def _handle_process_type_change(self, change) -> None:
+        self._builder._on_process_type_change(self.process.sequence_index, change["new"])
+
+    def update(self) -> None:
+        process = self.process
+        is_expanded = self._builder._expanded.get(process.sequence_index, True)
+        self.toggle_button.icon = "chevron-down" if is_expanded else "chevron-right"
+        self.index_label.value = f"{process.sequence_index}."
+        _sync_text_value(
+            self.process_dropdown, self._handle_process_type_change, process.process_type
+        )
+
+        filled, total = compute_process_progress(process)
+        self.progress_label.value = _progress_html(filled, total)
+
+        # Rebuilt fresh every update() rather than cached: cheap (a handful of widgets,
+        # not one per field, unlike the ProcessFieldsPanel below), and process.config can
+        # change from outside this row's own controls too - e.g. "Adopt from template
+        # batch" widening a solvent/solute/spinstep count via
+        # expand_process_config_for_source - so these always need to read the current
+        # config rather than risk going stale.
+        self._numeric_controls, self._checkbox_controls = self._builder._build_config_controls(
+            process
+        )
+
+        self.main_row.children = [
+            self.toggle_button,
+            self.index_label,
+            self.process_dropdown,
+            self.progress_label,
+            *self._numeric_controls,
+            self.add_button,
+            self.remove_button,
+        ]
+        self.checkbox_controls_row.children = self._checkbox_controls
+
+        rows: list[widgets.Widget] = [self.main_row]
+        if self._checkbox_controls:
+            rows.append(self.checkbox_controls_row)
+        rows.append(self._builder._build_adopt_section(process))
+        rows.append(self._builder._build_override_section(process))
+        if is_expanded:
+            rows.append(self.caption)
+            if self.panel is None:
+                self.panel = ProcessFieldsPanel(
+                    self._builder.state,
+                    process,
+                    cache=self._builder.cache,
+                    on_change=self._builder._dispatch_on_change,
+                )
+            else:
+                self.panel.refresh()
+            rows.append(self.panel)
+        self.children = rows
+
+
 class ProcessSequenceBuilder(widgets.VBox):
     """Row-based process sequence editor: one row per process (Experiment Info always
     first and fixed, then each real ProcessInstance), a dropdown to pick the process type
@@ -1501,21 +1622,58 @@ class ProcessSequenceBuilder(widgets.VBox):
         # successful action (which discards and rebuilds the row's status widgets).
         self._adopt_status: dict[int, str] = {}
         self._override_status: dict[int, str] = {}
-        # ExperimentInfoPanel/ProcessFieldsPanel instances, kept alive across renders and
-        # keyed by id(process) rather than sequence_index (which shifts on every add/
-        # remove elsewhere in the sequence - see ExperimentState.renumber_sequence_
-        # indices). Every _render() used to build these from scratch, which meant a
-        # single field edit anywhere - which already re-renders itself locally, see
-        # ProcessFieldsPanel/ExperimentInfoPanel._notify_change - triggered a second,
-        # much bigger teardown/rebuild of every OTHER process's field-row widgets too
-        # (via on_change -> app.py's refresh_all -> this widget's own refresh()). With
-        # more than a couple of processes that compounded into the multi-second "table
-        # takes forever to catch up" stalls reported after the per-row edit fix. Reusing
-        # the same panel instances and just calling their own refresh() (which only
-        # touches the field rows whose spec actually changed - see _FieldRow) avoids that
-        # second layer of teardown.
+        # Every row's whole widget tree (toggle/dropdown/progress/config controls/
+        # ProcessFieldsPanel or ExperimentInfoPanel, wrapped in an outer VBox) used to be
+        # rebuilt from scratch on every _render(), which fires on ANY field edit anywhere
+        # (a field already re-renders itself locally - see ProcessFieldsPanel/
+        # ExperimentInfoPanel._notify_change - but that still calls on_change, which
+        # cascades up through app.py's refresh_all into this widget's own refresh()).
+        # Even after ProcessFieldsPanel/ExperimentInfoPanel instances themselves started
+        # being reused (see _process_rows/_info_panel below), reinserting that SAME
+        # instance under a brand new outer VBox every time still tore down its on-screen
+        # DOM - a fresh parent means a fresh frontend view for every descendant, even one
+        # whose underlying widget model didn't change - which kept losing focus/scroll
+        # position on every keystroke-commit. _ProcessRow (and the mirrored experiment-
+        # info-row widgets below) keep that whole per-row tree alive and update it in
+        # place instead, keyed by id(process) rather than sequence_index (which shifts on
+        # every add/remove elsewhere in the sequence - see ExperimentState.
+        # renumber_sequence_indices).
+        self._process_rows: dict[int, _ProcessRow] = {}
+
+        self._info_toggle_button = widgets.Button(layout=widgets.Layout(width="28px"))
+        self._info_toggle_button.on_click(lambda _b: self._on_toggle(0))
+        self._info_index_label = widgets.Label(value="0.", layout=widgets.Layout(width="25px"))
+        # A (disabled) dropdown, not a plain label, so this row matches the visual shape
+        # of every other process row - but Experiment Info itself can never change type.
+        self._info_dropdown = widgets.Dropdown(
+            options=["Experiment Info"],
+            value="Experiment Info",
+            disabled=True,
+            layout=widgets.Layout(width="180px"),
+        )
+        self._info_progress_label = widgets.HTML(value="")
+        self._info_add_button = widgets.Button(
+            icon="plus", button_style="success", layout=widgets.Layout(width="30px")
+        )
+        self._info_add_button.on_click(lambda _b: self._add_after(0))
+        self._info_main_row = widgets.HBox(
+            [
+                self._info_toggle_button,
+                self._info_index_label,
+                self._info_dropdown,
+                self._info_progress_label,
+                self._info_add_button,
+            ],
+            layout=widgets.Layout(
+                margin="1px 0", padding="5px", border="1px solid #e0e0e0", align_items="center"
+            ),
+        )
+        self._info_caption = _field_row_caption()
+        self._info_row_widget = widgets.VBox(
+            [], layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
+        )
         self._info_panel: ExperimentInfoPanel | None = None
-        self._process_panels: dict[int, ProcessFieldsPanel] = {}
+
         self.experiment_info_box = widgets.VBox([])
         self.rows_box = widgets.VBox([])
         rebuild_field_specs(self.state)
@@ -1547,14 +1705,23 @@ class ProcessSequenceBuilder(widgets.VBox):
         self._render()
 
     def _render(self) -> None:
-        self.experiment_info_box.children = [self._build_experiment_info_row()]
-        self.rows_box.children = [
-            self._build_row(process) for process in self.state.process_sequence
-        ]
+        self.experiment_info_box.children = [self._update_experiment_info_row()]
+
         live_ids = {id(process) for process in self.state.process_sequence}
-        for key in list(self._process_panels):
+        for key in list(self._process_rows):
             if key not in live_ids:
-                del self._process_panels[key]
+                del self._process_rows[key]
+
+        row_widgets = []
+        for process in self.state.process_sequence:
+            row = self._process_rows.get(id(process))
+            if row is None:
+                row = _ProcessRow(self, process)
+                self._process_rows[id(process)] = row
+            else:
+                row.update()
+            row_widgets.append(row)
+        self.rows_box.children = row_widgets
 
     def _on_toggle(self, sequence_index: int) -> None:
         self._expanded[sequence_index] = not self._expanded.get(sequence_index, True)
@@ -1562,42 +1729,16 @@ class ProcessSequenceBuilder(widgets.VBox):
 
     # -- Experiment Info row (always first, never removable/re-typeable) ------
 
-    def _build_experiment_info_row(self) -> widgets.Widget:
+    def _update_experiment_info_row(self) -> widgets.Widget:
         is_expanded = self._expanded.get(0, True)
-        toggle_button = widgets.Button(
-            icon="chevron-down" if is_expanded else "chevron-right",
-            layout=widgets.Layout(width="28px"),
-        )
-        toggle_button.on_click(lambda b: self._on_toggle(0))
-
-        index_label = widgets.Label(value="0.", layout=widgets.Layout(width="25px"))
-        # A (disabled) dropdown, not a plain label, so this row matches the visual shape
-        # of every other process row - but Experiment Info itself can never change type.
-        process_dropdown = widgets.Dropdown(
-            options=["Experiment Info"],
-            value="Experiment Info",
-            disabled=True,
-            layout=widgets.Layout(width="180px"),
-        )
+        self._info_toggle_button.icon = "chevron-down" if is_expanded else "chevron-right"
 
         filled, total = compute_experiment_info_progress(self.state)
-        progress_label = widgets.HTML(value=_progress_html(filled, total))
+        self._info_progress_label.value = _progress_html(filled, total)
 
-        add_button = widgets.Button(
-            icon="plus", button_style="success", layout=widgets.Layout(width="30px")
-        )
-        add_button.on_click(lambda b: self._add_after(0))
-
-        main_row = widgets.HBox(
-            [toggle_button, index_label, process_dropdown, progress_label, add_button],
-            layout=widgets.Layout(
-                margin="1px 0", padding="5px", border="1px solid #e0e0e0", align_items="center"
-            ),
-        )
-
-        rows: list[widgets.Widget] = [main_row]
+        rows: list[widgets.Widget] = [self._info_main_row]
         if is_expanded:
-            rows.append(_field_row_caption())
+            rows.append(self._info_caption)
             if self._info_panel is None:
                 self._info_panel = ExperimentInfoPanel(
                     self.state, on_change=self._dispatch_on_change
@@ -1605,93 +1746,10 @@ class ProcessSequenceBuilder(widgets.VBox):
             else:
                 self._info_panel.refresh()
             rows.append(self._info_panel)
-        return widgets.VBox(
-            rows, layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
-        )
+        self._info_row_widget.children = rows
+        return self._info_row_widget
 
     # -- real process rows -----------------------------------------------------
-
-    def _build_row(self, process: ProcessInstance) -> widgets.Widget:
-        is_expanded = self._expanded.get(process.sequence_index, True)
-        toggle_button = widgets.Button(
-            icon="chevron-down" if is_expanded else "chevron-right",
-            layout=widgets.Layout(width="28px"),
-        )
-        toggle_button.on_click(lambda b, seq=process.sequence_index: self._on_toggle(seq))
-
-        index_label = widgets.Label(
-            value=f"{process.sequence_index}.", layout=widgets.Layout(width="25px")
-        )
-
-        process_dropdown = widgets.Dropdown(
-            options=_REAL_PROCESS_TYPES,
-            value=process.process_type,
-            layout=widgets.Layout(width="180px"),
-        )
-        process_dropdown.observe(
-            lambda change, seq=process.sequence_index: self._on_process_type_change(
-                seq, change["new"]
-            ),
-            names="value",
-        )
-
-        filled, total = compute_process_progress(process)
-        progress_label = widgets.HTML(value=_progress_html(filled, total))
-
-        numeric_controls, checkbox_controls = self._build_config_controls(process)
-
-        add_button = widgets.Button(
-            icon="plus", button_style="success", layout=widgets.Layout(width="30px")
-        )
-        add_button.on_click(lambda b, seq=process.sequence_index: self._add_after(seq))
-
-        remove_button = widgets.Button(
-            icon="minus", button_style="danger", layout=widgets.Layout(width="30px")
-        )
-        remove_button.on_click(lambda b, seq=process.sequence_index: self._remove(seq))
-
-        main_row = widgets.HBox(
-            [
-                toggle_button,
-                index_label,
-                process_dropdown,
-                progress_label,
-                *numeric_controls,
-                add_button,
-                remove_button,
-            ],
-            layout=widgets.Layout(
-                margin="1px 0", padding="5px", border="1px solid #e0e0e0", align_items="center"
-            ),
-        )
-
-        rows: list[widgets.Widget] = [main_row]
-        if checkbox_controls:
-            rows.append(
-                widgets.HBox(
-                    checkbox_controls,
-                    layout=widgets.Layout(
-                        margin="0", padding="5px 5px 5px 210px", align_items="center"
-                    ),
-                )
-            )
-        rows.append(self._build_adopt_section(process))
-        rows.append(self._build_override_section(process))
-        if is_expanded:
-            rows.append(_field_row_caption())
-            panel = self._process_panels.get(id(process))
-            if panel is None:
-                panel = ProcessFieldsPanel(
-                    self.state, process, cache=self.cache, on_change=self._dispatch_on_change
-                )
-                self._process_panels[id(process)] = panel
-            else:
-                panel.refresh()
-            rows.append(panel)
-
-        return widgets.VBox(
-            rows, layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
-        )
 
     def _build_adopt_section(self, process: ProcessInstance) -> widgets.Widget:
         """One-click adoption from the batch already picked in the Whole-experiment
