@@ -73,5 +73,6 @@ def test_build_your_own_entry_links_straight_to_the_prompt_doc():
     entries = CATEGORIES["Build Your Own"]
     assert len(entries) == 1
     assert entries[0].external_url == (
-        "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/NOMAD_DATA_ACCESS_PROMPT.md"
+        "https://raw.githubusercontent.com/nomad-hzb/nomad-pv-analysis-apps/main/"
+        "NOMAD_DATA_ACCESS_PROMPT.md"
     )

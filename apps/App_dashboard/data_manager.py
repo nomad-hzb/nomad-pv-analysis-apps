@@ -179,7 +179,7 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "data directly and write a custom analysis script, no new app required.",
             "fa-robot",
             external_url=(
-                "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/"
+                "https://raw.githubusercontent.com/nomad-hzb/nomad-pv-analysis-apps/main/"
                 "NOMAD_DATA_ACCESS_PROMPT.md"
             ),
         ),
