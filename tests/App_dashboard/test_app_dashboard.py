@@ -2,6 +2,7 @@ import os
 
 from data_manager import (
     CATEGORIES,
+    PROJECTS,
     URL_BASE,
     VOILA_PATH_TEMPLATE,
     AppEntry,
@@ -67,6 +68,28 @@ def test_categories_cover_every_app_folder_exactly_once():
 
 def test_url_base_has_no_trailing_slash():
     assert not URL_BASE.endswith("/")
+
+
+def test_build_voila_url_uses_upload_id_when_set():
+    uploads_path = "uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/apps"
+    entry = AppEntry(
+        "", "image_cropper.ipynb", "Image Cropper", "desc", "fa-crop", upload_id="abc123"
+    )
+
+    url = build_voila_url(entry, "edgar", uploads_path)
+
+    assert url == (
+        VOILA_PATH_TEMPLATE.format(user="edgar") + "/uploads/abc123/image_cropper.ipynb"
+    )
+
+
+def test_projects_apps_all_have_upload_ids_and_unique_names():
+    for project in PROJECTS:
+        assert project.apps, f"project {project.name!r} has no apps"
+        for app in project.apps:
+            assert app.upload_id, f"app {app.name!r} in project {project.name!r} has no upload_id"
+        names = [app.name for app in project.apps]
+        assert len(names) == len(set(names)), f"duplicate app name in project {project.name!r}"
 
 
 def test_build_your_own_entry_links_straight_to_the_prompt_doc():

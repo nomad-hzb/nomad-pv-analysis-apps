@@ -1,6 +1,7 @@
 import ipywidgets as widgets
 
 CATEGORY_ICONS = {
+    "Projects": "fa-layer-group",
     "Data Management": "fa-database",
     "Device Characterization": "fa-solar-panel",
     "Optical & Structural Analysis": "fa-microscope",
@@ -74,6 +75,16 @@ STYLE = """
     vertical-align: middle;
 }
 .app-description { font-size: 0.85em; color: #666; margin-top: 2px; }
+button.app-card {
+    border: none;
+    cursor: pointer;
+    font-size: 1em;
+    justify-content: flex-start;
+}
+button.app-card:hover {
+    background-color: #e9f7fe;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
 .dashboard-footer { margin-top: 10px; color: #777; font-size: 0.9em; }
 </style>
 """
@@ -114,6 +125,29 @@ def create_app_card(entry, href: str, full_url: str) -> widgets.HTML:
             </div>
         </a>
     """)
+
+
+def create_project_card(project, on_click) -> widgets.Button:
+    """A clickable card that opens the project's own app menu instead of linking directly."""
+    btn = widgets.Button(
+        description=project.name,
+        tooltip=project.description,
+        icon=project.icon.removeprefix("fa-"),
+        layout=widgets.Layout(width="100%", height="100%"),
+    )
+    btn.add_class("app-card")
+    btn.on_click(on_click)
+    return btn
+
+
+def create_back_button(on_click) -> widgets.Button:
+    btn = widgets.Button(
+        description="Back to Dashboard",
+        icon="arrow-left",
+        layout=widgets.Layout(margin="0 0 14px 0"),
+    )
+    btn.on_click(on_click)
+    return btn
 
 
 def create_category_section(title: str, cards: list) -> widgets.VBox:

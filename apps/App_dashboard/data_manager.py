@@ -25,6 +25,17 @@ class AppEntry:
     experimental: bool = False
     external_url: str | None = None
     """When set, the card links straight here instead of rendering folder/notebook via Voila."""
+    upload_id: str | None = None
+    """When set, build the Voila link against this NOMAD upload instead of the dashboard's
+    own upload (for apps that live in a separate upload, e.g. Projects apps)."""
+
+
+@dataclass(frozen=True)
+class Project:
+    name: str
+    description: str
+    icon: str
+    apps: list[AppEntry]
 
 
 CATEGORIES: dict[str, list[AppEntry]] = {
@@ -213,6 +224,66 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 }
 
 
+PROJECTS: list[Project] = [
+    Project(
+        "Slot-die coater ML",
+        "PL-imaging to JV-performance pipeline for slot-die coated devices.",
+        "fa-industry",
+        [
+            AppEntry(
+                "",
+                "image_cropper.ipynb",
+                "1. Image Cropper",
+                "Crop raw PL images down to the region used by the rest of the pipeline.",
+                "fa-crop",
+                upload_id="DuFOohIVQ5aauygNxEOXyg",
+            ),
+            AppEntry(
+                "",
+                "feature_extraction_app.ipynb",
+                "2. Feature Extraction",
+                "Extract quantitative features from the cropped PL images.",
+                "fa-vector-square",
+                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+            ),
+            AppEntry(
+                "",
+                "pl_defect_voila_app.ipynb",
+                "3. PL Defect Analysis",
+                "Detect and visualize defects in photoluminescence images.",
+                "fa-eye",
+                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+            ),
+            AppEntry(
+                "",
+                "nomad_ml_app.ipynb",
+                "4. ML Model",
+                "Train/apply the ML model on the extracted PL features.",
+                "fa-brain",
+                upload_id="sSP9nxKDRhax0cuBzsrvEA",
+            ),
+            AppEntry(
+                "",
+                "correlation_analysis_app.ipynb",
+                "5. Correlation Analysis",
+                "Correlate PL/ML features with device performance.",
+                "fa-project-diagram",
+                upload_id="Jeb8HXjnSNy9T0-Z5VVbhA",
+            ),
+            AppEntry(
+                "",
+                "ROI_JV_NOMAD_app.ipynb",
+                "6. PL ROI → JV Assignment",
+                "Map PL-imaged ROIs to per-device JV curves and export the joined "
+                "dataset back to NOMAD.",
+                "fa-object-group",
+                upload_id="YRS7abDQS26o2NplzjBwKg",
+            ),
+        ],
+    ),
+]
+
+
 def get_current_user() -> str:
     """Return the NOMAD username of the person running this notebook, or '' if unknown."""
     return os.environ.get("NOMAD_CLIENT_USER", "")
@@ -234,9 +305,15 @@ def get_uploads_path() -> str:
 
 
 def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
-    """Build the absolute Voila render path for an app entry."""
+    """Build the absolute Voila render path for an app entry.
+
+    Uses entry.upload_id instead of uploads_path when set, for apps that live in a
+    separate NOMAD upload from this dashboard (e.g. Projects apps).
+    """
     base_path = VOILA_PATH_TEMPLATE.format(user=user)
-    return f"{base_path}/{uploads_path}/{entry.folder}/{entry.notebook}"
+    path = f"uploads/{entry.upload_id}" if entry.upload_id else uploads_path
+    folder = f"{entry.folder}/" if entry.folder else ""
+    return f"{base_path}/{path}/{folder}{entry.notebook}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:

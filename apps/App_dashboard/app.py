@@ -15,23 +15,48 @@ def setup_app():
     if not user:
         logger.warning("NOMAD_CLIENT_USER not set; generated links may be incorrect.")
 
-    sections = []
-    for category, entries in dm.CATEGORIES.items():
-        cards = []
-        for entry in entries:
-            if entry.external_url:
-                href = full_url = entry.external_url
-            else:
-                if not dm.notebook_exists(entry):
-                    logger.warning(
-                        "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
-                    )
-                href = dm.build_voila_url(entry, user, uploads_path)
-                full_url = f"{dm.URL_BASE}{href}"
-            cards.append(gui.create_app_card(entry, href, full_url))
-        sections.append(gui.create_category_section(category, cards))
+    root = widgets.VBox(layout=widgets.Layout(padding="10px"))
 
-    return widgets.VBox(
-        [gui.create_style(), gui.create_header(user), *sections, gui.create_footer()],
-        layout=widgets.Layout(padding="10px"),
-    )
+    def render_app_card(entry):
+        if entry.external_url:
+            href = full_url = entry.external_url
+        else:
+            if not entry.upload_id and not dm.notebook_exists(entry):
+                logger.warning(
+                    "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
+                )
+            href = dm.build_voila_url(entry, user, uploads_path)
+            full_url = f"{dm.URL_BASE}{href}"
+        return gui.create_app_card(entry, href, full_url)
+
+    def show_main(_button=None):
+        sections = [
+            gui.create_category_section(category, [render_app_card(e) for e in entries])
+            for category, entries in dm.CATEGORIES.items()
+        ]
+        project_cards = [
+            gui.create_project_card(project, lambda _b, p=project: show_project(p))
+            for project in dm.PROJECTS
+        ]
+        projects_section = gui.create_category_section("Projects", project_cards)
+
+        root.children = [
+            gui.create_style(),
+            gui.create_header(user),
+            projects_section,
+            *sections,
+            gui.create_footer(),
+        ]
+
+    def show_project(project):
+        cards = [render_app_card(e) for e in project.apps]
+        root.children = [
+            gui.create_style(),
+            gui.create_header(user),
+            gui.create_back_button(show_main),
+            gui.create_category_section(project.name, cards),
+            gui.create_footer(),
+        ]
+
+    show_main()
+    return root
