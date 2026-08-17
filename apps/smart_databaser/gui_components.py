@@ -184,21 +184,21 @@ def _guard_forbidden_characters(text_widget: widgets.Text, warning_html: widgets
     return _on_change
 
 
-def _sync_text_value(text_widget: widgets.Text, observer, new_value: str) -> None:
-    """Writes text_widget.value only if it actually differs from new_value, unobserving/
-    reobserving `observer` (the callback _guard_forbidden_characters or an equivalent
-    observe() call returned) around the write. Used whenever a persistent Text widget
-    (_FieldRow, matrix cells) needs to be brought back in sync with state that changed
-    some other way than this exact widget's own edit - without the unobserve/reobserve,
-    the write would loop back through the same on_valid/on_change chain a second time for
-    a value that has already been persisted."""
-    if text_widget.value == new_value:
+def _sync_widget_value(widget: widgets.Widget, observer, new_value) -> None:
+    """Writes widget.value only if it actually differs from new_value, unobserving/
+    reobserving `observer` (whatever the widget's own observe("value") callback was)
+    around the write. Used for any persistent widget - Text (_FieldRow, matrix cells),
+    Dropdown, BoundedIntText, Checkbox (_ProcessRow) - that needs to be brought back in
+    sync with state that changed some other way than this exact widget's own edit -
+    without the unobserve/reobserve, the write would loop back through the same on_valid/
+    on_change chain a second time for a value that has already been persisted."""
+    if widget.value == new_value:
         return
     if observer is not None:
-        text_widget.unobserve(observer, names="value")
-    text_widget.value = new_value
+        widget.unobserve(observer, names="value")
+    widget.value = new_value
     if observer is not None:
-        text_widget.observe(observer, names="value")
+        widget.observe(observer, names="value")
 
 
 class _FieldRow(widgets.HBox):
@@ -317,7 +317,7 @@ class _FieldRow(widgets.HBox):
         if self.value_widget.placeholder != placeholder:
             self.value_widget.placeholder = placeholder
         new_value = "" if spec.value is None else str(spec.value)
-        _sync_text_value(self.value_widget, self._value_observer, new_value)
+        _sync_widget_value(self.value_widget, self._value_observer, new_value)
 
 
 _REAL_PROCESS_TYPES = [p for p in AVAILABLE_PROCESSES if p != "Experiment Info"]
@@ -934,7 +934,7 @@ class _MatrixCell:
         )
 
     def sync(self, value) -> None:
-        _sync_text_value(self.text, self._observer, "" if value is None else str(value))
+        _sync_widget_value(self.text, self._observer, "" if value is None else str(value))
 
 
 class _MatrixRow(widgets.HBox):
@@ -994,7 +994,7 @@ class _MatrixRow(widgets.HBox):
         variation_value = ""
         if variation_spec is not None:
             variation_value = variation_spec.per_sample_values.get(self.sample_number) or ""
-        _sync_text_value(self.variation_text, self._variation_observer, str(variation_value))
+        _sync_widget_value(self.variation_text, self._variation_observer, str(variation_value))
 
         self.children = [
             self.sample_label,
@@ -1481,18 +1481,30 @@ class _ProcessRow(widgets.VBox):
     under a brand new outer VBox every time (the old _build_row rebuilt everything around
     it too) - which still tore down its on-screen DOM (a fresh parent means a fresh
     frontend view for every descendant, even an unchanged child widget) and kept losing
-    focus/scroll position on every keystroke-commit. Config controls (numeric/checkbox)
-    and the adopt/override sections are cheap (a handful of widgets, not one per field)
-    and stay rebuilt fresh on every update() - see _build_config_controls/
-    _build_adopt_section/_build_override_section - matching the existing
+    focus/scroll position on every keystroke-commit.
+
+    update() runs for EVERY process row on EVERY edit anywhere in the form (so progress
+    %/config displays everywhere stay current), not just the row actually being edited -
+    so config controls (numeric/checkbox) are cached and synced in place too, exactly
+    like _FieldRow/_MatrixCell: an earlier version of this class rebuilt them fresh every
+    update() call (reasoning: cheap, and process.config can change from outside this
+    row's own controls, e.g. "Adopt from template batch" widening a solvent/solute/
+    spinstep count via expand_process_config_for_source), which meant typing into a
+    config field anywhere got wiped out by an unrelated edit elsewhere re-rendering every
+    row. Only the adopt/override sections still get discarded and rebuilt on every
+    update() - see _build_adopt_section/_build_override_section and the existing
     ProcessSequenceBuilder._adopt_status/_override_status workaround, which already
-    assumes those get discarded and rebuilt on every edit."""
+    assumes that."""
 
     def __init__(self, builder: "ProcessSequenceBuilder", process: ProcessInstance):
         self._builder = builder
         self.process = process
         self._numeric_controls: list[widgets.Widget] = []
         self._checkbox_controls: list[widgets.Widget] = []
+        self._numeric_control_widgets: dict[str, widgets.Widget] = {}
+        self._numeric_control_observers: dict[str, object] = {}
+        self._checkbox_control_widgets: dict[str, widgets.Widget] = {}
+        self._checkbox_control_observers: dict[str, object] = {}
 
         self.toggle_button = widgets.Button(layout=widgets.Layout(width="28px"))
         self.toggle_button.on_click(lambda _b: builder._on_toggle(self.process.sequence_index))
@@ -1541,22 +1553,14 @@ class _ProcessRow(widgets.VBox):
         is_expanded = self._builder._expanded.get(process.sequence_index, True)
         self.toggle_button.icon = "chevron-down" if is_expanded else "chevron-right"
         self.index_label.value = f"{process.sequence_index}."
-        _sync_text_value(
+        _sync_widget_value(
             self.process_dropdown, self._handle_process_type_change, process.process_type
         )
 
         filled, total = compute_process_progress(process)
         self.progress_label.value = _progress_html(filled, total)
 
-        # Rebuilt fresh every update() rather than cached: cheap (a handful of widgets,
-        # not one per field, unlike the ProcessFieldsPanel below), and process.config can
-        # change from outside this row's own controls too - e.g. "Adopt from template
-        # batch" widening a solvent/solute/spinstep count via
-        # expand_process_config_for_source - so these always need to read the current
-        # config rather than risk going stale.
-        self._numeric_controls, self._checkbox_controls = self._builder._build_config_controls(
-            process
-        )
+        self._sync_config_controls()
 
         self.main_row.children = [
             self.toggle_button,
@@ -1587,6 +1591,91 @@ class _ProcessRow(widgets.VBox):
                 self.panel.refresh()
             rows.append(self.panel)
         self.children = rows
+
+    def _sync_config_controls(self) -> None:
+        process = self.process
+        config = process.config
+
+        checkbox_keys = [ATMOSPHERIC_CONFIG_KEY]
+        self._sync_checkbox_control(
+            ATMOSPHERIC_CONFIG_KEY,
+            "Add Atmospheric Values",
+            "190px",
+            bool(config.get(ATMOSPHERIC_CONFIG_KEY, False)),
+        )
+
+        numeric_keys: list[str] = []
+        if process.process_type in CONFIGURABLE_PROCESS_TYPES:
+            for key, label, applicable_types, min_val, max_val in NUMERIC_CONFIG_FIELDS:
+                if process.process_type not in applicable_types:
+                    continue
+                self._sync_numeric_control(key, label, min_val, max_val, config.get(key, min_val))
+                numeric_keys.append(key)
+
+            for key, label, applicable_types in BOOLEAN_CONFIG_FIELDS:
+                if process.process_type not in applicable_types:
+                    continue
+                self._sync_checkbox_control(key, label, "140px", bool(config.get(key, False)))
+                checkbox_keys.append(key)
+
+        for key in list(self._numeric_control_widgets):
+            if key not in numeric_keys:
+                del self._numeric_control_widgets[key]
+                del self._numeric_control_observers[key]
+        for key in list(self._checkbox_control_widgets):
+            if key not in checkbox_keys:
+                del self._checkbox_control_widgets[key]
+                del self._checkbox_control_observers[key]
+
+        self._numeric_controls = [self._numeric_control_widgets[key] for key in numeric_keys]
+        self._checkbox_controls = [self._checkbox_control_widgets[key] for key in checkbox_keys]
+
+    def _sync_numeric_control(
+        self, key: str, label: str, min_val: int, max_val: int, value: int
+    ) -> None:
+        widget = self._numeric_control_widgets.get(key)
+        if widget is None:
+            widget = widgets.BoundedIntText(
+                value=value,
+                min=min_val,
+                max=max_val,
+                description=f"{label}:",
+                style={"description_width": "initial"},
+                layout=widgets.Layout(width="120px"),
+                # continuous_update=False - see _FieldRow's value_widget for why. This one
+                # used to be the worst case in the app: _on_config_change triggers a full
+                # rebuild_field_specs() PLUS a re-render of every row in the whole
+                # ProcessSequenceBuilder, not just this process.
+                continuous_update=False,
+            )
+
+            def _observer(change, k=key):
+                self._builder._on_config_change(self.process.sequence_index, k, change["new"])
+
+            widget.observe(_observer, names="value")
+            self._numeric_control_widgets[key] = widget
+            self._numeric_control_observers[key] = _observer
+            return
+        _sync_widget_value(widget, self._numeric_control_observers[key], value)
+
+    def _sync_checkbox_control(self, key: str, label: str, width: str, value: bool) -> None:
+        widget = self._checkbox_control_widgets.get(key)
+        if widget is None:
+            widget = widgets.Checkbox(
+                value=value,
+                description=label,
+                style={"description_width": "initial"},
+                layout=widgets.Layout(width=width),
+            )
+
+            def _observer(change, k=key):
+                self._builder._on_config_change(self.process.sequence_index, k, change["new"])
+
+            widget.observe(_observer, names="value")
+            self._checkbox_control_widgets[key] = widget
+            self._checkbox_control_observers[key] = _observer
+            return
+        _sync_widget_value(widget, self._checkbox_control_observers[key], value)
 
 
 class ProcessSequenceBuilder(widgets.VBox):
@@ -1837,72 +1926,6 @@ class ProcessSequenceBuilder(widgets.VBox):
             f"<span style='color:#2c7a4b'>Filled {written} field(s) from Batch {batch_id}.</span>"
         )
         self._notify_change()
-
-    def _build_config_controls(self, process: ProcessInstance):
-        numeric_controls: list[widgets.Widget] = []
-        checkbox_controls: list[widgets.Widget] = []
-        config = process.config
-
-        atmospheric_checkbox = widgets.Checkbox(
-            value=bool(config.get(ATMOSPHERIC_CONFIG_KEY, False)),
-            description="Add Atmospheric Values",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width="190px"),
-        )
-        atmospheric_checkbox.observe(
-            lambda change, seq=process.sequence_index: self._on_config_change(
-                seq, ATMOSPHERIC_CONFIG_KEY, change["new"]
-            ),
-            names="value",
-        )
-        checkbox_controls.append(atmospheric_checkbox)
-
-        if process.process_type not in CONFIGURABLE_PROCESS_TYPES:
-            return numeric_controls, checkbox_controls
-
-        for key, label, applicable_types, min_val, max_val in NUMERIC_CONFIG_FIELDS:
-            if process.process_type not in applicable_types:
-                continue
-            control = widgets.BoundedIntText(
-                value=config.get(key, min_val),
-                min=min_val,
-                max=max_val,
-                description=f"{label}:",
-                style={"description_width": "initial"},
-                layout=widgets.Layout(width="120px"),
-                # continuous_update=False - see _FieldRow's value_widget for why.
-                # This one is the worst case in the app: _on_config_change triggers a full
-                # rebuild_field_specs() PLUS a re-render of every row in the whole
-                # ProcessSequenceBuilder, not just this process - firing that per
-                # keystroke made typing here the most visibly broken spot.
-                continuous_update=False,
-            )
-            control.observe(
-                lambda change, seq=process.sequence_index, k=key: self._on_config_change(
-                    seq, k, change["new"]
-                ),
-                names="value",
-            )
-            numeric_controls.append(control)
-
-        for key, label, applicable_types in BOOLEAN_CONFIG_FIELDS:
-            if process.process_type not in applicable_types:
-                continue
-            checkbox = widgets.Checkbox(
-                value=bool(config.get(key, False)),
-                description=label,
-                style={"description_width": "initial"},
-                layout=widgets.Layout(width="140px"),
-            )
-            checkbox.observe(
-                lambda change, seq=process.sequence_index, k=key: self._on_config_change(
-                    seq, k, change["new"]
-                ),
-                names="value",
-            )
-            checkbox_controls.append(checkbox)
-
-        return numeric_controls, checkbox_controls
 
     def _build_override_section(self, process: ProcessInstance) -> widgets.Widget:
         if process.source_override_batch_id is not None:
