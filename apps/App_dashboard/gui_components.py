@@ -5,6 +5,7 @@ CATEGORY_ICONS = {
     "Device Characterization": "fa-solar-panel",
     "Optical & Structural Analysis": "fa-microscope",
     "Utilities & Calculators": "fa-toolbox",
+    "Build Your Own": "fa-robot",
     "Experimental / In Progress": "fa-flask",
 }
 
@@ -102,10 +103,10 @@ def create_header(user: str) -> widgets.HTML:
     """)
 
 
-def create_app_card(entry, voila_url: str, full_url: str) -> widgets.HTML:
+def create_app_card(entry, href: str, full_url: str) -> widgets.HTML:
     badge = '<span class="app-badge">experimental</span>' if entry.experimental else ""
     return widgets.HTML(f"""
-        <a class="app-card" href="{voila_url}" target="_blank" title="{full_url}">
+        <a class="app-card" href="{href}" target="_blank" title="{full_url}">
             <div class="app-icon"><i class="fas {entry.icon}"></i></div>
             <div class="app-body">
                 <div class="app-title">{entry.name}{badge}</div>

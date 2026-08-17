@@ -99,6 +99,20 @@ HYSPRINT_SERVER=hzb
 
 ---
 
+## Build Your Own Analysis (with an LLM)
+
+Not every analysis needs a full app. If you want to query your own NOMAD
+Oasis data directly — from a notebook, a one-off script, or a chatbot like
+Claude or ChatGPT — paste
+[`NOMAD_DATA_ACCESS_PROMPT.md`](NOMAD_DATA_ACCESS_PROMPT.md) into the
+conversation. It's a self-contained reference covering authentication, the
+two core query endpoints, this Oasis's entry types, and worked examples
+(list batches, pull JV data for a sample, read a search-indexed property,
+etc.), so the LLM can write correct API calls without guessing endpoint or
+field names.
+
+---
+
 ## Repository Structure
 
 ```

@@ -23,6 +23,8 @@ class AppEntry:
     description: str
     icon: str
     experimental: bool = False
+    external_url: str | None = None
+    """When set, the card links straight here instead of rendering folder/notebook via Voila."""
 
 
 CATEGORIES: dict[str, list[AppEntry]] = {
@@ -166,6 +168,20 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Estimate life cycle cost (processes, materials, labor, overhead) "
             "for selected batches, exported to an editable Excel workbook.",
             "fa-money",
+        ),
+    ],
+    "Build Your Own": [
+        AppEntry(
+            "",
+            "",
+            "Make Your Own App With This Prompt",
+            "Paste this into an LLM chatbot (Claude, ChatGPT, ...) so it can query your NOMAD "
+            "data directly and write a custom analysis script, no new app required.",
+            "fa-robot",
+            external_url=(
+                "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/"
+                "NOMAD_DATA_ACCESS_PROMPT.md"
+            ),
         ),
     ],
     "Experimental / In Progress": [

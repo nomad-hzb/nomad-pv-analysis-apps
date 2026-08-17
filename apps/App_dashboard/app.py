@@ -19,13 +19,16 @@ def setup_app():
     for category, entries in dm.CATEGORIES.items():
         cards = []
         for entry in entries:
-            if not dm.notebook_exists(entry):
-                logger.warning(
-                    "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
-                )
-            voila_url = dm.build_voila_url(entry, user, uploads_path)
-            full_url = f"{dm.URL_BASE}{voila_url}"
-            cards.append(gui.create_app_card(entry, voila_url, full_url))
+            if entry.external_url:
+                href = full_url = entry.external_url
+            else:
+                if not dm.notebook_exists(entry):
+                    logger.warning(
+                        "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
+                    )
+                href = dm.build_voila_url(entry, user, uploads_path)
+                full_url = f"{dm.URL_BASE}{href}"
+            cards.append(gui.create_app_card(entry, href, full_url))
         sections.append(gui.create_category_section(category, cards))
 
     return widgets.VBox(

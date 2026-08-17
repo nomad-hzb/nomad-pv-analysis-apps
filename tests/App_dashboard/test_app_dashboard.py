@@ -52,7 +52,12 @@ def test_categories_cover_every_app_folder_exactly_once():
         if os.path.isdir(os.path.join(apps_dir, name)) and name != "App_dashboard"
     }
 
-    listed_folders = [entry.folder for entries in CATEGORIES.values() for entry in entries]
+    listed_folders = [
+        entry.folder
+        for entries in CATEGORIES.values()
+        for entry in entries
+        if not entry.external_url
+    ]
 
     assert len(listed_folders) == len(set(listed_folders)), (
         "duplicate app folder in dashboard registry"
@@ -62,3 +67,11 @@ def test_categories_cover_every_app_folder_exactly_once():
 
 def test_url_base_has_no_trailing_slash():
     assert not URL_BASE.endswith("/")
+
+
+def test_build_your_own_entry_links_straight_to_the_prompt_doc():
+    entries = CATEGORIES["Build Your Own"]
+    assert len(entries) == 1
+    assert entries[0].external_url == (
+        "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/NOMAD_DATA_ACCESS_PROMPT.md"
+    )
