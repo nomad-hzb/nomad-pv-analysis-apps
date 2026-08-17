@@ -30,20 +30,23 @@ def setup_app():
         return gui.create_app_card(entry, href, full_url)
 
     def show_main(_button=None):
-        sections = [
-            gui.create_category_section(category, [render_app_card(e) for e in entries])
-            for category, entries in dm.CATEGORIES.items()
-        ]
         project_cards = [
             gui.create_project_card(project, lambda _b, p=project: show_project(p))
             for project in dm.PROJECTS
         ]
         projects_section = gui.create_category_section("Projects", project_cards)
 
+        sections = []
+        for category, entries in dm.CATEGORIES.items():
+            if category == "Build Your Own":
+                sections.append(projects_section)
+            sections.append(
+                gui.create_category_section(category, [render_app_card(e) for e in entries])
+            )
+
         root.children = [
             gui.create_style(),
             gui.create_header(user),
-            projects_section,
             *sections,
             gui.create_footer(),
         ]

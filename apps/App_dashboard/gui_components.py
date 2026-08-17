@@ -25,7 +25,7 @@ STYLE = """
 .category-title i { color: #3498db; margin-right: 8px; }
 .app-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 340px));
     gap: 14px;
     width: 100%;
 }
