@@ -1485,16 +1485,17 @@ class _ProcessRow(widgets.VBox):
 
     update() runs for EVERY process row on EVERY edit anywhere in the form (so progress
     %/config displays everywhere stay current), not just the row actually being edited -
-    so config controls (numeric/checkbox) are cached and synced in place too, exactly
-    like _FieldRow/_MatrixCell: an earlier version of this class rebuilt them fresh every
-    update() call (reasoning: cheap, and process.config can change from outside this
-    row's own controls, e.g. "Adopt from template batch" widening a solvent/solute/
-    spinstep count via expand_process_config_for_source), which meant typing into a
-    config field anywhere got wiped out by an unrelated edit elsewhere re-rendering every
-    row. Only the adopt/override sections still get discarded and rebuilt on every
-    update() - see _build_adopt_section/_build_override_section and the existing
-    ProcessSequenceBuilder._adopt_status/_override_status workaround, which already
-    assumes that."""
+    so config controls (numeric/checkbox) AND the adopt-from-template/override-from-batch
+    sections are all cached and synced/swapped in place too, exactly like _FieldRow/
+    _MatrixCell. An earlier version rebuilt the adopt/override sections fresh every
+    update() call (they used to need a separate ProcessSequenceBuilder._adopt_status/
+    _override_status dict just to survive that rebuild) - which meant self.children
+    differed from the previous render on EVERY SINGLE update() call, for every row,
+    regardless of whether that row's own process actually changed, since two brand new
+    widget objects were always in the list. That's what was still clearing an in-progress
+    edit (and derailing tab order) in a numbered-process row whenever ANY field changed
+    anywhere in the form - Experiment Info has no adopt/override section and was never
+    affected, which is what pointed here."""
 
     def __init__(self, builder: "ProcessSequenceBuilder", process: ProcessInstance):
         self._builder = builder
@@ -1540,6 +1541,53 @@ class _ProcessRow(widgets.VBox):
         self.caption = _field_row_caption()
         self.panel: ProcessFieldsPanel | None = None
 
+        # -- Adopt-from-template section: persistent, updated in place - see class
+        # docstring for why this used to be rebuilt fresh every update().
+        self._adopt_button = widgets.Button(
+            description="Adopt from template batch", layout=widgets.Layout(width="200px")
+        )
+        self._adopt_button.on_click(self._on_adopt_click)
+        self._adopt_status = widgets.HTML(value="")
+        self._adopt_picker_area = widgets.VBox([])
+        self.adopt_section = widgets.VBox(
+            [
+                widgets.HBox([self._adopt_button, self._adopt_status]),
+                widgets.HTML(
+                    value=(
+                        "<i style='color:#7f8c8d; font-size:11px;'>Pulls this process's "
+                        "values from the batch picked above in Whole-experiment Template, "
+                        "for this process only.</i>"
+                    )
+                ),
+                self._adopt_picker_area,
+            ]
+        )
+
+        # -- Override-from-batch section: two mutually exclusive layouts (already
+        # overridden vs not) - both cached, swapped as a whole only when that actually
+        # flips (see _sync_override_section), instead of the top-level shape being
+        # rebuilt on every update() like the rest of this section used to be.
+        self._override_detail = ""
+        self._override_active_label = widgets.HTML(value="")
+        override_clear_button = widgets.Button(
+            description="Clear override", layout=widgets.Layout(width="120px")
+        )
+        override_clear_button.on_click(lambda _b: self._on_clear_override())
+        self._override_active_view = widgets.HBox(
+            [self._override_active_label, override_clear_button],
+            layout=widgets.Layout(align_items="center"),
+        )
+        self._override_toggle = widgets.ToggleButton(
+            description="Override from batch...", layout=widgets.Layout(width="160px")
+        )
+        self._override_container = widgets.VBox([])
+        self._override_toggle.observe(self._on_override_toggle, names="value")
+        self._override_inactive_view = widgets.VBox(
+            [self._override_toggle, self._override_container]
+        )
+        self.override_section = widgets.VBox([])
+        self._override_active: bool | None = None
+
         super().__init__(
             [], layout=widgets.Layout(margin="2px 0", border="1px solid #ccc", padding="4px")
         )
@@ -1561,6 +1609,7 @@ class _ProcessRow(widgets.VBox):
         self.progress_label.value = _progress_html(filled, total)
 
         self._sync_config_controls()
+        self._sync_override_section()
 
         self.main_row.children = [
             self.toggle_button,
@@ -1576,8 +1625,8 @@ class _ProcessRow(widgets.VBox):
         rows: list[widgets.Widget] = [self.main_row]
         if self._checkbox_controls:
             rows.append(self.checkbox_controls_row)
-        rows.append(self._builder._build_adopt_section(process))
-        rows.append(self._builder._build_override_section(process))
+        rows.append(self.adopt_section)
+        rows.append(self.override_section)
         if is_expanded:
             rows.append(self.caption)
             if self.panel is None:
@@ -1677,6 +1726,124 @@ class _ProcessRow(widgets.VBox):
             return
         _sync_widget_value(widget, self._checkbox_control_observers[key], value)
 
+    # -- adopt-from-template-batch ----------------------------------------------
+
+    def _on_adopt_click(self, _button) -> None:
+        """One-click adoption from the batch already picked in the Whole-experiment
+        Template picker (state.whole_experiment_template_batch_id), scoped to this one
+        process. If that batch has more than one step of this process type (e.g. several
+        Spin Coating layers), lets the user pick which one by the material it deposited
+        before confirming - see list_process_occurrences."""
+        builder = self._builder
+        process = self.process
+        self._adopt_picker_area.children = []
+        if not (builder.url and builder.token and builder.cache):
+            self._adopt_status.value = (
+                "<span style='color:#c0392b'>No NOMAD session available.</span>"
+            )
+            return
+        template_batch_id = builder.state.whole_experiment_template_batch_id
+        if not template_batch_id:
+            self._adopt_status.value = (
+                "<span style='color:#c0392b'>Pick a whole-experiment template batch "
+                "above first.</span>"
+            )
+            return
+        self._adopt_status.value = "<i>Working...</i>"
+        try:
+            occurrences = list_process_occurrences(
+                builder.url, builder.token, builder.cache, template_batch_id, process.process_type
+            )
+        except Exception as exc:
+            self._adopt_status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            return
+        if not occurrences:
+            self._adopt_status.value = (
+                f"<span style='color:#c0392b'>Batch {template_batch_id} has no "
+                f"{process.process_type} step.</span>"
+            )
+            return
+        if len(occurrences) == 1:
+            self._apply_adopt(template_batch_id, occurrences[0][0])
+            return
+        self._adopt_status.value = ""
+        occurrence_dropdown = widgets.Dropdown(
+            options=[(label, idx) for idx, label in occurrences],
+            description="Material:",
+            style={"description_width": "initial"},
+        )
+        confirm_button = widgets.Button(description="Confirm", button_style="primary")
+        confirm_button.on_click(
+            lambda b: self._apply_adopt(template_batch_id, occurrence_dropdown.value)
+        )
+        self._adopt_picker_area.children = [occurrence_dropdown, confirm_button]
+
+    def _apply_adopt(self, batch_id: str, occurrence: int) -> None:
+        builder = self._builder
+        self._adopt_status.value = "<i>Working...</i>"
+        try:
+            written = apply_process_override(
+                builder.state,
+                self.process,
+                builder.url,
+                builder.token,
+                builder.cache,
+                batch_id,
+                occurrence,
+            )
+        except Exception as exc:
+            self._adopt_status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            return
+        self._adopt_status.value = (
+            f"<span style='color:#2c7a4b'>Filled {written} field(s) from Batch {batch_id}.</span>"
+        )
+        builder._notify_change()
+
+    # -- override-from-batch ------------------------------------------------------
+
+    def _sync_override_section(self) -> None:
+        active = self.process.source_override_batch_id is not None
+        if active:
+            self._override_active_label.value = (
+                f"<span style='color:#2c7a4b'>Overridden from batch "
+                f"{self.process.source_override_batch_id}{self._override_detail}</span>"
+            )
+        if active != self._override_active:
+            self._override_active = active
+            self.override_section.children = (
+                [self._override_active_view] if active else [self._override_inactive_view]
+            )
+
+    def _on_override_toggle(self, change) -> None:
+        if change["new"]:
+            self._override_container.children = [self._build_override_picker()]
+        else:
+            self._override_container.children = []
+
+    def _build_override_picker(self) -> widgets.Widget:
+        builder = self._builder
+        if not (builder.url and builder.token and builder.cache):
+            return widgets.HTML(
+                value="<span style='color:#c0392b'>No NOMAD session available.</span>"
+            )
+
+        def on_load(batch_id):
+            written = apply_process_override(
+                builder.state, self.process, builder.url, builder.token, builder.cache, batch_id
+            )
+            self._override_detail = f" - filled {written} field(s)"
+            builder._notify_change()
+            return None
+
+        return _create_batch_picker(
+            builder.cache, builder.url, builder.token, "Override batch", on_load
+        )
+
+    def _on_clear_override(self) -> None:
+        clear_process_override(self._builder.state, self.process)
+        self._override_detail = ""
+        self._builder._notify_change()
+
 
 class ProcessSequenceBuilder(widgets.VBox):
     """Row-based process sequence editor: one row per process (Experiment Info always
@@ -1706,11 +1873,6 @@ class ProcessSequenceBuilder(widgets.VBox):
         # Collapse/expand state per sequence_index (0 = Experiment Info); defaults to
         # expanded so nothing looks hidden on first load.
         self._expanded: dict[int, bool] = {}
-        # Last "adopt from template batch" / "override from batch" result per
-        # sequence_index, so it survives the _notify_change() re-render that follows a
-        # successful action (which discards and rebuilds the row's status widgets).
-        self._adopt_status: dict[int, str] = {}
-        self._override_status: dict[int, str] = {}
         # Every row's whole widget tree (toggle/dropdown/progress/config controls/
         # ProcessFieldsPanel or ExperimentInfoPanel, wrapped in an outer VBox) used to be
         # rebuilt from scratch on every _render(), which fires on ANY field edit anywhere
@@ -1837,148 +1999,6 @@ class ProcessSequenceBuilder(widgets.VBox):
             rows.append(self._info_panel)
         self._info_row_widget.children = rows
         return self._info_row_widget
-
-    # -- real process rows -----------------------------------------------------
-
-    def _build_adopt_section(self, process: ProcessInstance) -> widgets.Widget:
-        """One-click adoption from the batch already picked in the Whole-experiment
-        Template picker (state.whole_experiment_template_batch_id), scoped to this one
-        process. If that batch has more than one step of this process type (e.g. several
-        Spin Coating layers), lets the user pick which one by the material it deposited
-        before confirming - see list_process_occurrences."""
-        button = widgets.Button(
-            description="Adopt from template batch", layout=widgets.Layout(width="200px")
-        )
-        status = widgets.HTML(value=self._adopt_status.get(process.sequence_index, ""))
-        picker_area = widgets.VBox([])
-        caption = widgets.HTML(
-            value=(
-                "<i style='color:#7f8c8d; font-size:11px;'>Pulls this process's values "
-                "from the batch picked above in Whole-experiment Template, for this "
-                "process only.</i>"
-            )
-        )
-
-        def on_click(_button):
-            picker_area.children = []
-            if not (self.url and self.token and self.cache):
-                status.value = "<span style='color:#c0392b'>No NOMAD session available.</span>"
-                return
-            template_batch_id = self.state.whole_experiment_template_batch_id
-            if not template_batch_id:
-                status.value = (
-                    "<span style='color:#c0392b'>Pick a whole-experiment template batch "
-                    "above first.</span>"
-                )
-                return
-            status.value = "<i>Working...</i>"
-            try:
-                occurrences = list_process_occurrences(
-                    self.url, self.token, self.cache, template_batch_id, process.process_type
-                )
-            except Exception as exc:
-                status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
-                return
-            if not occurrences:
-                status.value = (
-                    f"<span style='color:#c0392b'>Batch {template_batch_id} has no "
-                    f"{process.process_type} step.</span>"
-                )
-                return
-            if len(occurrences) == 1:
-                self._apply_adopt(
-                    process.sequence_index, template_batch_id, occurrences[0][0], status
-                )
-                return
-            status.value = ""
-            occurrence_dropdown = widgets.Dropdown(
-                options=[(label, idx) for idx, label in occurrences],
-                description="Material:",
-                style={"description_width": "initial"},
-            )
-            confirm_button = widgets.Button(description="Confirm", button_style="primary")
-            confirm_button.on_click(
-                lambda b: self._apply_adopt(
-                    process.sequence_index, template_batch_id, occurrence_dropdown.value, status
-                )
-            )
-            picker_area.children = [occurrence_dropdown, confirm_button]
-
-        button.on_click(on_click)
-        return widgets.VBox([widgets.HBox([button, status]), caption, picker_area])
-
-    def _apply_adopt(
-        self, sequence_index: int, batch_id: str, occurrence: int, status: widgets.HTML
-    ) -> None:
-        status.value = "<i>Working...</i>"
-        try:
-            process = self.state.get_process(sequence_index)
-            written = apply_process_override(
-                self.state, process, self.url, self.token, self.cache, batch_id, occurrence
-            )
-        except Exception as exc:
-            status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
-            return
-        # _notify_change() re-renders this row from scratch, discarding `status` - stash
-        # the message so the freshly-built status widget picks it up (see
-        # _build_adopt_section's initial value).
-        self._adopt_status[sequence_index] = (
-            f"<span style='color:#2c7a4b'>Filled {written} field(s) from Batch {batch_id}.</span>"
-        )
-        self._notify_change()
-
-    def _build_override_section(self, process: ProcessInstance) -> widgets.Widget:
-        if process.source_override_batch_id is not None:
-            detail = self._override_status.get(process.sequence_index, "")
-            label = widgets.HTML(
-                value=(
-                    f"<span style='color:#2c7a4b'>Overridden from batch "
-                    f"{process.source_override_batch_id}{detail}</span>"
-                )
-            )
-            clear_button = widgets.Button(
-                description="Clear override", layout=widgets.Layout(width="120px")
-            )
-            clear_button.on_click(lambda b, seq=process.sequence_index: self._clear_override(seq))
-            return widgets.HBox([label, clear_button], layout=widgets.Layout(align_items="center"))
-
-        toggle = widgets.ToggleButton(
-            description="Override from batch...", layout=widgets.Layout(width="160px")
-        )
-        container = widgets.VBox([])
-
-        def on_toggle(change, seq=process.sequence_index):
-            container.children = [self._build_override_picker(seq)] if change["new"] else []
-
-        toggle.observe(on_toggle, names="value")
-        return widgets.VBox([toggle, container])
-
-    def _build_override_picker(self, sequence_index: int) -> widgets.Widget:
-        if not (self.url and self.token and self.cache):
-            return widgets.HTML(
-                value="<span style='color:#c0392b'>No NOMAD session available.</span>"
-            )
-
-        def on_load(batch_id):
-            process = self.state.get_process(sequence_index)
-            written = apply_process_override(
-                self.state, process, self.url, self.token, self.cache, batch_id
-            )
-            # _notify_change() below re-renders this row, discarding the picker/status
-            # widget _create_batch_picker would otherwise show its returned message on -
-            # stash it so _build_override_section's "Overridden from batch X" label can
-            # show it instead (see that method).
-            self._override_status[sequence_index] = f" - filled {written} field(s)"
-            self._notify_change()
-            return None
-
-        return _create_batch_picker(self.cache, self.url, self.token, "Override batch", on_load)
-
-    def _clear_override(self, sequence_index: int) -> None:
-        process = self.state.get_process(sequence_index)
-        clear_process_override(self.state, process)
-        self._override_status.pop(sequence_index, None)
-        self._notify_change()
 
     # -- mutation handlers -----------------------------------------------------
 

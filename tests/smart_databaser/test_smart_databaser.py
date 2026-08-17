@@ -585,8 +585,8 @@ def test_process_sequence_builder_adopt_section_errors_without_template_batch(fr
     cache = NomadSessionCache()
     builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
 
-    adopt_section = builder._build_adopt_section(fresh_state.get_process(1))
-    button_row, _caption, _picker_area = adopt_section.children
+    row = builder._process_rows[id(fresh_state.get_process(1))]
+    button_row, _caption, _picker_area = row.adopt_section.children
     adopt_button, status = button_row.children
     adopt_button.click()
 
@@ -599,8 +599,8 @@ def test_process_sequence_builder_adopt_section_errors_when_batch_missing_proces
     fresh_state.whole_experiment_template_batch_id = "B1"
     builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
 
-    adopt_section = builder._build_adopt_section(fresh_state.get_process(1))
-    button_row, _caption, _picker_area = adopt_section.children
+    row = builder._process_rows[id(fresh_state.get_process(1))]
+    button_row, _caption, _picker_area = row.adopt_section.children
     adopt_button, status = button_row.children
     adopt_button.click()
 
@@ -614,8 +614,8 @@ def test_process_sequence_builder_adopt_section_single_occurrence_applies_direct
     fresh_state.whole_experiment_template_batch_id = "B1"
     builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
 
-    adopt_section = builder._build_adopt_section(fresh_state.get_process(1))
-    button_row, _caption, _picker_area = adopt_section.children
+    row = builder._process_rows[id(fresh_state.get_process(1))]
+    button_row, _caption, _picker_area = row.adopt_section.children
     adopt_button, _status = button_row.children
     adopt_button.click()
 
@@ -639,8 +639,8 @@ def test_process_sequence_builder_adopt_section_multiple_occurrences_shows_mater
     fresh_state.whole_experiment_template_batch_id = "B1"
     builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
 
-    adopt_section = builder._build_adopt_section(fresh_state.get_process(1))
-    button_row, _caption, picker_area = adopt_section.children
+    row = builder._process_rows[id(fresh_state.get_process(1))]
+    button_row, _caption, picker_area = row.adopt_section.children
     adopt_button, _status = button_row.children
     adopt_button.click()
 
@@ -2377,7 +2377,8 @@ def test_create_whole_experiment_template_picker_shows_error_on_failure(fresh_st
 def test_process_sequence_builder_override_picker_shows_message_without_session(fresh_state):
     fresh_state.add_process("Spin Coating", config={"solvents": 1, "solutes": 1})
     builder = ProcessSequenceBuilder(fresh_state)  # no url/token/cache
-    picker = builder._build_override_picker(1)
+    row = builder._process_rows[id(fresh_state.get_process(1))]
+    picker = row._build_override_picker()
     assert "No NOMAD session" in picker.value
 
 
@@ -2391,7 +2392,8 @@ def test_process_sequence_builder_override_picker_applies_override_batch(fresh_s
         patch("data_manager.get_processing_steps", return_value=[SPIN_COATING_STEP]),
     ):
         builder = ProcessSequenceBuilder(fresh_state, "url", "token", cache)
-        batch_picker = builder._build_override_picker(1)
+        row = builder._process_rows[id(fresh_state.get_process(1))]
+        batch_picker = row._build_override_picker()
         search_field, selector, load_button, _status = batch_picker.children
         selector.value = ("OVERRIDE_BATCH",)
         load_button.click()
@@ -2409,7 +2411,8 @@ def test_process_sequence_builder_clear_override_button(fresh_state):
     )
     builder = ProcessSequenceBuilder(fresh_state)
 
-    builder._clear_override(1)
+    row = builder._process_rows[id(process)]
+    row._on_clear_override()
 
     assert process.source_override_batch_id is None
 
