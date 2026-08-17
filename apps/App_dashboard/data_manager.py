@@ -27,7 +27,10 @@ class AppEntry:
     """When set, the card links straight here instead of rendering folder/notebook via Voila."""
     upload_id: str | None = None
     """When set, build the Voila link against this NOMAD upload instead of the dashboard's
-    own upload (for apps that live in a separate upload, e.g. Projects apps)."""
+    own upload (for apps that live in a separate upload, e.g. Projects apps). Must be the
+    full '<slug>-<id>' upload folder name (e.g. 'ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg'),
+    same as what get_uploads_path() derives for the dashboard's own upload -- the raw
+    alphanumeric ID shown in NOMAD GUI file-browser URLs is NOT enough on its own."""
 
 
 @dataclass(frozen=True)
@@ -236,7 +239,7 @@ PROJECTS: list[Project] = [
                 "1. Image Cropper",
                 "Crop raw PL images down to the region used by the rest of the pipeline.",
                 "fa-crop",
-                upload_id="DuFOohIVQ5aauygNxEOXyg",
+                upload_id="ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg",
             ),
             AppEntry(
                 "",
@@ -244,6 +247,7 @@ PROJECTS: list[Project] = [
                 "2. Feature Extraction",
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
             ),
             AppEntry(
@@ -252,6 +256,7 @@ PROJECTS: list[Project] = [
                 "3. PL Defect Analysis",
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
             ),
             AppEntry(
@@ -260,6 +265,7 @@ PROJECTS: list[Project] = [
                 "4. ML Model",
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id="sSP9nxKDRhax0cuBzsrvEA",
             ),
             AppEntry(
@@ -268,6 +274,7 @@ PROJECTS: list[Project] = [
                 "5. Correlation Analysis",
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id="Jeb8HXjnSNy9T0-Z5VVbhA",
             ),
             AppEntry(
@@ -277,6 +284,7 @@ PROJECTS: list[Project] = [
                 "Map PL-imaged ROIs to per-device JV curves and export the joined "
                 "dataset back to NOMAD.",
                 "fa-object-group",
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id="YRS7abDQS26o2NplzjBwKg",
             ),
         ],
