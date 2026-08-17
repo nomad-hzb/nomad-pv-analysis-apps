@@ -3,22 +3,23 @@
 Consolidated data handling module
 Contains all data loading, parsing, and management functionality
 """
+import logging
 import numpy as np
 import pandas as pd
 import io
-import os
-import sys
 import config
 from utils import debug_print
 
-parent_dir = os.path.dirname(os.getcwd())
-utils_dir = os.path.join(parent_dir, 'utils')
-if utils_dir not in sys.path:
-    sys.path.insert(0, utils_dir)
-import access_token
+try:
+    from hysprint_utils.access_token import log_notebook_usage
+except ImportError:
+    logging.getLogger(__name__).warning("hysprint_utils.access_token not found; skipping usage logging")
+
+    def log_notebook_usage():
+        pass
 
 # Log notebook usage
-access_token.log_notebook_usage()
+log_notebook_usage()
 
 
 # =============================================================================
