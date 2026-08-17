@@ -175,14 +175,6 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Generate bitmap patterns for combinatorial inkjet printing.",
             "fa-th",
         ),
-        AppEntry(
-            "LCC_Calculator",
-            "lcc_calculator.ipynb",
-            "LCC Calculator",
-            "Estimate life cycle cost (processes, materials, labor, overhead) "
-            "for selected batches, exported to an editable Excel workbook.",
-            "fa-money",
-        ),
     ],
     "Build Your Own": [
         AppEntry(
@@ -221,6 +213,15 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "XPS Automated",
             "Automated XPS peak fitting.",
             "fa-atom",
+            experimental=True,
+        ),
+        AppEntry(
+            "LCC_Calculator",
+            "lcc_calculator.ipynb",
+            "LCC Calculator",
+            "Estimate life cycle cost (processes, materials, labor, overhead) "
+            "for selected batches, exported to an editable Excel workbook.",
+            "fa-money-bill-alt",
             experimental=True,
         ),
     ],

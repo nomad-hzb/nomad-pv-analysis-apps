@@ -13,9 +13,28 @@ CATEGORY_ICONS = {
 STYLE = """
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 <style>
+.dashboard-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
 .dashboard-header h1 { margin-bottom: 4px; }
 .dashboard-subtitle { color: #555; margin-top: 0; }
 .dashboard-warning { color: #a94442; }
+.whats-new-link {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background-color: rgba(52, 152, 219, 0.12);
+    color: #3498db;
+    text-decoration: none;
+    font-size: 0.85em;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.whats-new-link:hover { background-color: rgba(52, 152, 219, 0.22); }
+.whats-new-link i { margin-right: 5px; }
 .category-title {
     margin: 0 0 10px 0;
     padding-bottom: 6px;
@@ -94,6 +113,9 @@ def create_style() -> widgets.HTML:
     return widgets.HTML(STYLE)
 
 
+WHATS_NEW_URL = "https://github.com/nomad-hzb/nomad-pv-analysis-apps/releases"
+
+
 def create_header(user: str) -> widgets.HTML:
     if user:
         subtitle = (
@@ -108,8 +130,14 @@ def create_header(user: str) -> widgets.HTML:
         )
     return widgets.HTML(f"""
         <div class="dashboard-header">
-            <h1>NOMAD Analysis Tools</h1>
-            <p class="dashboard-subtitle">{subtitle}</p>
+            <div>
+                <h1>NOMAD Analysis Tools</h1>
+                <p class="dashboard-subtitle">{subtitle}</p>
+            </div>
+            <a class="whats-new-link" href="{WHATS_NEW_URL}" target="_blank"
+               title="See recent changes and releases">
+                <i class="fas fa-bullhorn"></i>What's New
+            </a>
         </div>
     """)
 

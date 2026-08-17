@@ -93,6 +93,27 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
     app's currently-working behavior or an already-passing test, stop and
     flag it — don't force the fix through.
 
+## Change management: issues, PRs, versions
+
+Every user-visible change to an app starts as a GitHub issue on
+`nomad-hzb/nomad-pv-analysis-apps` and lands via a PR that references it
+(`Fixes #123`). Full process for humans: `CONTRIBUTING.md`. What this means
+for you specifically:
+
+- When asked to fix or add something in an app, check whether an issue
+  already exists before assuming scope; if the user hasn't mentioned one and
+  it's a non-trivial change, ask whether one should be filed.
+- **Bump that app's `pyproject.toml` `version`** (SemVer: patch for a fix,
+  minor for a non-breaking feature, major for a breaking change) in the same
+  change, for that app only. Don't bump unrelated apps, and don't bump for
+  internal refactors, test-only changes, or `shared/hysprint_utils/` edits
+  (rule 2 already gates those separately).
+- There is no hand-maintained CHANGELOG file. "What's new" is the GitHub
+  Releases page, linked from the top-right of the App Dashboard
+  (`apps/App_dashboard/gui_components.py::WHATS_NEW_URL`) — releases are cut
+  with `gh release create <tag> --generate-notes`, which builds notes from
+  merged PR titles, so keep PR titles descriptive.
+
 ## Known environment gotcha — do not "fix" by deleting `tests/conftest.py`
 
 The repo's own root `secrets.py` shadows the *stdlib* `secrets` module
