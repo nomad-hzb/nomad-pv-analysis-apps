@@ -29,7 +29,8 @@ def setup_app():
             full_url = f"{dm.URL_BASE}{href}"
         return gui.create_app_card(entry, href, full_url)
 
-    def render_learning_card(entry):
+    def render_learning_card():
+        entry = dm.LEARNING_FOLDER
         href = dm.build_jupyter_url(entry, user)
         full_url = f"{dm.URL_BASE}{href}"
         return gui.create_app_card(entry, href, full_url)
@@ -40,22 +41,14 @@ def setup_app():
             for project in dm.PROJECTS
         ]
         projects_section = gui.create_category_section("Projects", project_cards)
-        learning_hub_card = gui.create_hub_card(
-            "Learning",
-            "Guided Python & NOMAD tutorial notebooks, numbered start to finish.",
-            "fa-graduation-cap",
-            show_learning,
-        )
-        learning_section = gui.create_category_section("Learning", [learning_hub_card])
 
         sections = []
         for category, entries in dm.CATEGORIES.items():
+            cards = [render_app_card(e) for e in entries]
             if category == "Build Your Own":
                 sections.append(projects_section)
-                sections.append(learning_section)
-            sections.append(
-                gui.create_category_section(category, [render_app_card(e) for e in entries])
-            )
+                cards.insert(0, render_learning_card())
+            sections.append(gui.create_category_section(category, cards))
 
         root.children = [
             gui.create_style(),
@@ -71,16 +64,6 @@ def setup_app():
             gui.create_header(user),
             gui.create_back_button(show_main),
             gui.create_category_section(project.name, cards),
-            gui.create_footer(),
-        ]
-
-    def show_learning(_button=None):
-        cards = [render_learning_card(e) for e in dm.LEARNING_NOTEBOOKS]
-        root.children = [
-            gui.create_style(),
-            gui.create_header(user),
-            gui.create_back_button(show_main),
-            gui.create_category_section("Learning", cards),
             gui.create_footer(),
         ]
 

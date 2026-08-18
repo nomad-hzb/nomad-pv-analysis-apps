@@ -3,7 +3,7 @@ import os
 from data_manager import (
     CATEGORIES,
     JUPYTER_PATH_TEMPLATE,
-    LEARNING_NOTEBOOKS,
+    LEARNING_FOLDER,
     PROJECTS,
     URL_BASE,
     VOILA_PATH_TEMPLATE,
@@ -103,28 +103,21 @@ def test_build_your_own_entry_links_straight_to_the_prompt_doc():
 
 
 def test_build_jupyter_url_matches_expected_nomad_structure():
-    entry = LEARNING_NOTEBOOKS[0]
-
-    url = build_jupyter_url(entry, "edgar")
+    url = build_jupyter_url(LEARNING_FOLDER, "edgar")
 
     assert url == (
-        JUPYTER_PATH_TEMPLATE.format(user="edgar") + f"/uploads/{entry.upload_id}/{entry.path}"
+        JUPYTER_PATH_TEMPLATE.format(user="edgar")
+        + f"/uploads/{LEARNING_FOLDER.upload_id}/{LEARNING_FOLDER.path}"
     )
     assert url.startswith("/nomad-oasis/north/user/edgar/jupyter2/lab/tree/")
 
 
-def test_learning_notebooks_have_upload_ids_and_unique_names():
-    assert LEARNING_NOTEBOOKS, "no learning notebooks registered"
-    for entry in LEARNING_NOTEBOOKS:
-        assert entry.upload_id, f"learning entry {entry.name!r} has no upload_id"
-        assert entry.path, f"learning entry {entry.name!r} has no path"
-    names = [entry.name for entry in LEARNING_NOTEBOOKS]
-    assert len(names) == len(set(names)), "duplicate name in LEARNING_NOTEBOOKS"
+def test_learning_folder_has_upload_id_and_exists_in_repo():
+    assert LEARNING_FOLDER.upload_id
+    assert LEARNING_FOLDER.path
 
-
-def test_learning_notebooks_exist_in_repo():
     repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
-    for entry in LEARNING_NOTEBOOKS:
-        assert os.path.exists(os.path.join(repo_root, entry.path)), (
-            f"missing learning notebook file: {entry.path}"
-        )
+    learning_dir = os.path.join(repo_root, LEARNING_FOLDER.path)
+    assert os.path.isdir(learning_dir), f"missing learning folder: {LEARNING_FOLDER.path}"
+    notebooks = [f for f in os.listdir(learning_dir) if f.endswith(".ipynb")]
+    assert notebooks, "Learning folder has no notebooks"

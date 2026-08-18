@@ -308,38 +308,14 @@ PROJECTS: list[Project] = [
 ]
 
 
-LEARNING_NOTEBOOKS: list[LearningEntry] = [
-    LearningEntry(
-        "1. Python Logic Intro",
-        "Variables, if-statements, and for-loops -- the basics of writing decisions "
-        "and repetition in Python.",
-        "fa-graduation-cap",
-        upload_id="mr60amaQRZ-Ta21fXdf64Q",
-        path="Learning/01_Python_logic_intro.ipynb",
-    ),
-    LearningEntry(
-        "2. Matplotlib Plots Intro",
-        "Line, scatter, and bar plots with Matplotlib's fig/axs workflow.",
-        "fa-chart-line",
-        upload_id="mr60amaQRZ-Ta21fXdf64Q",
-        path="Learning/02_Matplotlib_plots_intro.ipynb",
-    ),
-    LearningEntry(
-        "3. Handling JV Data",
-        "Log in to NOMAD and pull real JV curve data for analysis, step by step.",
-        "fa-chart-bar",
-        upload_id="mr60amaQRZ-Ta21fXdf64Q",
-        path="Learning/03_HandlingJVdata.ipynb",
-    ),
-    LearningEntry(
-        "4. Voila Widgets Example",
-        "Reusable snippets for building your own Voila app: tabs, NOMAD "
-        "authentication, and batch-selection dropdowns.",
-        "fa-object-group",
-        upload_id="mr60amaQRZ-Ta21fXdf64Q",
-        path="Learning/04_voila_widgets_example.ipynb",
-    ),
-]
+LEARNING_FOLDER = LearningEntry(
+    "Learning",
+    "Learn to build your own NOMAD solutions: guided Python & NOMAD tutorial notebooks, "
+    "opens the folder in JupyterLab so you can browse and pick whichever lesson you want.",
+    "fa-graduation-cap",
+    upload_id="mr60amaQRZ-Ta21fXdf64Q",
+    path="Learning",
+)
 
 
 def get_current_user() -> str:

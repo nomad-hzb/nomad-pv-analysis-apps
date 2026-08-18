@@ -7,7 +7,6 @@ CATEGORY_ICONS = {
     "Optical & Structural Analysis": "fa-microscope",
     "Utilities & Calculators": "fa-toolbox",
     "Build Your Own": "fa-robot",
-    "Learning": "fa-graduation-cap",
     "Experimental / In Progress": "fa-flask",
 }
 
