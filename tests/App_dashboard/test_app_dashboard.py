@@ -2,10 +2,13 @@ import os
 
 from data_manager import (
     CATEGORIES,
+    JUPYTER_PATH_TEMPLATE,
+    LEARNING_NOTEBOOKS,
     PROJECTS,
     URL_BASE,
     VOILA_PATH_TEMPLATE,
     AppEntry,
+    build_jupyter_url,
     build_voila_url,
     get_current_user,
     get_uploads_path,
@@ -78,9 +81,7 @@ def test_build_voila_url_uses_upload_id_when_set():
 
     url = build_voila_url(entry, "edgar", uploads_path)
 
-    assert url == (
-        VOILA_PATH_TEMPLATE.format(user="edgar") + "/uploads/abc123/image_cropper.ipynb"
-    )
+    assert url == (VOILA_PATH_TEMPLATE.format(user="edgar") + "/uploads/abc123/image_cropper.ipynb")
 
 
 def test_projects_apps_all_have_upload_ids_and_unique_names():
@@ -99,3 +100,31 @@ def test_build_your_own_entry_links_straight_to_the_prompt_doc():
         "https://raw.githubusercontent.com/nomad-hzb/nomad-pv-analysis-apps/main/"
         "NOMAD_DATA_ACCESS_PROMPT.md"
     )
+
+
+def test_build_jupyter_url_matches_expected_nomad_structure():
+    entry = LEARNING_NOTEBOOKS[0]
+
+    url = build_jupyter_url(entry, "edgar")
+
+    assert url == (
+        JUPYTER_PATH_TEMPLATE.format(user="edgar") + f"/uploads/{entry.upload_id}/{entry.path}"
+    )
+    assert url.startswith("/nomad-oasis/north/user/edgar/jupyter2/lab/tree/")
+
+
+def test_learning_notebooks_have_upload_ids_and_unique_names():
+    assert LEARNING_NOTEBOOKS, "no learning notebooks registered"
+    for entry in LEARNING_NOTEBOOKS:
+        assert entry.upload_id, f"learning entry {entry.name!r} has no upload_id"
+        assert entry.path, f"learning entry {entry.name!r} has no path"
+    names = [entry.name for entry in LEARNING_NOTEBOOKS]
+    assert len(names) == len(set(names)), "duplicate name in LEARNING_NOTEBOOKS"
+
+
+def test_learning_notebooks_exist_in_repo():
+    repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
+    for entry in LEARNING_NOTEBOOKS:
+        assert os.path.exists(os.path.join(repo_root, entry.path)), (
+            f"missing learning notebook file: {entry.path}"
+        )

@@ -13,6 +13,7 @@ except ImportError:
     )
 
 VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
+JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/jupyter2/lab/tree"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,20 @@ class Project:
     description: str
     icon: str
     apps: list[AppEntry]
+
+
+@dataclass(frozen=True)
+class LearningEntry:
+    name: str
+    description: str
+    icon: str
+    upload_id: str
+    """Raw NOMAD upload ID, as shown in the GUI file-browser URL (.../upload/id/<this>/files/...).
+    Unlike AppEntry.upload_id, this is NOT the '<slug>-<id>' folder name -- the jupyter2 tool
+    mounts uploads under their raw ID, while Voila's own container path uses the slug form."""
+    path: str
+    """Path to the notebook within the upload, e.g. 'Learning/01_Python_logic_intro.ipynb'."""
+    experimental: bool = False
 
 
 CATEGORIES: dict[str, list[AppEntry]] = {
@@ -293,6 +308,40 @@ PROJECTS: list[Project] = [
 ]
 
 
+LEARNING_NOTEBOOKS: list[LearningEntry] = [
+    LearningEntry(
+        "1. Python Logic Intro",
+        "Variables, if-statements, and for-loops -- the basics of writing decisions "
+        "and repetition in Python.",
+        "fa-graduation-cap",
+        upload_id="mr60amaQRZ-Ta21fXdf64Q",
+        path="Learning/01_Python_logic_intro.ipynb",
+    ),
+    LearningEntry(
+        "2. Matplotlib Plots Intro",
+        "Line, scatter, and bar plots with Matplotlib's fig/axs workflow.",
+        "fa-chart-line",
+        upload_id="mr60amaQRZ-Ta21fXdf64Q",
+        path="Learning/02_Matplotlib_plots_intro.ipynb",
+    ),
+    LearningEntry(
+        "3. Handling JV Data",
+        "Log in to NOMAD and pull real JV curve data for analysis, step by step.",
+        "fa-chart-bar",
+        upload_id="mr60amaQRZ-Ta21fXdf64Q",
+        path="Learning/03_HandlingJVdata.ipynb",
+    ),
+    LearningEntry(
+        "4. Voila Widgets Example",
+        "Reusable snippets for building your own Voila app: tabs, NOMAD "
+        "authentication, and batch-selection dropdowns.",
+        "fa-object-group",
+        upload_id="mr60amaQRZ-Ta21fXdf64Q",
+        path="Learning/04_voila_widgets_example.ipynb",
+    ),
+]
+
+
 def get_current_user() -> str:
     """Return the NOMAD username of the person running this notebook, or '' if unknown."""
     return os.environ.get("NOMAD_CLIENT_USER", "")
@@ -323,6 +372,16 @@ def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
     path = f"uploads/{entry.upload_id}" if entry.upload_id else uploads_path
     folder = f"{entry.folder}/" if entry.folder else ""
     return f"{base_path}/{path}/{folder}{entry.notebook}"
+
+
+def build_jupyter_url(entry: LearningEntry, user: str) -> str:
+    """Build the absolute JupyterLab 'tree' path that opens a learning notebook directly.
+
+    Unlike build_voila_url, this points at the jupyter2 NORTH tool so the notebook opens
+    already-loaded in a JupyterLab tab instead of being rendered as a Voila app.
+    """
+    base_path = JUPYTER_PATH_TEMPLATE.format(user=user)
+    return f"{base_path}/uploads/{entry.upload_id}/{entry.path}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:
