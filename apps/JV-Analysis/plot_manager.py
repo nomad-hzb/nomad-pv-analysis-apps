@@ -2093,11 +2093,27 @@ class PlotManager:
 
         fig = px.box(melt_df, **px_kwargs)
 
+        # px.box never sets fillcolor explicitly -- the per-category/direction color
+        # from color_discrete_sequence/color_discrete_map lives entirely in
+        # marker.color, and the box fill falls back to it at render time. Snapshot
+        # that as an explicit fillcolor before overriding marker.color below, or
+        # every box collapses to the same flat marker color.
+        for trace in fig.data:
+            trace.fillcolor = trace.marker.color
+
+        # Match the single-parameter boxplot's styling (create_boxplot): black,
+        # semi-opaque points that read clearly against any fill color, a defined
+        # box outline, and an explicit box width so each box keeps real margin
+        # from its neighbors and the facet frame, instead of nearly filling the
+        # slot boxgap leaves it.
         fig.update_traces(
             quartilemethod="linear",
-            jitter=0.4,
+            jitter=0.5,
             pointpos=0,
-            marker=dict(size=4, opacity=0.6),
+            whiskerwidth=0.4,
+            width=0.8,
+            marker=dict(size=5, opacity=0.7, color="rgba(0,0,0,0.7)"),
+            line=dict(width=1.5),
             boxmean=True,
         )
 
@@ -2109,8 +2125,8 @@ class PlotManager:
             # two groups (Reverse/Forward) sharing each position, so it keeps
             # "group".
             boxmode="group" if use_direction_color else "overlay",
-            boxgap=0.01,
-            boxgroupgap=0.02,
+            boxgap=0.05,
+            boxgroupgap=0.1,
         )
         if use_direction_color:
             layout_kwargs["margin"] = dict(l=60, r=160, t=120, b=80)
