@@ -2025,6 +2025,7 @@ class PlotManager:
             y="value",
             facet_col="parameter",
             facet_col_wrap=2,
+            facet_col_spacing=0.08,
             points="all",
             template="plotly_white",
             title=(
@@ -2055,11 +2056,17 @@ class PlotManager:
             jitter=0.4,
             pointpos=0,
             marker=dict(size=4, opacity=0.6),
+            boxmean=True,
         )
 
         layout_kwargs = dict(
             height=750,
-            boxmode="group",
+            # color is tied 1:1 to x here, so there's only ever one box per x
+            # position; "group" would reserve an empty slot per legend entry at
+            # every position and shrink the boxes. Direction-split genuinely has
+            # two groups (Reverse/Forward) sharing each position, so it keeps
+            # "group".
+            boxmode="group" if use_direction_color else "overlay",
             boxgap=0.01,
             boxgroupgap=0.02,
         )
@@ -2085,6 +2092,10 @@ class PlotManager:
 
         # Independent y-axes per facet
         fig.update_yaxes(matches=None, showticklabels=True, title="")
+
+        # Solid frame around each of the 4 facet subplots
+        fig.update_xaxes(showline=True, linewidth=1.5, linecolor="#999999", mirror=True)
+        fig.update_yaxes(showline=True, linewidth=1.5, linecolor="#999999", mirror=True)
 
         return fig, "boxplot_voc_jsc_ff_pce_2x2.html"
 
