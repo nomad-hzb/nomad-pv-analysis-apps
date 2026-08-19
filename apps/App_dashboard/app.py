@@ -31,7 +31,7 @@ def setup_app():
 
     def render_learning_card():
         entry = dm.LEARNING_FOLDER
-        href = dm.build_jupyter_url(entry, user)
+        href = dm.build_jupyter_url(entry, user, dm.get_upload_id())
         full_url = f"{dm.URL_BASE}{href}"
         return gui.create_app_card(entry, href, full_url)
 
