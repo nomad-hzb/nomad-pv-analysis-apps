@@ -155,17 +155,22 @@ def create_app_card(entry, href: str, full_url: str) -> widgets.HTML:
     """)
 
 
-def create_project_card(project, on_click) -> widgets.Button:
-    """A clickable card that opens the project's own app menu instead of linking directly."""
+def create_hub_card(name: str, description: str, icon: str, on_click) -> widgets.Button:
+    """A clickable card that opens a sub-page (e.g. a project's app menu, the learning
+    notebook list) instead of linking straight out to an app or notebook."""
     btn = widgets.Button(
-        description=project.name,
-        tooltip=project.description,
-        icon=project.icon.removeprefix("fa-"),
+        description=name,
+        tooltip=description,
+        icon=icon.removeprefix("fa-"),
         layout=widgets.Layout(width="100%", height="100%"),
     )
     btn.add_class("app-card")
     btn.on_click(on_click)
     return btn
+
+
+def create_project_card(project, on_click) -> widgets.Button:
+    return create_hub_card(project.name, project.description, project.icon, on_click)
 
 
 def create_back_button(on_click) -> widgets.Button:

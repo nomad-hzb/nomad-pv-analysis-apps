@@ -1,0 +1,9 @@
+#!/bin/sh
+# Installed via scripts/setup_git_safety.sh (core.hooksPath scripts/git-hooks).
+#
+# Learning/ notebooks get edited live by people working through the tutorials
+# in JupyterLab. Those edits should never accumulate on the shared upload or
+# block a future pull, so every merge (including the one `git pull` just did)
+# resets tracked files under Learning/ back to whatever commit we landed on.
+# Untracked files (e.g. a learner's own duplicated copy) are left alone.
+git checkout HEAD -- ':/Learning/'

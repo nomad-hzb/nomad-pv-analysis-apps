@@ -29,6 +29,12 @@ def setup_app():
             full_url = f"{dm.URL_BASE}{href}"
         return gui.create_app_card(entry, href, full_url)
 
+    def render_learning_card():
+        entry = dm.LEARNING_FOLDER
+        href = dm.build_jupyter_url(entry, user)
+        full_url = f"{dm.URL_BASE}{href}"
+        return gui.create_app_card(entry, href, full_url)
+
     def show_main(_button=None):
         project_cards = [
             gui.create_project_card(project, lambda _b, p=project: show_project(p))
@@ -38,11 +44,11 @@ def setup_app():
 
         sections = []
         for category, entries in dm.CATEGORIES.items():
+            cards = [render_app_card(e) for e in entries]
             if category == "Build Your Own":
                 sections.append(projects_section)
-            sections.append(
-                gui.create_category_section(category, [render_app_card(e) for e in entries])
-            )
+                cards.insert(0, render_learning_card())
+            sections.append(gui.create_category_section(category, cards))
 
         root.children = [
             gui.create_style(),

@@ -13,6 +13,7 @@ except ImportError:
     )
 
 VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
+JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/jupyter2/lab/tree"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,20 @@ class Project:
     description: str
     icon: str
     apps: list[AppEntry]
+
+
+@dataclass(frozen=True)
+class LearningEntry:
+    name: str
+    description: str
+    icon: str
+    upload_id: str
+    """Raw NOMAD upload ID, as shown in the GUI file-browser URL (.../upload/id/<this>/files/...).
+    Unlike AppEntry.upload_id, this is NOT the '<slug>-<id>' folder name -- the jupyter2 tool
+    mounts uploads under their raw ID, while Voila's own container path uses the slug form."""
+    path: str
+    """Path to the notebook within the upload, e.g. 'Learning/01_Python_logic_intro.ipynb'."""
+    experimental: bool = False
 
 
 CATEGORIES: dict[str, list[AppEntry]] = {
@@ -293,6 +308,16 @@ PROJECTS: list[Project] = [
 ]
 
 
+LEARNING_FOLDER = LearningEntry(
+    "Learning",
+    "Learn to build your own NOMAD solutions: guided Python & NOMAD tutorial notebooks, "
+    "opens the folder in JupyterLab so you can browse and pick whichever lesson you want.",
+    "fa-graduation-cap",
+    upload_id="mr60amaQRZ-Ta21fXdf64Q",
+    path="Learning",
+)
+
+
 def get_current_user() -> str:
     """Return the NOMAD username of the person running this notebook, or '' if unknown."""
     return os.environ.get("NOMAD_CLIENT_USER", "")
@@ -323,6 +348,16 @@ def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
     path = f"uploads/{entry.upload_id}" if entry.upload_id else uploads_path
     folder = f"{entry.folder}/" if entry.folder else ""
     return f"{base_path}/{path}/{folder}{entry.notebook}"
+
+
+def build_jupyter_url(entry: LearningEntry, user: str) -> str:
+    """Build the absolute JupyterLab 'tree' path that opens a learning notebook directly.
+
+    Unlike build_voila_url, this points at the jupyter2 NORTH tool so the notebook opens
+    already-loaded in a JupyterLab tab instead of being rendered as a Voila app.
+    """
+    base_path = JUPYTER_PATH_TEMPLATE.format(user=user)
+    return f"{base_path}/uploads/{entry.upload_id}/{entry.path}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:

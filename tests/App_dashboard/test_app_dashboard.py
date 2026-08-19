@@ -2,10 +2,13 @@ import os
 
 from data_manager import (
     CATEGORIES,
+    JUPYTER_PATH_TEMPLATE,
+    LEARNING_FOLDER,
     PROJECTS,
     URL_BASE,
     VOILA_PATH_TEMPLATE,
     AppEntry,
+    build_jupyter_url,
     build_voila_url,
     get_current_user,
     get_uploads_path,
@@ -78,9 +81,7 @@ def test_build_voila_url_uses_upload_id_when_set():
 
     url = build_voila_url(entry, "edgar", uploads_path)
 
-    assert url == (
-        VOILA_PATH_TEMPLATE.format(user="edgar") + "/uploads/abc123/image_cropper.ipynb"
-    )
+    assert url == (VOILA_PATH_TEMPLATE.format(user="edgar") + "/uploads/abc123/image_cropper.ipynb")
 
 
 def test_projects_apps_all_have_upload_ids_and_unique_names():
@@ -99,3 +100,24 @@ def test_build_your_own_entry_links_straight_to_the_prompt_doc():
         "https://raw.githubusercontent.com/nomad-hzb/nomad-pv-analysis-apps/main/"
         "NOMAD_DATA_ACCESS_PROMPT.md"
     )
+
+
+def test_build_jupyter_url_matches_expected_nomad_structure():
+    url = build_jupyter_url(LEARNING_FOLDER, "edgar")
+
+    assert url == (
+        JUPYTER_PATH_TEMPLATE.format(user="edgar")
+        + f"/uploads/{LEARNING_FOLDER.upload_id}/{LEARNING_FOLDER.path}"
+    )
+    assert url.startswith("/nomad-oasis/north/user/edgar/jupyter2/lab/tree/")
+
+
+def test_learning_folder_has_upload_id_and_exists_in_repo():
+    assert LEARNING_FOLDER.upload_id
+    assert LEARNING_FOLDER.path
+
+    repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
+    learning_dir = os.path.join(repo_root, LEARNING_FOLDER.path)
+    assert os.path.isdir(learning_dir), f"missing learning folder: {LEARNING_FOLDER.path}"
+    notebooks = [f for f in os.listdir(learning_dir) if f.endswith(".ipynb")]
+    assert notebooks, "Learning folder has no notebooks"
