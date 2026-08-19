@@ -47,12 +47,10 @@ class LearningEntry:
     name: str
     description: str
     icon: str
-    upload_id: str
-    """Raw NOMAD upload ID, as shown in the GUI file-browser URL (.../upload/id/<this>/files/...).
-    Unlike AppEntry.upload_id, this is NOT the '<slug>-<id>' folder name -- the jupyter2 tool
-    mounts uploads under their raw ID, while Voila's own container path uses the slug form."""
     path: str
-    """Path to the notebook within the upload, e.g. 'Learning/01_Python_logic_intro.ipynb'."""
+    """Path to the notebook within this dashboard's own upload, e.g.
+    'Learning/01_Python_logic_intro.ipynb'. Always resolved against get_upload_id() --
+    unlike AppEntry, there's no override for a separate upload."""
     experimental: bool = False
 
 
@@ -310,11 +308,11 @@ PROJECTS: list[Project] = [
 
 LEARNING_FOLDER = LearningEntry(
     "Learning",
-    "Learn to build your own NOMAD solutions: guided Python & NOMAD tutorial notebooks, "
-    "opens the folder in JupyterLab so you can browse and pick whichever lesson you want.",
+    "Learn to build your own NOMAD solutions: guided Python & NOMAD tutorial notebooks. "
+    "Opens the first lesson in JupyterLab, with the whole Learning folder in the sidebar "
+    "so you can browse and pick whichever one you want.",
     "fa-graduation-cap",
-    upload_id="mr60amaQRZ-Ta21fXdf64Q",
-    path="Learning",
+    path="Learning/01_Python_logic_intro.ipynb",
 )
 
 
@@ -323,19 +321,27 @@ def get_current_user() -> str:
     return os.environ.get("NOMAD_CLIENT_USER", "")
 
 
-def get_uploads_path() -> str:
-    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
+def get_upload_id() -> str:
+    """Derive this dashboard's own NOMAD upload ID from the current working directory.
 
-    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>,
-    where <container> is the folder holding all app folders (this repo's own upload
-    mirrors the repo layout, so <container> is "apps"). Both names are read from cwd
-    rather than hardcoded so this keeps working if the upload layout changes.
+    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>.
+    Read from cwd rather than hardcoded so this keeps working if the upload is ever
+    re-uploaded under a different ID.
     """
     container_dir = os.path.dirname(os.getcwd())
     upload_dir = os.path.dirname(container_dir)
+    return os.path.basename(upload_dir)
+
+
+def get_uploads_path() -> str:
+    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
+
+    <container> is the folder holding all app folders (this repo's own upload mirrors
+    the repo layout, so <container> is "apps").
+    """
+    container_dir = os.path.dirname(os.getcwd())
     container = os.path.basename(container_dir)
-    upload_id = os.path.basename(upload_dir)
-    return f"uploads/{upload_id}/{container}"
+    return f"uploads/{get_upload_id()}/{container}"
 
 
 def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
@@ -350,14 +356,17 @@ def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
     return f"{base_path}/{path}/{folder}{entry.notebook}"
 
 
-def build_jupyter_url(entry: LearningEntry, user: str) -> str:
+def build_jupyter_url(entry: LearningEntry, user: str, upload_id: str) -> str:
     """Build the absolute JupyterLab 'tree' path that opens a learning notebook directly.
 
     Unlike build_voila_url, this points at the jupyter2 NORTH tool so the notebook opens
-    already-loaded in a JupyterLab tab instead of being rendered as a Voila app.
+    already-loaded in a JupyterLab tab instead of being rendered as a Voila app. Takes
+    upload_id explicitly (from get_upload_id()) rather than reading it off entry, since
+    LearningEntry always lives in this dashboard's own upload -- there's no per-entry
+    override the way AppEntry.upload_id provides for apps living in a separate upload.
     """
     base_path = JUPYTER_PATH_TEMPLATE.format(user=user)
-    return f"{base_path}/uploads/{entry.upload_id}/{entry.path}"
+    return f"{base_path}/uploads/{upload_id}/{entry.path}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:
