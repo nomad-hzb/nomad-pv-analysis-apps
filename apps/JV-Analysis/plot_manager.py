@@ -555,6 +555,25 @@ def plot_list_from_voila(plot_list):
 class PlotManager:
     """Manages all plotting operations for JV analysis"""
 
+    # Short option code -> actual JV parameter column name. These are the real
+    # DataFrame column names (also used for data access), so they keep their existing
+    # "name(unit)" form -- never rename these values, only their *display* form below.
+    PARAM_COLUMNS = {
+        "voc": "Voc(V)",
+        "jsc": "Jsc(mA/cm2)",
+        "ff": "FF(%)",
+        "pce": "PCE(%)",
+        "vocxff": "Voc x FF(V%)",
+        "vmpp": "V_mpp(V)",
+        "jmpp": "J_mpp(mA/cm2)",
+        "pmpp": "P_mpp(mW/cm2)",
+        "rser": "R_series(Ohmcm2)",
+        "rshu": "R_shunt(Ohmcm2)",
+    }
+
+    # Column name -> axis/legend display label, with units in [..] rather than (..).
+    UNIT_LABELS = {col: col.replace("(", " [").replace(")", "]") for col in PARAM_COLUMNS.values()}
+
     def __init__(self):
         self.plot_output_path = ""
 
@@ -779,9 +798,30 @@ class PlotManager:
 
         fig = go.Figure()
 
-        # Add axis lines
-        fig.add_shape(type="line", x0=-0.2, y0=0, x1=1.35, y1=0, line=dict(color="gray", width=2))
-        fig.add_shape(type="line", x0=0, y0=-25, x1=0, y1=3, line=dict(color="gray", width=2))
+        # Add axis lines. xref/yref="paper" span the full plot regardless of the
+        # current axis range, and (unlike data-referenced shapes) don't get pulled
+        # into the axis autorange computation -- otherwise the modebar's "Autoscale"
+        # button would zoom out to include these lines instead of just the data.
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=2),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=2),
+        )
 
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -861,10 +901,6 @@ class PlotManager:
         # Sort pairs to ensure consistent ordering
         measurement_pairs.sort(key=lambda x: (x["measurement_index"], x["direction"]))
 
-        # Add axis lines with extended range
-        fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=2))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=2))
-
         # Group pairs: each measurement index gets one color, shared between Forward and Reverse
         unique_measurements = {}
         for pair in measurement_pairs:
@@ -872,6 +908,11 @@ class PlotManager:
             if idx not in unique_measurements:
                 unique_measurements[idx] = []
             unique_measurements[idx].append(pair)
+
+        # Track every plotted point so the axis range can fall back to the data's own
+        # extent (with an edge gap) once it no longer fits the default window.
+        plotted_voltages = []
+        plotted_currents = []
 
         # Plot each measurement pair with proper color pairing
         for measurement_idx, pairs in unique_measurements.items():
@@ -891,6 +932,8 @@ class PlotManager:
                 direction = pair["direction"]
 
                 if len(voltage_values) > 0 and len(current_values) > 0:
+                    plotted_voltages.extend(voltage_values)
+                    plotted_currents.extend(current_values)
                     if direction == "Reverse":
                         # Forward gets 50% lighter color with solid line and crosses
                         light_r = min(255, int(r + (255 - r) * 0.5))
@@ -993,11 +1036,16 @@ class PlotManager:
 
             text_for = f"For:<br>{char_for[0]:.2f} V<br>{char_for[1]:.1f} mA/cm²<br>{char_for[2]:.1f}%<br>{char_for[3]:.1f}%"  # noqa: E501
 
-            annot_y = 5 if flip_current else -5
+            # Anchor the text block by its top/bottom edge (instead of centering it on
+            # annot_y) and start it a couple of units clear of the y=0 line, so it never
+            # sits on top of the zero-reference line drawn above.
+            annot_y = 2 if flip_current else -2
+            annot_yanchor = "bottom" if flip_current else "top"
             # Add annotations for values
             fig.add_annotation(
                 x=0.24,
                 y=annot_y,
+                yanchor=annot_yanchor,
                 text=text_rev,
                 showarrow=False,
                 font=dict(size=12),
@@ -1008,6 +1056,7 @@ class PlotManager:
             fig.add_annotation(
                 x=0.55,
                 y=annot_y,
+                yanchor=annot_yanchor,
                 text=text_for,
                 showarrow=False,
                 font=dict(size=12),
@@ -1015,15 +1064,40 @@ class PlotManager:
                 name="summary_for",
             )
 
-        y_range = [-5, 26] if flip_current else [-26, 5]
+        # Default axis windows requested for this plot. As long as the measured data
+        # fits inside them, keep them fixed (so repeat views of different devices are
+        # visually comparable); once data falls outside, fall back to the data's own
+        # extent plus a 7% edge gap instead of clipping it.
+        default_x_range = (-0.2, 1.2)
+        default_y_range = (-5, 25) if flip_current else (-25, 5)
+        edge_gap = 0.07
+
+        def _resolve_range(values, default_range):
+            lo_default, hi_default = default_range
+            if not values:
+                return [lo_default, hi_default]
+            data_min, data_max = min(values), max(values)
+            if data_min >= lo_default and data_max <= hi_default:
+                return [lo_default, hi_default]
+            span = data_max - data_min
+            pad = span * edge_gap if span > 0 else (abs(data_max) * edge_gap or 1)
+            return [data_min - pad, data_max + pad]
+
+        x_range = _resolve_range(plotted_voltages, default_x_range)
+        y_range = _resolve_range(plotted_currents, default_y_range)
+
         # Update layout with custom modebar
         fig.update_layout(
             title=f"JV Curves - Best Device ({best_sample} [Cell {best_cell}])",
             xaxis_title="Voltage [V]",
             yaxis_title="Current Density [mA/cm²]",
-            xaxis=dict(range=[-0.2, 1.5]),
+            xaxis=dict(range=x_range),
             yaxis=dict(range=y_range),
             template="plotly_white",
+            # 4:3 aspect ratio by default; the resizable display wrapper picks this up
+            # as the plot's initial size and lets the user drag-resize it from there.
+            width=800,
+            height=600,
             legend=dict(
                 x=1.02,
                 y=1,
@@ -1057,18 +1131,7 @@ class PlotManager:
         direction_split=False,
     ):
         """Create a boxplot with statistical analysis - ENHANCED with data verification"""
-        names_dict = {
-            "voc": "Voc(V)",
-            "jsc": "Jsc(mA/cm2)",
-            "ff": "FF(%)",
-            "pce": "PCE(%)",
-            "vocxff": "Voc x FF(V%)",
-            "vmpp": "V_mpp(V)",
-            "jmpp": "J_mpp(mA/cm2)",
-            "pmpp": "P_mpp(mW/cm2)",
-            "rser": "R_series(Ohmcm2)",
-            "rshu": "R_shunt(Ohmcm2)",
-        }
+        names_dict = self.PARAM_COLUMNS
         var_name_y = names_dict[var_y]
         trash, filters = filtered_info
 
@@ -1269,7 +1332,7 @@ class PlotManager:
         fig.update_layout(
             title=f"{title_text}<br><sup>{subtitle}</sup>",
             xaxis_title=var_x,
-            yaxis_title=var_name_y,
+            yaxis_title=self.UNIT_LABELS.get(var_name_y, var_name_y),
             boxmode="group",
             boxgap=0.05,
             boxgroupgap=0.1,
@@ -1483,18 +1546,7 @@ class PlotManager:
         """Create multiple plots separated by condition/direction/cell and grouped by status/condition"""  # noqa: E501
         logger.debug("📊 Creating combination plots: %s", combination_type)
 
-        names_dict = {
-            "voc": "Voc(V)",
-            "jsc": "Jsc(mA/cm2)",
-            "ff": "FF(%)",
-            "pce": "PCE(%)",
-            "vocxff": "Voc x FF(V%)",
-            "vmpp": "V_mpp(V)",
-            "jmpp": "J_mpp(mA/cm2)",
-            "pmpp": "P_mpp(mW/cm2)",
-            "rser": "R_series(Ohmcm2)",
-            "rshu": "R_shunt(Ohmcm2)",
-        }
+        names_dict = self.PARAM_COLUMNS
         var_name_y = names_dict[var_y]
 
         # Filter out dark measurements (D1, D2, etc.) for these combination plots
@@ -1629,7 +1681,7 @@ class PlotManager:
             fig.update_layout(
                 title=f"{title_text}<br><sup>{subtitle}</sup>",
                 xaxis_title=f"{secondary_label}",
-                yaxis_title=var_name_y,
+                yaxis_title=self.UNIT_LABELS.get(var_name_y, var_name_y),
                 boxmode="group",
                 boxgap=0.05,
                 boxgroupgap=0.1,
@@ -1663,18 +1715,7 @@ class PlotManager:
         """Create a single figure with facet subplots per condition, colored by direction."""
         logger.debug("🎨 Creating triple combination plots: %s", combination_type)
 
-        names_dict = {
-            "voc": "Voc(V)",
-            "jsc": "Jsc(mA/cm2)",
-            "ff": "FF(%)",
-            "pce": "PCE(%)",
-            "vocxff": "Voc x FF(V%)",
-            "vmpp": "V_mpp(V)",
-            "jmpp": "J_mpp(mA/cm2)",
-            "pmpp": "P_mpp(mW/cm2)",
-            "rser": "R_series(Ohmcm2)",
-            "rshu": "R_shunt(Ohmcm2)",
-        }
+        names_dict = self.PARAM_COLUMNS
         var_name_y = names_dict[var_y]
 
         data = data[~data["status"].str.startswith("D")].copy()
@@ -1708,6 +1749,7 @@ class PlotManager:
                 "Reverse": "rgba(255, 182, 193, 0.8)",
                 "Forward": "rgba(173, 216, 230, 0.8)",
             },
+            labels={var_name_y: self.UNIT_LABELS.get(var_name_y, var_name_y)},
             title=f"{var_y} by Direction and Status per Condition<br><sup>Light measurements only, {len(data)} records</sup>",  # noqa: E501
         )
 
@@ -2025,6 +2067,7 @@ class PlotManager:
             y="value",
             facet_col="parameter",
             facet_col_wrap=2,
+            facet_col_spacing=0.08,
             points="all",
             template="plotly_white",
             title=(
@@ -2050,18 +2093,40 @@ class PlotManager:
 
         fig = px.box(melt_df, **px_kwargs)
 
+        # px.box never sets fillcolor explicitly -- the per-category/direction color
+        # from color_discrete_sequence/color_discrete_map lives entirely in
+        # marker.color, and the box fill falls back to it at render time. Snapshot
+        # that as an explicit fillcolor before overriding marker.color below, or
+        # every box collapses to the same flat marker color.
+        for trace in fig.data:
+            trace.fillcolor = trace.marker.color
+
+        # Match the single-parameter boxplot's styling (create_boxplot): black,
+        # semi-opaque points that read clearly against any fill color, a defined
+        # box outline, and an explicit box width so each box keeps real margin
+        # from its neighbors and the facet frame, instead of nearly filling the
+        # slot boxgap leaves it.
         fig.update_traces(
             quartilemethod="linear",
-            jitter=0.4,
+            jitter=0.5,
             pointpos=0,
-            marker=dict(size=4, opacity=0.6),
+            whiskerwidth=0.4,
+            width=0.8,
+            marker=dict(size=5, opacity=0.7, color="rgba(0,0,0,0.7)"),
+            line=dict(width=1.5),
+            boxmean=True,
         )
 
         layout_kwargs = dict(
             height=750,
-            boxmode="group",
-            boxgap=0.01,
-            boxgroupgap=0.02,
+            # color is tied 1:1 to x here, so there's only ever one box per x
+            # position; "group" would reserve an empty slot per legend entry at
+            # every position and shrink the boxes. Direction-split genuinely has
+            # two groups (Reverse/Forward) sharing each position, so it keeps
+            # "group".
+            boxmode="group" if use_direction_color else "overlay",
+            boxgap=0.05,
+            boxgroupgap=0.1,
         )
         if use_direction_color:
             layout_kwargs["margin"] = dict(l=60, r=160, t=120, b=80)
@@ -2083,8 +2148,24 @@ class PlotManager:
         # Clean up facet labels (remove "parameter=")
         fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
 
-        # Independent y-axes per facet
+        # Independent y-axes per facet, each labelled with its own units. With
+        # facet_col_wrap=2 and this fixed param_labels order (Voc, Jsc, FF, PCE),
+        # Plotly Express lays the grid out as Voc|Jsc on top and FF|PCE below, and
+        # addresses rows bottom-up (row=1 is the bottom row) -- verified empirically,
+        # since that ordering isn't documented.
         fig.update_yaxes(matches=None, showticklabels=True, title="")
+        n_facet_cols = 2
+        n_facet_rows = -(-len(param_labels) // n_facet_cols)  # ceil division
+        for i, (param, label) in enumerate(zip(params, param_labels)):
+            fig.update_yaxes(
+                title_text=self.UNIT_LABELS.get(param, label),
+                row=n_facet_rows - (i // n_facet_cols),
+                col=i % n_facet_cols + 1,
+            )
+
+        # Solid frame around each of the 4 facet subplots
+        fig.update_xaxes(showline=True, linewidth=1.5, linecolor="#999999", mirror=True)
+        fig.update_yaxes(showline=True, linewidth=1.5, linecolor="#999999", mirror=True)
 
         return fig, "boxplot_voc_jsc_ff_pce_2x2.html"
 
@@ -2123,8 +2204,26 @@ class PlotManager:
         fig = go.Figure()
 
         # Add axis lines
-        fig.add_shape(type="line", x0=-0.2, y0=0, x1=10, y1=0, line=dict(color="gray", width=2))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=3, line=dict(color="gray", width=2))
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=2),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=2),
+        )
 
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -2253,8 +2352,26 @@ class PlotManager:
         fig = go.Figure()
 
         # Add axis lines
-        fig.add_shape(type="line", x0=-0.2, y0=0, x1=10, y1=0, line=dict(color="gray", width=2))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=3, line=dict(color="gray", width=2))
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=2),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=2),
+        )
 
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -2373,8 +2490,26 @@ class PlotManager:
         fig = go.Figure()
 
         # Add axis lines
-        fig.add_shape(type="line", x0=-0.2, y0=0, x1=10, y1=0, line=dict(color="gray", width=2))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=3, line=dict(color="gray", width=2))
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=2),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=2),
+        )
 
         if colors is None:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -2699,8 +2834,26 @@ class PlotManager:
             fig = go.Figure()
 
             # Add axis lines
-            fig.add_shape(type="line", x0=-0.2, y0=0, x1=2, y1=0, line=dict(color="gray", width=1))
-            fig.add_shape(type="line", x0=0, y0=-30, x1=0, y1=5, line=dict(color="gray", width=1))
+            fig.add_shape(
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=0,
+                y1=0,
+                line=dict(color="gray", width=1),
+            )
+            fig.add_shape(
+                type="line",
+                xref="x",
+                x0=0,
+                x1=0,
+                yref="paper",
+                y0=0,
+                y1=1,
+                line=dict(color="gray", width=1),
+            )
 
             # Get unique cells for this sample
             unique_cells = sorted(sample_jv["cell"].unique())
@@ -2970,8 +3123,26 @@ class PlotManager:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
         fig = go.Figure()
-        fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=1),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=1),
+        )
 
         batches = sorted(jvc_data["batch"].unique())
 
@@ -3042,9 +3213,25 @@ class PlotManager:
                 continue
 
             fig = go.Figure()
-            fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
             fig.add_shape(
-                type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1)
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=0,
+                y1=0,
+                line=dict(color="gray", width=1),
+            )
+            fig.add_shape(
+                type="line",
+                xref="x",
+                x0=0,
+                x1=0,
+                yref="paper",
+                y0=0,
+                y1=1,
+                line=dict(color="gray", width=1),
             )
 
             base_color = colors[batch_idx % len(colors)]
@@ -3104,8 +3291,26 @@ class PlotManager:
             colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
         fig = go.Figure()
-        fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
-        fig.add_shape(type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1))
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            x0=0,
+            x1=1,
+            yref="y",
+            y0=0,
+            y1=0,
+            line=dict(color="gray", width=1),
+        )
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=0,
+            x1=0,
+            yref="paper",
+            y0=0,
+            y1=1,
+            line=dict(color="gray", width=1),
+        )
 
         conditions = sorted(jvc_data["condition"].dropna().unique())
 
@@ -3186,9 +3391,25 @@ class PlotManager:
                 continue
 
             fig = go.Figure()
-            fig.add_shape(type="line", x0=-2, y0=0, x1=10, y1=0, line=dict(color="gray", width=1))
             fig.add_shape(
-                type="line", x0=0, y0=-1000, x1=0, y1=300, line=dict(color="gray", width=1)
+                type="line",
+                xref="paper",
+                x0=0,
+                x1=1,
+                yref="y",
+                y0=0,
+                y1=0,
+                line=dict(color="gray", width=1),
+            )
+            fig.add_shape(
+                type="line",
+                xref="x",
+                x0=0,
+                x1=0,
+                yref="paper",
+                y0=0,
+                y1=1,
+                line=dict(color="gray", width=1),
             )
 
             base_color = colors[cond_idx % len(colors)]

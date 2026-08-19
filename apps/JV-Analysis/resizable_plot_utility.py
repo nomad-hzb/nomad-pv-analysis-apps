@@ -7,192 +7,16 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
-import json
 import logging
 import uuid
 
 import ipywidgets as widgets
 import plotly.graph_objects as go
-import plotly.utils
 from IPython.display import HTML, display
 
 logger = logging.getLogger(__name__)
 
 
-class ResizablePlotWidget:
-    """Creates resizable Plotly plots for Jupyter notebooks"""
-
-    def __init__(self, fig, title="Plot", initial_width=800, initial_height=600):
-        self.fig = fig
-        self.title = title
-        self.initial_width = initial_width
-        self.initial_height = initial_height
-        self.plot_id = f"plot_{uuid.uuid4().hex[:8]}"
-
-    def display(self):
-        """Display the resizable plot"""
-        # Update figure layout for responsiveness
-        self.fig.update_layout(autosize=True, margin=dict(l=50, r=50, t=60, b=50))
-
-        # Convert figure to JSON
-        fig_json = json.dumps(self.fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-        # Create resizable HTML container
-        resizable_html = f'''
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-        
-        <div style="margin: 20px 0;">
-            <h4>{self.title}</h4>
-            <p style="color: #666; font-size: 12px;">💡 Drag the bottom-right corner to resize the plot</p>  # noqa: E501
-            
-            <div id="container-{self.plot_id}" style="
-                width: {self.initial_width}px; 
-                height: {self.initial_height}px; 
-                border: 2px solid #ddd; 
-                border-radius: 8px;
-                resize: both; 
-                overflow: hidden;
-                min-width: 400px;
-                min-height: 300px;
-                max-width: 1400px;
-                max-height: 1000px;
-                background-color: white;
-                position: relative;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                transition: border-color 0.2s;
-            ">
-                <div id="{self.plot_id}" style="width: 100%; height: 100%;"></div>
-                
-                <!-- Resize indicator -->
-                <div style="
-                    position: absolute;
-                    bottom: 2px;
-                    right: 2px;
-                    width: 16px;
-                    height: 16px;
-                    background: linear-gradient(-45deg, transparent 30%, #999 30%, #999 40%, transparent 40%, transparent 60%, #999 60%, #999 70%, transparent 70%);  # noqa: E501
-                    cursor: se-resize;
-                    z-index: 1000;
-                    pointer-events: none;
-                "></div>
-            </div>
-        </div>
-        
-        <style>
-        #container-{self.plot_id}:hover {{
-            border-color: #007bff;
-        }}
-        </style>
-        
-        <script>
-        (function() {{
-            const figureData = {fig_json};
-            const config = {{
-                responsive: true,
-                displayModeBar: true,
-                displaylogo: false,
-                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d']
-            }};
-            
-            function initPlot() {{
-                const plotDiv = document.getElementById('{self.plot_id}');
-                const container = document.getElementById('container-{self.plot_id}');
-                
-                if (!plotDiv || !container) {{
-                    setTimeout(initPlot, 100);
-                    return;
-                }}
-                
-                Plotly.newPlot(plotDiv, figureData.data, figureData.layout, config).then(function() {{  # noqa: E501
-                    console.log('✅ Resizable plot created: {self.title}');
-                    
-                    if (window.ResizeObserver) {{
-                        let resizeTimeout;
-                        const observer = new ResizeObserver(function(entries) {{
-                            clearTimeout(resizeTimeout);
-                            resizeTimeout = setTimeout(function() {{
-                                const rect = container.getBoundingClientRect();
-                                Plotly.relayout(plotDiv, {{
-                                    width: rect.width,
-                                    height: rect.height
-                                }});
-                            }}, 50);
-                        }});
-                        observer.observe(container);
-                    }} else {{
-                        // Fallback for older browsers
-                        let lastWidth = container.offsetWidth;
-                        let lastHeight = container.offsetHeight;
-                        
-                        setInterval(function() {{
-                            const w = container.offsetWidth;
-                            const h = container.offsetHeight;
-                            if (w !== lastWidth || h !== lastHeight) {{
-                                Plotly.relayout(plotDiv, {{width: w, height: h}});
-                                lastWidth = w;
-                                lastHeight = h;
-                            }}
-                        }}, 100);
-                    }}
-                }}).catch(function(err) {{
-                    console.error('❌ Plot creation failed:', err);
-                }});
-            }}
-            
-            if (typeof Plotly !== 'undefined') {{
-                initPlot();
-            }} else {{
-                let checkCount = 0;
-                const checkPlotly = setInterval(function() {{
-                    if (typeof Plotly !== 'undefined' || checkCount > 50) {{
-                        clearInterval(checkPlotly);
-                        if (typeof Plotly !== 'undefined') {{
-                            initPlot();
-                        }} else {{
-                            console.error('❌ Plotly failed to load');
-                        }}
-                    }}
-                    checkCount++;
-                }}, 100);
-            }}
-        }})();
-        </script>
-        '''
-
-        display(HTML(resizable_html))
-
-
-def create_resizable_plot(fig, title="Plot", width=800, height=600):
-    """
-    Create a resizable plot from a Plotly figure.
-
-    Args:
-        fig: Plotly figure object
-        title: Plot title to display
-        width: Initial width in pixels
-        height: Initial height in pixels
-
-    Returns:
-        ResizablePlotWidget instance
-    """
-    return ResizablePlotWidget(fig, title, width, height)
-
-
-def display_resizable_plot(fig, title="Plot", width=800, height=600):
-    """
-    Convenience function to create and immediately display a resizable plot.
-
-    Args:
-        fig: Plotly figure object
-        title: Plot title to display
-        width: Initial width in pixels
-        height: Initial height in pixels
-    """
-    resizable_plot = create_resizable_plot(fig, title, width, height)
-    resizable_plot.display()
-
-
-# Integration helper for your existing PlotManager
 class ResizablePlotManager:
     """Enhanced plot manager that creates resizable plots"""
 
@@ -233,38 +57,119 @@ class ResizablePlotManager:
                 # protocol, whereas a plain go.Figure relies on the notebook's plotly
                 # mimetype renderer, which isn't guaranteed to be registered server-side
                 # (this is why plots showed in VS Code but not on the deployed server).
-                display(go.FigureWidget(fig))
+                #
+                # Plotly's bundled JS (part of the widget, not a CDN fetch) only re-fits
+                # itself to its container on a *window* resize event, and only sizes an
+                # axis to 100% of its container when that axis has no explicit
+                # layout.width/height -- so both need clearing here, and dragging the CSS
+                # resize handle needs a ResizeObserver that dispatches a synthetic window
+                # resize to make Plotly notice.
+                #
+                # A plot can still request its own default aspect ratio by setting
+                # layout.width/height before it gets here (e.g. 800x600 for 4:3) -- that
+                # size is used as the wrapping box's initial size, then cleared on the
+                # figure itself so the box's own drag-resize takes over from there.
+                init_width = fig.layout.width or 900
+                init_height = fig.layout.height or 620
+                fig.update_layout(autosize=True, width=None, height=None)
+                fig_widget = go.FigureWidget(fig)
+                fig_widget._config = {"responsive": True, "displaylogo": False}
+                # FigureWidget.layout is Plotly's own chart layout (titles/axes), not the
+                # ipywidgets DOM layout, so the resize handle has to go on a wrapping Box
+                # instead of on the widget itself.
+                resize_class = f"jv-resizable-plot-{uuid.uuid4().hex[:8]}"
+                box = widgets.Box(
+                    [fig_widget],
+                    layout=widgets.Layout(
+                        width=f"{init_width}px",
+                        height=f"{init_height}px",
+                        min_width="420px",
+                        min_height="320px",
+                        max_width="1600px",
+                        max_height="1200px",
+                        border="1px solid #ccc",
+                        overflow="hidden",
+                    ),
+                )
+                box.add_class(resize_class)
+                display(box)
+                # IPython.display.HTML (not ipywidgets.HTML) is required here: ipywidgets.HTML
+                # renders by setting innerHTML on its DOM node, which never executes embedded
+                # <script> tags. IPython's own display area re-inserts <script> tags so they
+                # actually run -- this is why the original implementation used it too.
+                display(
+                    HTML(f"""
+                    <style>
+                    .{resize_class} {{ resize: both !important; }}
+                    .{resize_class}:hover {{ border-color: #007bff !important; }}
+                    .{resize_class} > div {{ width: 100% !important; height: 100% !important; }}
+                    </style>
+                    <script>
+                    (function retry(attempts) {{
+                        var el = document.querySelector(".{resize_class}");
+                        if (!el) {{
+                            if (attempts > 0) setTimeout(function() {{ retry(attempts - 1); }}, 100);
+                            return;
+                        }}
+                        var pending = null;
+                        new ResizeObserver(function() {{
+                            clearTimeout(pending);
+                            pending = setTimeout(function() {{
+                                window.dispatchEvent(new Event("resize"));
+                            }}, 80);
+                        }}).observe(el);
+
+                        // The modebar's "Autoscale" button uses Plotly's own default
+                        // padding (several % per side), which reads as "zoomed out too
+                        // far" once a plot's axis lines no longer inflate the autorange
+                        // (see the paper-referenced shapes in plot_manager.py). Detect
+                        // that specific button via its eventdata signature, which sets
+                        // xaxis.autorange and yaxis.autorange to true -- a manual
+                        // zoom/pan or the "Reset axes" button both report explicit
+                        // range values instead -- and re-fit to the actual plotted data
+                        // with a tight, consistent 2% edge gap. The inner
+                        // .js-plotly-plot div can mount after the outer box does, so it
+                        // gets its own retry loop.
+                        (function retryGd(gdAttempts) {{
+                            var gd = el.querySelector(".js-plotly-plot");
+                            if (!gd || !gd.on) {{
+                                if (gdAttempts > 0) {{
+                                    setTimeout(function() {{ retryGd(gdAttempts - 1); }}, 100);
+                                }}
+                                return;
+                            }}
+                            gd.on("plotly_relayout", function(eventdata) {{
+                                if (!eventdata || (!eventdata["xaxis.autorange"] && !eventdata["yaxis.autorange"])) {{
+                                    return;
+                                }}
+                                if (!window.Plotly) {{
+                                    return;
+                                }}
+                                var xs = [], ys = [];
+                                (gd.data || []).forEach(function(trace) {{
+                                    (trace.x || []).forEach(function(v) {{
+                                        if (typeof v === "number") xs.push(v);
+                                    }});
+                                    (trace.y || []).forEach(function(v) {{
+                                        if (typeof v === "number") ys.push(v);
+                                    }});
+                                }});
+                                if (!xs.length || !ys.length) {{
+                                    return;
+                                }}
+                                var xmin = Math.min.apply(null, xs), xmax = Math.max.apply(null, xs);
+                                var ymin = Math.min.apply(null, ys), ymax = Math.max.apply(null, ys);
+                                var xpad = (xmax - xmin) * 0.02 || 1;
+                                var ypad = (ymax - ymin) * 0.02 || 1;
+                                window.Plotly.relayout(gd, {{
+                                    "xaxis.range": [xmin - xpad, xmax + xpad],
+                                    "yaxis.range": [ymin - ypad, ymax + ypad],
+                                }});
+                            }});
+                        }})(30);
+                    }})(30);
+                    </script>
+                    """)
+                )
             except Exception as e:
                 logger.error("Error displaying plot %d (%s): %s", i + 1, name, e)
-
-
-# Example usage and test function
-def test_resizable_plot():
-    """Test function to demonstrate resizable plots"""
-    import numpy as np
-
-    # Create sample data
-    x = np.linspace(0, 10, 100)
-    y1 = np.sin(x) + np.random.normal(0, 0.1, 100)
-    y2 = np.cos(x) + np.random.normal(0, 0.1, 100)
-
-    # Create test figure
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y1, mode="lines+markers", name="Sin Wave"))
-    fig.add_trace(go.Scatter(x=x, y=y2, mode="lines+markers", name="Cos Wave"))
-
-    fig.update_layout(
-        title="Test Resizable Plot",
-        xaxis_title="X Values",
-        yaxis_title="Y Values",
-        template="plotly_white",
-    )
-
-    # Display as resizable plot
-    display_resizable_plot(fig, "Test Resizable Plot - Drag corner to resize!", 800, 500)
-
-    logger.info("Test plot created.")
-
-
-if __name__ == "__main__":
-    test_resizable_plot()

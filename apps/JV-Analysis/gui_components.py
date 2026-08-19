@@ -1306,20 +1306,13 @@ class ColorSchemeSelector:
 
 
 class InfoUI:
-    """What's New and Manual UI component using HTML files"""
+    """Manual UI component using HTML files"""
 
     def __init__(self):
         self._create_widgets()
 
     def _create_widgets(self):
         """Create info widgets"""
-        self.whats_new_button = widgets.Button(
-            description="🎉 What's New",
-            button_style="info",
-            layout=widgets.Layout(width="140px", margin="0 5px 0 0"),
-            tooltip="See the latest features and improvements",
-        )
-
         self.manual_button = widgets.Button(
             description="📖 Manual",
             button_style="success",
@@ -1343,12 +1336,9 @@ class InfoUI:
 
         self.current_content = None  # Track what's currently displayed
 
-        self.whats_new_button.on_click(self._show_whats_new)
         self.manual_button.on_click(self._show_manual)
 
-        self.widget = widgets.VBox(
-            [widgets.HBox([self.whats_new_button, self.manual_button]), self.content_output]
-        )
+        self.widget = widgets.VBox([widgets.HBox([self.manual_button]), self.content_output])
 
     def _load_html_file(self, filename):
         """Load HTML content from file and make it Voila-friendly"""
@@ -1444,28 +1434,6 @@ class InfoUI:
             </div>
             """
 
-    def _show_whats_new(self, b):
-        """Show what's new content"""
-        if self.current_content == "whats_new" and self.content_output.layout.display == "block":
-            # Hide if already showing
-            self.content_output.layout.display = "none"
-            self.whats_new_button.description = "🎉 What's New"
-            self.whats_new_button.button_style = "info"
-            self.current_content = None
-        else:
-            # Show what's new
-            self.content_output.layout.display = "block"
-            self.whats_new_button.description = "🔽 Hide What's New"
-            self.whats_new_button.button_style = "warning"
-            self.manual_button.description = "📖 Manual"
-            self.manual_button.button_style = "success"
-            self.current_content = "whats_new"
-
-            with self.content_output:
-                clear_output(wait=True)
-                html_content = self._load_html_file("whats_new.html")
-                display(HTML(html_content))
-
     def _show_manual(self, b):
         """Show manual content"""
         if self.current_content == "manual" and self.content_output.layout.display == "block":
@@ -1479,8 +1447,6 @@ class InfoUI:
             self.content_output.layout.display = "block"
             self.manual_button.description = "🔽 Hide Manual"
             self.manual_button.button_style = "warning"
-            self.whats_new_button.description = "🎉 What's New"
-            self.whats_new_button.button_style = "info"
             self.current_content = "manual"
 
             with self.content_output:
