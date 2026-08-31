@@ -105,6 +105,32 @@ button.app-card:hover {
     box-shadow: 0 2px 6px rgba(0,0,0,0.15);
 }
 .dashboard-footer { margin-top: 10px; color: #777; font-size: 0.9em; }
+.app-card-overlay {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+.app-card-overlay:hover .app-card {
+    background-color: #e9f7fe;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+.app-card-overlay-btn {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 2;
+}
 </style>
 """
 
@@ -183,6 +209,34 @@ def create_app_launch_card(entry, full_url: str, on_click) -> widgets.Button:
     """
     label = f"{entry.name} (experimental)" if entry.experimental else entry.name
     return create_hub_card(label, full_url, entry.icon, on_click)
+
+
+def create_app_card_overlay(entry, full_url: str, on_click) -> widgets.Box:
+    """Alternative to create_app_launch_card: keeps the exact current rich-card
+    look (icon, title, badge, description) by layering an invisible Button on
+    top of the same HTML markup create_app_card renders, instead of replacing
+    it with a plain Button label. The invisible Button is what makes the click
+    reach the Python kernel; the wrapper's :hover rule re-applies the original
+    hover style since the button (not the HTML div under it) is what actually
+    receives the pointer.
+    """
+    badge = '<span class="app-badge">experimental</span>' if entry.experimental else ""
+    visual = widgets.HTML(f"""
+        <div class="app-card">
+            <div class="app-icon"><i class="fas {entry.icon}"></i></div>
+            <div class="app-body">
+                <div class="app-title">{entry.name}{badge}</div>
+                <div class="app-description">{entry.description}</div>
+            </div>
+        </div>
+    """)
+    btn = widgets.Button(tooltip=full_url, layout=widgets.Layout(width="100%", height="100%"))
+    btn.add_class("app-card-overlay-btn")
+    btn.on_click(on_click)
+
+    wrapper = widgets.Box([visual, btn], layout=widgets.Layout(width="100%", height="100%"))
+    wrapper.add_class("app-card-overlay")
+    return wrapper
 
 
 def create_back_button(on_click) -> widgets.Button:

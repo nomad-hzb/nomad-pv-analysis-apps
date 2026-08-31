@@ -18,6 +18,11 @@ def setup_app():
         logger.warning("NOMAD_CLIENT_USER not set; generated links may be incorrect.")
 
     root = widgets.VBox(layout=widgets.Layout(padding="10px"))
+    # Button.on_click fires from a comm message, not a cell execution, so a bare
+    # display() call inside it has no output area to land in and is silently
+    # dropped by Voila. Routing it through a real Output() widget that's part of
+    # the displayed tree is what actually renders (and runs) it.
+    js_output = widgets.Output(layout=widgets.Layout(width="0px", height="0px", overflow="hidden"))
 
     def open_app(name: str, url: str, _button=None):
         """Log the launch, then open the app in a new tab.
@@ -28,7 +33,9 @@ def setup_app():
         browser can open tabs and only this kernel can write the log file.
         """
         dm.log_navigation(f"open_app:{name}")
-        display(Javascript(f"window.open({json.dumps(url)}, '_blank')"))
+        with js_output:
+            js_output.clear_output(wait=True)
+            display(Javascript(f"window.open({json.dumps(url)}, '_blank')"))
 
     def render_app_card(entry):
         if entry.external_url:
@@ -41,7 +48,7 @@ def setup_app():
             )
         href = dm.build_voila_url(entry, user, uploads_path)
         full_url = f"{dm.URL_BASE}{href}"
-        return gui.create_app_launch_card(
+        return gui.create_app_card_overlay(
             entry, full_url, lambda _b, name=entry.name, url=full_url: open_app(name, url)
         )
 
@@ -89,4 +96,4 @@ def setup_app():
         show_main()
 
     show_main()
-    return root
+    return widgets.VBox([root, js_output])
