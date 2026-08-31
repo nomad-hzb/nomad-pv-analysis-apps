@@ -12,8 +12,22 @@ except ImportError:
         "hysprint_utils.config not found; using hardcoded URL fallback"
     )
 
+try:
+    from hysprint_utils.access_token import log_button_usage
+except ImportError:
+    logger.warning("hysprint_utils.access_token not found; button usage will not be logged")
+
+    def log_button_usage(action: str, user: str | None = None) -> None:
+        return None
+
+
 VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
-JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/jupyter2/lab/tree"
+JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/lab/tree"
+"""Deliberately the "voila" NORTH tool, not a separate "jupyter2" tool -- the
+latter isn't provisioned on this Oasis (confirmed via a Jupyter-Server-level
+404 on a real upload where the target file genuinely existed); the voila
+tool's container also serves a full JupyterLab tree view at /voila/lab/tree,
+in addition to /voila/voila/render for rendered Voila apps."""
 
 
 @dataclass(frozen=True)
@@ -319,6 +333,16 @@ LEARNING_FOLDER = LearningEntry(
 def get_current_user() -> str:
     """Return the NOMAD username of the person running this notebook, or '' if unknown."""
     return os.environ.get("NOMAD_CLIENT_USER", "")
+
+
+def log_navigation(action: str) -> None:
+    """Log an in-dashboard navigation click (project drill-in, back button, ...).
+
+    Only covers events that actually run in this app's Python kernel -- the
+    outbound app-launch cards are plain <a target="_blank"> links and never
+    reach the kernel, so they can't be logged this way.
+    """
+    log_button_usage(action, user=get_current_user())
 
 
 def get_upload_id() -> str:

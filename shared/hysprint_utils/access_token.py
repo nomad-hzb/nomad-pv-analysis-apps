@@ -1,9 +1,12 @@
 import datetime
 import getpass
+import logging
 import os
 from pathlib import Path
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def _load_token_from_secrets_file() -> str | None:
@@ -117,3 +120,36 @@ def log_notebook_usage(log_filename="notebook_usage.log"):
 
     except Exception as e:
         print(f"Error logging notebook usage: {e}")
+
+
+def log_button_usage(action: str, user: str | None = None, log_filename="button_usage.log"):
+    """
+    Log an in-app navigation event (e.g. a button click) to a file at the same
+    level as this .py file, separate from log_notebook_usage's per-session
+    entries.
+
+    Args:
+        action (str): Short identifier for what was clicked/opened,
+            e.g. "open_project:Slot-die coater ML" or "back_to_dashboard".
+        user (str | None): NOMAD username. Falls back to NOMAD_CLIENT_USER if not given.
+        log_filename (str): Name of the log file (default: "button_usage.log")
+    """
+    try:
+        script_dir = Path(__file__).parent
+        log_path = script_dir / log_filename
+
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+
+        resolved_user = user if user is not None else os.environ.get("NOMAD_CLIENT_USER", "Unknown")
+
+        log_entry = f"{date_str},{time_str},{resolved_user},{action}\n"
+
+        with open(log_path, "a", encoding="utf-8") as f:
+            if log_path.stat().st_size == 0:
+                f.write("Date,Time,User,Action\n")
+            f.write(log_entry)
+
+    except Exception:
+        logger.exception("Error logging button usage")

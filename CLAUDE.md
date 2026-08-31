@@ -128,8 +128,45 @@ module imports, specifically to prevent this — it's load-bearing, not
 boilerplate. If numpy/pandas import errors resurface, first check this file
 still exists before debugging anything else.
 
+## Known environment gotcha — `display()` inside a widget callback needs an `Output()` under Voila
+
+A plain `display(...)` call (e.g. `display(Javascript(...))`) made from
+inside an ipywidgets event callback (`Button.on_click`, `observe`, etc.) is
+**silently dropped under Voila** — no error, nothing rendered, nothing
+executed. The callback fires from a comm message, not a cell execution, so
+there's no "current output area" for a bare `display()` to land in; classic
+Jupyter notebook has fallback routing for this case, Voila does not.
+
+**How to apply:** route any such call through a real `ipywidgets.Output()`
+that stays part of the widget tree actually being displayed (not created and
+immediately discarded):
+```python
+js_output = widgets.Output(layout=widgets.Layout(width="0px", height="0px"))
+# js_output must remain in the tree passed to display(app) / returned by setup_app
+
+def on_click(_button):
+    with js_output:
+        js_output.clear_output(wait=True)
+        display(Javascript("..."))
+```
+See `apps/App_dashboard/app.py::setup_app` (the `js_output` widget) for a
+working example — hit and fixed while building app-launch click tracking
+(issue #7), confirmed empirically against a real local Voila instance: the
+callback's other side effects (writing a log entry) ran fine, but the
+injected script never executed until routed through `Output()`.
+
 ## Known gaps (tracked, not silently fixed)
 
+- `log_notebook_usage()` (in `shared/hysprint_utils/access_token.py`) writes
+  its log file next to itself, so it ends up inside whichever upload that
+  app is installed in — there is no cross-app aggregation. App_dashboard's
+  own copy is the only one anyone normally looks at, which makes it look
+  like "only App_dashboard logs usage," but every app's calls are actually
+  firing into their own isolated copy. Real aggregation needs a
+  `shared/hysprint_utils` change (rule 2 sign-off) plus a central log
+  destination — not attempted; tracked as issue #7, which in the meantime
+  added `log_button_usage`/`button_usage.log` for App_dashboard's own
+  in-dashboard navigation and app-launch clicks.
 - `T20` (flake8-print) is not yet in the root ruff `select` list — enabling
   it surfaces ~650+ pre-existing `print()` violations across several
   already-unified and out-of-scope apps. Don't add it without a dedicated
