@@ -9,9 +9,62 @@ __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
 import os
+from datetime import date
 
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
+
+
+def dated_filename(filename):
+    """Prefix a filename with today's date (YYYY-MM-DD) for easy identification."""
+    return f"{date.today().isoformat()}_{filename}"
+
+
+# Summary-table columns storing signed current density (stored negative internally
+# to match the raw JV-curve sign convention; flipped positive on export for readability).
+CURRENT_DENSITY_SUMMARY_COLUMNS = ["Jsc(mA/cm2)", "J_mpp(mA/cm2)"]
+
+CURRENT_DENSITY_FLIP_NOTE = (
+    "Note: current density values (Jsc, J_mpp, Current Density) have been multiplied "
+    "by -1 from their internal storage so the reported magnitude is positive. The "
+    "app's plots are unaffected and keep the original sign convention."
+)
+
+# Non-data columns in the long-format curves table (see data_manager.py's columns_cur).
+_CURVE_META_COLUMNS = {
+    "index",
+    "sample",
+    "batch",
+    "condition",
+    "variable",
+    "cell",
+    "direction",
+    "ilum",
+    "sample_id",
+    "status",
+}
+
+
+def flip_current_density_sign(df, columns=CURRENT_DENSITY_SUMMARY_COLUMNS):
+    """Return a copy of df with the given current-density columns sign-flipped."""
+    df = df.copy()
+    for col in columns:
+        if col in df.columns:
+            df[col] = df[col] * -1
+    return df
+
+
+def flip_current_density_curve_rows(df, variable_col="variable", target="Current Density(mA/cm2)"):
+    """Return a copy of df with curve-point columns sign-flipped for current-density rows."""
+    df = df.copy()
+    if df.empty or variable_col not in df.columns:
+        return df
+    mask = df[variable_col] == target
+    if not mask.any():
+        return df
+    value_cols = [c for c in df.columns if c not in _CURVE_META_COLUMNS]
+    df.loc[mask, value_cols] = df.loc[mask, value_cols] * -1
+    return df
 
 
 def save_full_data_frame(data):
@@ -44,6 +97,8 @@ def save_combined_excel_data(path, wb, data, filtered_info, var_x, name_y, var_y
 
     # Insert header
     ws.append([f"Contents of boxplot for {var_y} by {var_x}"])
+    if name_y in CURRENT_DENSITY_SUMMARY_COLUMNS:
+        ws.append([CURRENT_DENSITY_FLIP_NOTE])
     ws.append([])  # Empty row
 
     # Process and append main data

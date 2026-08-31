@@ -20,11 +20,17 @@ import pandas as pd
 import requests
 from data_manager import DataManager
 from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, InfoUI, PlotUI, SaveUI
-from IPython.display import Markdown, clear_output, display
+from IPython.display import Javascript, Markdown, clear_output, display
 from openpyxl.utils.dataframe import dataframe_to_rows
 from plot_manager import plotting_string_action
 from resizable_plot_utility import ResizablePlotManager
-from utils import save_combined_excel_data
+from utils import (
+    CURRENT_DENSITY_FLIP_NOTE,
+    dated_filename,
+    flip_current_density_curve_rows,
+    flip_current_density_sign,
+    save_combined_excel_data,
+)
 
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
@@ -177,6 +183,14 @@ class JVAnalysisApp:
         self.read_output = widgets.Output()
         self.show_other_measurements = widgets.Output()
 
+        # Output widget the tab-change scroll-to-top script is routed through --
+        # a bare display(Javascript(...)) from inside a widget callback is silently
+        # dropped under Voila (no cell execution to attach to), so it needs a real
+        # Output() that stays part of the displayed tree.
+        self.js_output = widgets.Output(
+            layout=widgets.Layout(width="0px", height="0px", overflow="hidden")
+        )
+
     def _create_tabs(self):
         """Create tab system"""
         self._demo_btn = widgets.Button(
@@ -252,6 +266,27 @@ class JVAnalysisApp:
             filtered_curves_callback=self._download_filtered_curves_data,
         )
         self.default_variables.observe(self._on_change_default_variables, names=["value"])
+        self.tabs.observe(self._on_tab_change, names="selected_index")
+
+    def _on_tab_change(self, change):
+        """Scroll back to the top whenever the active tab changes.
+
+        Voila's page body never grows -- the notebook output area is rendered
+        inside internal Lumino panels that scroll independently -- so
+        `window.scrollTo` alone is a no-op (confirmed empirically against a
+        real local Voila instance). Reset every scrolled-down ancestor of the
+        tab widget instead of guessing at a specific panel class name.
+        """
+        with self.js_output:
+            self.js_output.clear_output(wait=True)
+            display(
+                Javascript("""
+                document.querySelectorAll('*').forEach(function (el) {
+                    if (el.scrollTop > 0) { el.scrollTop = 0; }
+                });
+                window.scrollTo(0, 0);
+                """)
+            )
 
     def _auto_authenticate(self):
         self.auth_ui._on_auth_button_clicked(None)
@@ -447,7 +482,10 @@ If you tested specific variables or conditions for each sample, please write the
         data = self.data_manager.get_data()
         if data and "jvc" in data:
             self.save_ui.trigger_download(
-                data["jvc"].to_csv(index=False), "jv_full.csv", "text/plain"
+                f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
+                + flip_current_density_sign(data["jvc"]).to_csv(index=False),
+                dated_filename("jv_full.csv"),
+                "text/plain",
             )
         else:
             logger.warning("No JV data available for download")
@@ -457,7 +495,10 @@ If you tested specific variables or conditions for each sample, please write the
         data = self.data_manager.get_data()
         if data and "filtered" in data:
             self.save_ui.trigger_download(
-                data["filtered"].to_csv(index=False), "jv_filtered.csv", "text/plain"
+                f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
+                + flip_current_density_sign(data["filtered"]).to_csv(index=False),
+                dated_filename("jv_filtered.csv"),
+                "text/plain",
             )
         else:
             logger.warning("No filtered JV data available — apply filters first")
@@ -467,7 +508,10 @@ If you tested specific variables or conditions for each sample, please write the
         data = self.data_manager.get_data()
         if data and "curves" in data:
             self.save_ui.trigger_download(
-                data["curves"].to_csv(index=False), "curves_full.csv", "text/plain"
+                f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
+                + flip_current_density_curve_rows(data["curves"]).to_csv(index=False),
+                dated_filename("curves_full.csv"),
+                "text/plain",
             )
         else:
             logger.warning("No curves data available for download")
@@ -477,7 +521,10 @@ If you tested specific variables or conditions for each sample, please write the
         data = self.data_manager.get_data()
         if data and "filtered_curves" in data:
             self.save_ui.trigger_download(
-                data["filtered_curves"].to_csv(index=False), "curves_filtered.csv", "text/plain"
+                f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
+                + flip_current_density_curve_rows(data["filtered_curves"]).to_csv(index=False),
+                dated_filename("curves_filtered.csv"),
+                "text/plain",
             )
         else:
             logger.warning("No filtered curves data available — apply filters first")
@@ -687,9 +734,15 @@ If you tested specific variables or conditions for each sample, please write the
             wb = openpyxl.Workbook()
             wb.remove(wb.active)  # Remove default sheet
 
+            # Jsc/J_mpp are stored as negative internally (matching the raw JV-curve sign
+            # convention); flip them positive here so exported files show the magnitude.
+            export_data = flip_current_density_sign(filtered_data)
+
             # Add main data sheet first
             main_sheet = wb.create_sheet(title="All_data")
-            for r in dataframe_to_rows(filtered_data, index=True, header=True):
+            main_sheet.append([CURRENT_DENSITY_FLIP_NOTE])
+            main_sheet.append([])  # Empty row
+            for r in dataframe_to_rows(export_data, index=True, header=True):
                 main_sheet.append(r)
 
             # Create analysis sheets for each boxplot
@@ -709,50 +762,62 @@ If you tested specific variables or conditions for each sample, please write the
 
             # Process each boxplot for Excel export
             for plot_type, option1, option2, *_ in plot_selections:
-                if plot_type in ["Boxplot", "Boxplot (omitted)"] and option1 not in (
+                if plot_type not in ["Boxplot", "Boxplot (omitted)"] or option1 in (
                     "Correlation (heatmap)",
                     "Correlation (scatter matrix)",
                     "Plot Voc, Jsc, FF, PCE",
-                    "The big 4: Voc, Jsc, FF, PCE",
                 ):
-                    var_y = option1  # e.g., 'PCE'
-                    var_x = option2  # e.g., 'by Variable'
+                    continue
+
+                var_x = option2  # e.g., 'by Variable'
+                # "The big 4" is a single combined boxplot covering all four JV
+                # parameters at once, so it needs a sheet per parameter -- same as
+                # picking each of them individually via "Separated Boxplots" would.
+                var_y_list = (
+                    ["Voc", "Jsc", "FF", "PCE"]
+                    if option1 == "The big 4: Voc, Jsc, FF, PCE"
+                    else [option1]  # e.g., ['PCE']
+                )
+
+                # Determine grouping column
+                if var_x == "by Variable":
+                    grouping_col = "condition"
+                elif var_x == "by Batch":
+                    grouping_col = (
+                        "batch_for_plotting"
+                        if "batch_for_plotting" in filtered_data.columns
+                        else "batch"
+                    )
+                elif var_x == "by Sample":
+                    grouping_col = "sample"
+                elif var_x == "by Cell":
+                    grouping_col = "cell"
+                elif var_x == "by Scan Direction":
+                    grouping_col = "direction"
+                else:
+                    grouping_col = "condition"  # default
+
+                # Get omitted data and filter parameters from data manager
+                omitted_data = self.data_manager.get_omitted_data()
+                filter_params = self.data_manager.get_filter_parameters()
+
+                # Prepare filtered info (omitted data and filter parameters)
+                filtered_info = (
+                    flip_current_density_sign(omitted_data)
+                    if omitted_data is not None
+                    else pd.DataFrame(),
+                    filter_params,
+                )
+
+                for var_y in var_y_list:
                     name_y = variable_mapping.get(var_y, var_y + "(%)")  # e.g., 'PCE(%)'
 
-                    # Determine grouping column
-                    if var_x == "by Variable":
-                        grouping_col = "condition"
-                    elif var_x == "by Batch":
-                        grouping_col = (
-                            "batch_for_plotting"
-                            if "batch_for_plotting" in filtered_data.columns
-                            else "batch"
-                        )
-                    elif var_x == "by Sample":
-                        grouping_col = "sample"
-                    elif var_x == "by Cell":
-                        grouping_col = "cell"
-                    elif var_x == "by Scan Direction":
-                        grouping_col = "direction"
-                    else:
-                        grouping_col = "condition"  # default
-
                     # Calculate statistical summary
-                    stats_df = filtered_data.groupby(grouping_col)[name_y].describe()
-
-                    # Get omitted data and filter parameters from data manager
-                    omitted_data = self.data_manager.get_omitted_data()
-                    filter_params = self.data_manager.get_filter_parameters()
-
-                    # Prepare filtered info (omitted data and filter parameters)
-                    filtered_info = (
-                        omitted_data if omitted_data is not None else pd.DataFrame(),
-                        filter_params,
-                    )
+                    stats_df = export_data.groupby(grouping_col)[name_y].describe()
 
                     # Save to Excel
                     wb = save_combined_excel_data(
-                        "", wb, filtered_data, filtered_info, grouping_col, name_y, var_y, stats_df
+                        "", wb, export_data, filtered_info, grouping_col, name_y, var_y, stats_df
                     )
 
             # Use the precisely matched curves data instead of all curves
@@ -918,7 +983,7 @@ If you tested specific variables or conditions for each sample, please write the
             js_code = f"""
             var link = document.createElement('a');
             link.href = 'data:application/zip;base64,{b64}';
-            link.download = 'plots.zip';
+            link.download = '{dated_filename("plots.zip")}';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -958,7 +1023,7 @@ If you tested specific variables or conditions for each sample, please write the
             var mime = 'data:application/vnd.openxmlformats-officedocument'
                 + '.spreadsheetml.sheet;base64,';
             link.href = mime + '{b64}';
-            link.download = 'collected_data.xlsx';
+            link.download = '{dated_filename("collected_data.xlsx")}';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -1008,7 +1073,7 @@ If you tested specific variables or conditions for each sample, please write the
             js_code = f"""
             var link = document.createElement('a');
             link.href = 'data:application/zip;base64,{b64}';
-            link.download = 'results.zip';
+            link.download = '{dated_filename("results.zip")}';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -1054,6 +1119,7 @@ If you tested specific variables or conditions for each sample, please write the
                 header,  # Header with What's New and Manual buttons
                 self.auth_ui.get_widget(),
                 self.tabs,
+                self.js_output,
             ],
             layout=app_layout,
         )
