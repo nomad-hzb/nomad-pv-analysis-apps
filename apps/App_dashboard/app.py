@@ -32,7 +32,7 @@ def setup_app():
         tab itself still needs a one-line injected script, since only the
         browser can open tabs and only this kernel can write the log file.
         """
-        dm.log_navigation(f"open_app:{name}")
+        dm.log_navigation(name)
         with js_output:
             js_output.clear_output(wait=True)
             display(Javascript(f"window.open({json.dumps(url)}, '_blank')"))
