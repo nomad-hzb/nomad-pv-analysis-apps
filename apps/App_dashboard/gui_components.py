@@ -173,6 +173,18 @@ def create_project_card(project, on_click) -> widgets.Button:
     return create_hub_card(project.name, project.description, project.icon, on_click)
 
 
+def create_app_launch_card(entry, full_url: str, on_click) -> widgets.Button:
+    """A clickable card that launches an app, logging the click on its way out.
+
+    Unlike create_app_card, this is a real Button (not an <a> link) so the
+    click reaches the Python kernel -- the tradeoff is losing native link
+    semantics (hover-preview URL, right-click/copy-link, ctrl+click). The
+    target URL is kept in the tooltip as a partial substitute.
+    """
+    label = f"{entry.name} (experimental)" if entry.experimental else entry.name
+    return create_hub_card(label, full_url, entry.icon, on_click)
+
+
 def create_back_button(on_click) -> widgets.Button:
     btn = widgets.Button(
         description="Back to Dashboard",
