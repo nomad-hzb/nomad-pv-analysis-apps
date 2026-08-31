@@ -22,7 +22,12 @@ except ImportError:
 
 
 VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
-JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/jupyter2/lab/tree"
+JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/lab/tree"
+"""Deliberately the "voila" NORTH tool, not a separate "jupyter2" tool -- the
+latter isn't provisioned on this Oasis (confirmed via a Jupyter-Server-level
+404 on a real upload where the target file genuinely existed); the voila
+tool's container also serves a full JupyterLab tree view at /voila/lab/tree,
+in addition to /voila/voila/render for rendered Voila apps."""
 
 
 @dataclass(frozen=True)

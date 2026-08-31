@@ -117,7 +117,7 @@ def test_build_jupyter_url_matches_expected_nomad_structure():
     assert url == (
         JUPYTER_PATH_TEMPLATE.format(user="edgar") + f"/uploads/abc123/{LEARNING_FOLDER.path}"
     )
-    assert url.startswith("/nomad-oasis/north/user/edgar/jupyter2/lab/tree/")
+    assert url.startswith("/nomad-oasis/north/user/edgar/voila/lab/tree/")
 
 
 def test_build_jupyter_url_never_hardcodes_an_upload_id():
