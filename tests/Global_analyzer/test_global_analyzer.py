@@ -107,6 +107,11 @@ def test_process_step_manager_extract_process_types_empty_input():
     assert psm.extract_process_types([]) == []
 
 
+def test_process_step_manager_maps_annealing_display_name():
+    psm = ProcessStepManager()
+    assert psm.map_display_to_measurement_type("Annealing") == "annealing"
+
+
 def _plot_manager():
     return PlotManager(plot_widget=go.FigureWidget(), stats_output=widgets.Output())
 
@@ -225,6 +230,7 @@ def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
             "load_blade_coating_data": staticmethod(lambda *a, **k: None),
             "load_dip_coating_data": staticmethod(lambda *a, **k: None),
             "load_laser_scribing_data": staticmethod(lambda *a, **k: None),
+            "load_annealing_data": staticmethod(lambda *a, **k: None),
         },
     )()
 

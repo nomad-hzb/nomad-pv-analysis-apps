@@ -240,6 +240,7 @@ class DataManager:
             "blade_coating": self.data_loader.load_blade_coating_data,
             "dip_coating": self.data_loader.load_dip_coating_data,
             "laser_scribing": self.data_loader.load_laser_scribing_data,
+            "annealing": self.data_loader.load_annealing_data,
         }
 
         logger.debug("Loading metadata types (fast)...")

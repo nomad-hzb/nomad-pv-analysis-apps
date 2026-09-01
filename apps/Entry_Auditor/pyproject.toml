@@ -1,6 +1,6 @@
 [project]
 name = "entry-auditor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Browse NOMAD entries in a batch, find inconsistent field values, and correct all occurrences"
 requires-python = ">=3.10"
 dependencies = [
