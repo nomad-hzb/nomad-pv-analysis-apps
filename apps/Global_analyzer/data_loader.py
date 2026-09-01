@@ -80,6 +80,7 @@ class HySprintDataLoader:
         "HySprint_BladeCoating",
         "HySprint_DipCoating",
         "HySprint_LaserScribing",
+        "HySprint_Annealing",
     ]
 
     RESULT_TYPES = [
@@ -681,6 +682,12 @@ class HySprintDataLoader:
     ) -> Optional[pd.DataFrame]:
         """Load Laser Scribing metadata (generic loader)."""
         return self.load_generic_process_data(sample_ids, variation, "HySprint_LaserScribing")
+
+    def load_annealing_data(
+        self, sample_ids: List[str], variation: Dict[str, str]
+    ) -> Optional[pd.DataFrame]:
+        """Load standalone Annealing process metadata (generic loader)."""
+        return self.load_generic_process_data(sample_ids, variation, "HySprint_Annealing")
 
     # RESULT LOADERS
 

@@ -299,6 +299,7 @@ class ProcessStepManager:
             "dip": "dip_coating",
             "laser": "laser_scribing",
             "scribing": "laser_scribing",
+            "annealing": "annealing",
         }
 
         for key, value in mapping.items():
