@@ -2082,13 +2082,21 @@ def generate_full_workbook(state: ExperimentState) -> Workbook:
     freshly computed at write time from sample_number/child_index (never sourced from
     field_specs, never no-clobbered) - they're derived identifiers, not user data, so
     requiring the user to manually mark them varying and re-enter the same numbers per
-    row would be redundant."""
+    row would be redundant.
+
+    The Parent ID column itself is only appended when at least one sample actually has
+    children (child_count > 0) - the per-sample child-row (diced-pixel) UI was removed
+    from SampleSetupPanel a while back, so for the overwhelming majority of experiments
+    every sample has child_count == 0 and Parent ID would always be a fully blank trailing
+    column with no possible content; product feedback confirmed that blank column reads as
+    noise, not a placeholder for a future need."""
     builder = ExperimentExcelBuilder(process_sequence_to_dicts(state), is_testing=False)
     builder.build_excel()
     workbook = builder.workbook
     worksheet = workbook["Experiment Data"]
     column_map = build_column_map(worksheet)
-    parent_id_col = append_parent_id_column(worksheet)
+    has_children = any(sample.child_count > 0 for sample in state.samples)
+    parent_id_col = append_parent_id_column(worksheet) if has_children else None
     nomad_id_col = column_map.get((0, "Nomad ID"))
     sample_col = column_map.get((0, "Sample"))
     subbatch_col = column_map.get((0, "Subbatch"))
@@ -2115,7 +2123,7 @@ def generate_full_workbook(state: ExperimentState) -> Workbook:
             worksheet.cell(
                 row=row, column=subbatch_col, value=subbatch_for_sample(state, sample_number)
             )
-        if child_index is not None:
+        if child_index is not None and parent_id_col is not None:
             worksheet.cell(row=row, column=parent_id_col, value=mother_nomad_ids.get(sample_number))
 
     return workbook

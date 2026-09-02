@@ -2321,6 +2321,7 @@ def test_create_finish_section_places_progress_bar_above_buttons(fresh_state):
         buttons_row,
         _nudge_area,
         _status_output,
+        _download_js_output,
     ) = section.children
     assert progress_bar_child is bar
     assert len(buttons_row.children) == 3
@@ -2947,6 +2948,23 @@ def test_generate_full_workbook_has_three_sheets(fresh_state):
     assert set(workbook.sheetnames) == {"Experiment Data", "Data Entry Guide", "How to Cite"}
 
 
+def test_generate_full_workbook_omits_parent_id_column_when_no_children(fresh_state):
+    """Product feedback: with the per-sample child-row UI removed, Parent ID was always a
+    fully blank trailing column for the overwhelming majority of real experiments (no
+    sample ever has child_count > 0) - it should not appear at all in that case."""
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1, child_count=0)
+
+    workbook = generate_full_workbook(fresh_state)
+    worksheet = workbook["Experiment Data"]
+
+    header_values = [
+        worksheet.cell(row=2, column=col).value for col in range(1, worksheet.max_column + 1)
+    ]
+    assert "Parent ID" not in header_values
+
+
 def test_generate_full_workbook_writes_one_row_per_mother_and_child(fresh_state):
     process = fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
@@ -3121,19 +3139,53 @@ def test_sample_setup_panel_apply_sample_setup_is_public_equivalent_of_apply_cli
     assert len(fresh_state.samples) == 3
 
 
-def test_sample_setup_panel_apply_is_additive_never_removes(fresh_state):
+def test_sample_setup_panel_apply_removes_excess_samples_when_count_lowered(fresh_state):
     panel = SampleSetupPanel(fresh_state)
     panel.set_count_input.value = 1
     panel.sets_inputs_box.children[0].value = 3
     panel._on_apply(None)
-    fresh_state.samples[0].child_count = 2  # simulate user-configured data
+    fresh_state.samples[0].child_count = 2  # simulate user-configured data on sample 1
 
     # user lowers the requested count and re-applies
     panel.sets_inputs_box.children[0].value = 1
     panel._on_apply(None)
 
-    assert len(fresh_state.samples) == 3  # nothing removed
-    assert fresh_state.samples[0].child_count == 2  # untouched
+    assert len(fresh_state.samples) == 1  # excess samples removed, not just left to accumulate
+    assert fresh_state.samples[0].sample_number == 1  # earliest sample kept, not the latest
+    assert fresh_state.samples[0].child_count == 2  # its data survives the shrink
+
+
+def test_sample_setup_panel_lowering_total_samples_shrinks_after_apply(fresh_state):
+    """Regression test: changing Total samples used to clamp each Subbatch's shown value
+    to max(existing_count, new_default), so a lower total was silently ignored and
+    re-applying could only ever grow the batch, never shrink it back down."""
+    panel = SampleSetupPanel(fresh_state)
+    panel.set_count_input.value = 1
+    panel.sets_inputs_box.children[0].value = 5
+    panel._on_apply(None)
+    assert len(fresh_state.samples) == 5
+
+    panel.total_samples_input.value = 2
+
+    assert panel.sets_inputs_box.children[0].value == 2  # no longer clamped up to the old 5
+
+    panel._on_apply(None)
+
+    assert len(fresh_state.samples) == 2
+
+
+def test_sample_setup_panel_lowering_subbatch_count_removes_orphaned_samples(fresh_state):
+    """Regression test: lowering Variation Subbatch count used to leave samples from the
+    now-unconfigured Subbatches stranded in state forever, with no row left to remove them."""
+    panel = SampleSetupPanel(fresh_state)  # defaults: 16 samples / 4 subbatches
+    panel._on_apply(None)
+    assert {s.variation_group_index for s in fresh_state.samples} == {0, 1, 2, 3}
+
+    panel.set_count_input.value = 2
+
+    panel._on_apply(None)
+
+    assert {s.variation_group_index for s in fresh_state.samples} == {0, 1}
 
 
 def test_sample_setup_panel_multiple_sets_uneven_counts(fresh_state):
@@ -3371,9 +3423,15 @@ def test_create_finish_section_download_only_produces_link(fresh_state):
         "data_manager.get_all_uploads", return_value=[{"upload_id": "UP1", "upload_name": "Test"}]
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True  # bypass the nudge gate for this mechanics-only test
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3390,9 +3448,15 @@ def test_create_finish_section_upload_only_without_target_shows_error(fresh_stat
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         _download_button, upload_button, _combo_button = buttons_row.children
         upload_button.click()
@@ -3411,9 +3475,15 @@ def test_create_finish_section_upload_only_calls_upload_experiment_excel(fresh_s
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, upload_button, _combo_button = buttons_row.children
@@ -3435,9 +3505,15 @@ def test_create_finish_section_download_and_upload_does_both(fresh_state):
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, _upload_button, combo_button = buttons_row.children
@@ -3459,9 +3535,15 @@ def test_create_finish_section_download_and_upload_reports_upload_failure(fresh_
         patch("gui_components.upload_experiment_excel", side_effect=RuntimeError("network down")),
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, _upload_button, combo_button = buttons_row.children
@@ -3479,9 +3561,15 @@ def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         assert skip_checkbox.value is False
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3505,9 +3593,15 @@ def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3524,9 +3618,15 @@ def test_create_finish_section_blocks_download_when_batch_missing(fresh_state):
 
     with patch("data_manager.get_all_uploads", return_value=[]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True  # must block even with the nudge gate skipped
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3547,9 +3647,15 @@ def test_create_finish_section_blocks_upload_when_project_name_missing(fresh_sta
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, upload_button, _combo_button = buttons_row.children
@@ -3566,9 +3672,15 @@ def test_create_finish_section_blocks_both_missing_lists_both_fields(fresh_state
 
     with patch("data_manager.get_all_uploads", return_value=[]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()

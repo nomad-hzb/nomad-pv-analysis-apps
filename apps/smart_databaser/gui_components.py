@@ -4,6 +4,7 @@
 # library.
 
 import base64
+import json
 import logging
 import os
 import random
@@ -54,6 +55,7 @@ from data_manager import (
     upload_experiment_excel,
     workbook_to_bytes,
 )
+from IPython.display import Javascript, display
 
 logger = logging.getLogger(__name__)
 
@@ -468,10 +470,10 @@ class SampleSetupPanel(widgets.VBox):
     "Subbatch" is still ExperimentState/SamplePlan's `variation_group_index` - only the
     UI-facing wording changed (product ask: first 'group' -> 'set' since 'group' read as
     confusing, then 'set' -> 'Subbatch' since the Subbatch Excel column is always exactly
-    this value, 1-based - see data_manager.subbatch_for_sample). 'Apply Sample Setup' only
-    ADDS samples up to each Subbatch's requested count; it never removes existing
-    samples, so re-clicking after adjusting counts never destroys already-configured
-    per-sample data - matching this app's no-clobber philosophy elsewhere. Per-sample
+    this value, 1-based - see data_manager.subbatch_for_sample). 'Apply Sample Setup'
+    reconciles each Subbatch's sample count to exactly match its input - adding samples
+    when raised, removing the highest-numbered (most recently added) ones first when
+    lowered - so it supports growing AND shrinking to any size, in either order. Per-sample
     child-row (diced pixel) configuration is intentionally not exposed here for now - it
     only applies to a minority of experiments and was confusing alongside Subbatch
     assignment; SamplePlan.child_count still exists and defaults to 0. The per-sample
@@ -536,12 +538,9 @@ class SampleSetupPanel(widgets.VBox):
         split = compute_sample_set_split(self.total_samples_input.value, self.set_count_input.value)
         rows = []
         for set_index in range(self.set_count_input.value):
-            existing_count = sum(
-                1 for s in self.state.samples if s.variation_group_index == set_index
-            )
             default_value = split[set_index] if set_index < len(split) else 0
             count_input = widgets.BoundedIntText(
-                value=max(existing_count, default_value),
+                value=default_value,
                 min=0,
                 max=200,
                 description=f"Subbatch {set_index + 1} samples:",
@@ -563,13 +562,34 @@ class SampleSetupPanel(widgets.VBox):
         """The 'Apply Sample Setup' button's action, exposed as a public method so
         app.py can trigger the default sample set once on page load - product ask, since
         the Varying Fields table (and everything downstream) previously stayed empty
-        until a user noticed and clicked the button themselves."""
+        until a user noticed and clicked the button themselves.
+
+        Reconciles every configured Subbatch's sample count to exactly match its input
+        (adds OR removes, unlike the old add-only behavior that could never shrink a
+        batch back down once grown) - excess samples are dropped from the END of that
+        Subbatch (highest sample_number first), so already-configured earlier samples
+        survive a later shrink. Also removes any sample belonging to a Subbatch that's no
+        longer configured at all (Variation Subbatch count lowered), so the total sample
+        count always matches what's currently shown, in both directions."""
+        configured_indices = {
+            count_input._set_index for count_input in self.sets_inputs_box.children
+        }
         for count_input in self.sets_inputs_box.children:
             set_index = count_input._set_index
-            existing = [s for s in self.state.samples if s.variation_group_index == set_index]
-            needed = count_input.value - len(existing)
-            for _ in range(max(0, needed)):
-                self.state.add_sample(variation_group_index=set_index)
+            existing = sorted(
+                (s for s in self.state.samples if s.variation_group_index == set_index),
+                key=lambda s: s.sample_number,
+            )
+            target = count_input.value
+            if len(existing) < target:
+                for _ in range(target - len(existing)):
+                    self.state.add_sample(variation_group_index=set_index)
+            elif len(existing) > target:
+                for sample in existing[target:]:
+                    self.state.remove_sample(sample.sample_number)
+        for sample in list(self.state.samples):
+            if sample.variation_group_index not in configured_indices:
+                self.state.remove_sample(sample.sample_number)
         if self.on_change:
             self.on_change()
 
@@ -588,6 +608,34 @@ def _build_download_link_html(state: ExperimentState) -> tuple[str, bytes, str]:
         f"Click here to download the experiment file ({filename})</a>"
     )
     return link_html, data, filename
+
+
+def _trigger_browser_download(js_output: widgets.Output, data: bytes, filename: str) -> None:
+    """Auto-starts the real browser download instead of leaving the user to find and click
+    a plain data-URI link buried in a status message - product feedback that the old
+    'click Download only -> click Continue -> click the actual link' flow was too many
+    steps for what should be one action. Mirrors App_dashboard's app.py::setup_app
+    js_output pattern (see CLAUDE.md's 'display() inside a widget callback needs an
+    Output() under Voila' gotcha): a bare display(Javascript(...)) from inside a button
+    callback is silently dropped under Voila, since the callback fires from a comm
+    message with no current output area - routing it through a real Output() widget that
+    stays part of the displayed tree is what actually renders (and runs) it. Caller must
+    keep js_output in the displayed widget tree."""
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    b64_data = base64.b64encode(data).decode()
+    script = (
+        "(function(){"
+        "var a = document.createElement('a');"
+        f"a.href = 'data:{mime};base64,{b64_data}';"
+        f"a.download = {json.dumps(filename)};"
+        "document.body.appendChild(a);"
+        "a.click();"
+        "document.body.removeChild(a);"
+        "})();"
+    )
+    with js_output:
+        js_output.clear_output(wait=True)
+        display(Javascript(script))
 
 
 def create_download_button(state: ExperimentState) -> widgets.VBox:
@@ -627,6 +675,13 @@ def create_finish_section(
     nudge review' checkbox (unchecked by default) is a testing-only escape hatch back to
     the old immediate behavior.
 
+    Either action (immediate, or 'Continue' after the nudge flow) that produces a file
+    auto-starts the actual browser download via _trigger_browser_download - product
+    feedback that the old flow ('Download only' -> 'Continue with Download' -> then find
+    and click a plain-text link) was one click too many for what should already be the
+    file. status_output still shows a fallback link for the rare case the browser blocks
+    the automatic download (e.g. a popup/download blocker).
+
     Batch/Project_Name are checked BEFORE any of that (data_manager.
     missing_critical_fields) and hard-block all three actions, unconditionally - not
     skippable via the nudge checkbox, since they're baked into every sample's Nomad ID
@@ -661,6 +716,12 @@ def create_finish_section(
 
     status_output = widgets.HTML(value="")
     nudge_area = widgets.VBox([])
+    # Hidden Output() that _trigger_browser_download routes its Javascript through - must
+    # stay part of the returned widget tree (see that function's docstring). Zero-size so
+    # it never visibly disturbs the layout.
+    download_js_output = widgets.Output(
+        layout=widgets.Layout(width="0px", height="0px", overflow="hidden")
+    )
 
     def do_upload(data: bytes, filename: str) -> bool:
         if not upload_dropdown.value:
@@ -680,8 +741,12 @@ def create_finish_section(
             return False
 
     def run_download_only():
-        link_html, _data, _filename = _build_download_link_html(state)
-        status_output.value = link_html
+        link_html, data, filename = _build_download_link_html(state)
+        _trigger_browser_download(download_js_output, data, filename)
+        status_output.value = (
+            f"<span style='color:#2c7a4b'>Downloading {filename} - it should start "
+            f"automatically.</span> If it doesn't, {link_html}"
+        )
 
     def run_upload_only():
         status_output.value = ""
@@ -690,7 +755,11 @@ def create_finish_section(
 
     def run_download_and_upload():
         link_html, data, filename = _build_download_link_html(state)
-        status_output.value = link_html
+        _trigger_browser_download(download_js_output, data, filename)
+        status_output.value = (
+            f"<span style='color:#2c7a4b'>Downloading {filename} - it should start "
+            f"automatically.</span> If it doesn't, {link_html}"
+        )
         do_upload(data, filename)
 
     def start_action(action_name: str, run) -> None:
@@ -761,6 +830,7 @@ def create_finish_section(
             widgets.HBox([download_button, upload_button, download_and_upload_button]),
             nudge_area,
             status_output,
+            download_js_output,
         ]
     )
     return widgets.VBox(children)
