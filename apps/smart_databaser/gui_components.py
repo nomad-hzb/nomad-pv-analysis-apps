@@ -1078,6 +1078,13 @@ class VaryingFieldsMatrix(widgets.VBox):
 
     _LABEL_COLUMN_WIDTH = "70px"
     _WARNING_COLUMN_WIDTH = "220px"
+    # Every header's text block reserves this much height regardless of whether it's a
+    # one-line label ("Sample", "Variation", ...) or a two-line "<process><br><field>"
+    # one, and every header's button slot (populate button, or a same-size blank
+    # placeholder when a column has none) reserves this height too - see _header_for's
+    # docstring for why both need to be uniform across every column kind.
+    _HEADER_TEXT_MIN_HEIGHT = "36px"
+    _HEADER_BUTTON_HEIGHT = "28px"
 
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
@@ -1157,31 +1164,55 @@ class VaryingFieldsMatrix(widgets.VBox):
     def _header_for(
         self, key: object, kind: str, spec: ProcessFieldSpec | None, header_html: str
     ) -> widgets.Widget:
+        """Every column's header - regardless of kind - is the SAME two-part shape: a
+        text block with a reserved minimum height (so a one-line label like "Sample" or
+        "Variation" and a two-line "<process><br><field>" one still occupy the same
+        vertical space, bottom-aligned via flexbox within that reserved height) followed
+        by a button-height slot (the real populate button for a field/Variation column,
+        or an equal-height blank placeholder for columns that don't have one - Sample/
+        Subbatch/the warning column). Without this, a field column's taller two-line-
+        plus-button header sits below a one-line header with no button (Sample/Subbatch)
+        or no second header row at all (Variation, one line + button, still shorter than
+        a two-line one) - since each column is an independently-packed VBox, that height
+        mismatch pushes every OTHER column's body rows out of alignment with it, most
+        visibly the Variation column always ending up offset from the rest. Reserving
+        identical header height on every column, live-verified against a real Voila
+        table, is what keeps every column's first body row - and therefore every row -
+        on the same line."""
         widget = self._header_cells.get(key)
         if widget is not None:
             return widget
-        if kind in ("sample", "subbatch", "warning"):
-            widget = widgets.Label(
-                value=header_html, layout=widgets.Layout(width=self._LABEL_COLUMN_WIDTH)
+        width = (
+            self._WARNING_COLUMN_WIDTH
+            if kind == "warning"
+            else self._LABEL_COLUMN_WIDTH
+            if kind in ("sample", "subbatch")
+            else "180px"
+        )
+        text = widgets.HTML(
+            value=(
+                f"<div style='width:{width}; min-height:{self._HEADER_TEXT_MIN_HEIGHT}; "
+                "display:flex; align-items:flex-end; justify-content:center; "
+                f"text-align:center;'>{header_html}</div>"
+            )
+        )
+        if spec is None:
+            button_or_slot: widgets.Widget = widgets.Label(
+                value="", layout=widgets.Layout(height=self._HEADER_BUTTON_HEIGHT)
             )
         else:
-            text = widgets.HTML(
-                value=f"<div style='width:180px; text-align:center;'>{header_html}</div>"
+            populate_button = widgets.Button(
+                icon="arrow-down",
+                tooltip="Copy the first row's value into every row below",
+                layout=widgets.Layout(
+                    width="30px", height=self._HEADER_BUTTON_HEIGHT, margin="2px auto 0 auto"
+                ),
             )
-            if spec is None:
-                widget = text
-            else:
-                populate_button = widgets.Button(
-                    icon="arrow-down",
-                    tooltip="Copy the first row's value into every row below",
-                    layout=widgets.Layout(width="30px", margin="2px auto 0 auto"),
-                )
-                # Not in the Tab cycle - see the class docstring for why.
-                populate_button.tabbable = False
-                populate_button.on_click(lambda _button, s=spec: self._on_populate_column(s))
-                widget = widgets.VBox(
-                    [text, populate_button], layout=widgets.Layout(align_items="center")
-                )
+            # Not in the Tab cycle - see the class docstring for why.
+            populate_button.tabbable = False
+            populate_button.on_click(lambda _button, s=spec: self._on_populate_column(s))
+            button_or_slot = populate_button
+        widget = widgets.VBox([text, button_or_slot], layout=widgets.Layout(align_items="center"))
         self._header_cells[key] = widget
         return widget
 

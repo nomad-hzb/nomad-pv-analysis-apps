@@ -2100,7 +2100,9 @@ def test_varying_fields_matrix_shows_set_column_before_variation(fresh_state):
 
     columns = matrix.columns()
     assert columns.index("Subbatch") < columns.index("Variation")
-    assert matrix.header_widget("Subbatch").value == "Subbatch"
+    # header_widget returns the uniform [text, button-or-placeholder] VBox every column
+    # header now shares (see _header_for's docstring) - the text block is children[0].
+    assert "Subbatch" in matrix.header_widget("Subbatch").children[0].value
     # 1-based: variation_group_index=2 displays as Subbatch 3, matching subbatch_for_sample
     assert matrix.cell_widget(1, "Subbatch").value == "3"
 
