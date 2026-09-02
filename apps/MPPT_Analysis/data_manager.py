@@ -50,12 +50,21 @@ class MPPTRow(BaseModel):
 
 def fit_curve(t_data, y_data, model, frame_range=None):
     """Slice to frame_range (point indices), fit with model, return a result
-    dict or None if there aren't enough valid points to fit.
+    dict or None if there aren't enough valid points to fit at all.
 
     frame_range: (start, end) - end is the last index to include, or None for
     "to the end of the array". point_start/point_end in the result reflect
     the requested range (not shrunk by any NaN rows dropped internally), since
     that's what the user actually configured.
+
+    Points strictly fewer than model.n_params already fail via the exception
+    handler below (scipy's leastsq refuses to run when there are more free
+    parameters than data points) and return None like any other fit failure.
+    The boundary case - points exactly equal to model.n_params - is solvable
+    (an exact, zero-residual fit through every point) but has zero degrees of
+    freedom and is not statistically meaningful; that case succeeds but the
+    result carries a "warning" string flagging it, for the caller to surface
+    rather than silently present as a normal fit.
     """
     if frame_range is not None:
         start, end = frame_range
@@ -72,7 +81,7 @@ def fit_curve(t_data, y_data, model, frame_range=None):
     t_sliced = t_sliced[valid_mask]
     y_sliced = y_sliced[valid_mask]
 
-    if len(t_sliced) < 3:
+    if len(t_sliced) < 2:
         return None
 
     try:
@@ -91,7 +100,7 @@ def fit_curve(t_data, y_data, model, frame_range=None):
         else:
             params[param_name] = param_value
 
-    return {
+    result = {
         "time": t_sliced,
         "fitted_power": fitted_curve,
         "original_power": y_sliced,
@@ -99,6 +108,13 @@ def fit_curve(t_data, y_data, model, frame_range=None):
         "point_end": resolved_end,
         "params": params,
     }
+    if len(t_sliced) <= model.n_params:
+        result["warning"] = (
+            f"Only {len(t_sliced)} point(s) for a {model.n_params}-parameter model "
+            f"({model.abbreviated_name}) - the fit has no degrees of freedom and is "
+            "not statistically meaningful."
+        )
+    return result
 
 
 class DataManager:

@@ -248,6 +248,68 @@ class GUIComponents:
 
         return {"checkbox": checkbox, "text": text_input, "container": container}
 
+    def _build_full_fit_results_df(self):
+        """Every selected sample/curve, fitted or not - unfitted ones get an
+        explicit 'Not fitted' marker in every column rather than a blank cell.
+        Fitted rows include point range and an underdetermined-fit flag
+        alongside the model's own parameters, so this is also what the
+        Download tab's Fit_Results sheet exports (rule: don't silently drop
+        the same "say so" provenance the app itself shows)."""
+        dm = self.data_manager
+        curves = self.app_state.data["curves"]
+        sample_ids = self.app_state.data["sample_ids"]
+        selected_samples = self.app_state.data.get("selected_samples", [])
+
+        fitted_rows = []
+        not_fitted_keys = []
+        for sample_id in selected_samples:
+            curve_ids = dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)
+            known = [cid for (sid, cid) in self.app_state.fitted_curves_data if sid == sample_id]
+            for cid in known:
+                if cid not in curve_ids:
+                    curve_ids.append(cid)
+            if not curve_ids:
+                curve_ids = known or [0]
+
+            for curve_id in curve_ids:
+                fit = self.app_state.fitted_curves_data.get((sample_id, curve_id))
+                if fit is None:
+                    not_fitted_keys.append((sample_id, curve_id))
+                    continue
+                row = {
+                    "sample_id": sample_id,
+                    "curve_id": curve_id,
+                    "model": fit["model"].abbreviated_name,
+                    "n_frames": len(fit["time"]),
+                    "max_time_h": float(fit["time"].max()) if len(fit["time"]) else None,
+                    "point_start": fit.get("point_start"),
+                    "point_end": fit.get("point_end"),
+                    "note": "⚠️ underdetermined fit" if fit.get("warning") else "",
+                }
+                row.update(fit.get("params", {}))
+                fitted_rows.append(row)
+
+        fitted_df = (
+            pd.DataFrame(fitted_rows)
+            if fitted_rows
+            else pd.DataFrame(columns=["sample_id", "curve_id"])
+        )
+        columns = (
+            list(fitted_df.columns)
+            if not fitted_df.empty
+            else ["sample_id", "curve_id", "model", "n_frames", "max_time_h"]
+        )
+        not_fitted_rows = []
+        for sample_id, curve_id in not_fitted_keys:
+            row = dict.fromkeys(columns, "Not fitted")
+            row["sample_id"] = sample_id
+            row["curve_id"] = curve_id
+            not_fitted_rows.append(row)
+
+        if not_fitted_rows:
+            return pd.concat([fitted_df, pd.DataFrame(not_fitted_rows)], ignore_index=True)
+        return fitted_df
+
     def create_fitting_tab(self):
         """Create the curve fitting tab: model/range controls on the left, a
         live raw-data + fit preview on the right, apply-to-all-or-one-sample-
@@ -409,63 +471,12 @@ class GUIComponents:
                 )
                 display(go.FigureWidget(fig))
                 if fit is None:
-                    print("⚠️ Not enough points in the selected range to fit (need at least 3).")
-
-        def build_full_results_df():
-            """Every selected sample/curve, fitted or not - unfitted ones get an
-            explicit 'Not fitted' marker in every parameter column rather than a
-            blank cell."""
-            fitted_rows = []
-            not_fitted_keys = []
-            for sample_id in selected_samples:
-                curve_ids = dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)
-                known = [
-                    cid for (sid, cid) in self.app_state.fitted_curves_data if sid == sample_id
-                ]
-                for cid in known:
-                    if cid not in curve_ids:
-                        curve_ids.append(cid)
-                if not curve_ids:
-                    curve_ids = known or [0]
-
-                for curve_id in curve_ids:
-                    fit = self.app_state.fitted_curves_data.get((sample_id, curve_id))
-                    if fit is None:
-                        not_fitted_keys.append((sample_id, curve_id))
-                        continue
-                    row = {
-                        "sample_id": sample_id,
-                        "curve_id": curve_id,
-                        "model": fit["model"].abbreviated_name,
-                        "n_frames": len(fit["time"]),
-                        "max_time_h": float(fit["time"].max()) if len(fit["time"]) else None,
-                    }
-                    row.update(fit.get("params", {}))
-                    fitted_rows.append(row)
-
-            fitted_df = (
-                pd.DataFrame(fitted_rows)
-                if fitted_rows
-                else pd.DataFrame(columns=["sample_id", "curve_id"])
-            )
-            columns = (
-                list(fitted_df.columns)
-                if not fitted_df.empty
-                else ["sample_id", "curve_id", "model", "n_frames", "max_time_h"]
-            )
-            not_fitted_rows = []
-            for sample_id, curve_id in not_fitted_keys:
-                row = dict.fromkeys(columns, "Not fitted")
-                row["sample_id"] = sample_id
-                row["curve_id"] = curve_id
-                not_fitted_rows.append(row)
-
-            if not_fitted_rows:
-                return pd.concat([fitted_df, pd.DataFrame(not_fitted_rows)], ignore_index=True)
-            return fitted_df
+                    print("⚠️ Not enough points in the selected range to fit (need at least 2).")
+                elif fit.get("warning"):
+                    print(f"⚠️ {fit['warning']}")
 
         def refresh_results_panels():
-            full_df = build_full_results_df()
+            full_df = self._build_full_fit_results_df()
             with results_toggle.children[0]:
                 results_toggle.children[0].clear_output(wait=True)
                 display(HTML("<h4>Detailed Fit Results</h4>"))
@@ -533,7 +544,7 @@ class GUIComponents:
                             ).items():
                                 fitted[(sample_id, curve_id)] = fit
                         self.app_state.set_fit_results(fitted)
-                        fit_count = len(fitted)
+                        new_fits = fitted
                     else:
                         sample_id = sample_dropdown.value
                         if not sample_id:
@@ -543,10 +554,14 @@ class GUIComponents:
                             curves, sample_ids, sample_id, model, frame_range=frame_range
                         )
                         self.app_state.update_sample_fit_results(sample_id, fits)
-                        fit_count = len(fits)
+                        new_fits = {(sample_id, cid): fit for cid, fit in fits.items()}
 
+                    fit_count = len(new_fits)
                     if fit_count:
                         print(f"✅ Fitting completed! {fit_count} curve(s) fitted successfully")
+                        for (sid, cid), fit in new_fits.items():
+                            if fit.get("warning"):
+                                print(f"⚠️ {sid} (curve {cid}): {fit['warning']}")
                         if self.app_controller:
                             self.app_controller.enable_plotting_tab()
                     else:
@@ -903,9 +918,10 @@ class GUIComponents:
                 if include_fitted_data and self.app_state.fitted_curves_data:
                     self._add_fitted_data_sheet(writer)
 
-                # Sheet 3: Fit results
-                if self.app_state.has_fit_results():
-                    self.app_state.fit_results.to_excel(
+                # Sheet 3: Fit results - every selected sample/curve, including
+                # ones not yet fitted (matches the Curve Fitting tab's own table)
+                if self.app_state.has_selected_samples():
+                    self._build_full_fit_results_df().to_excel(
                         writer, sheet_name="Fit_Results", index=False
                     )
 

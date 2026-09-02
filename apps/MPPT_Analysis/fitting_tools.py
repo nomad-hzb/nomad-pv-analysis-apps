@@ -7,11 +7,12 @@ from scipy.special import erfc
 
 # class to store information about a model and results obtained with it
 class fit_model:
-    def __init__(self, name, parfunc, abbreviated_name, columns, description=""):
+    def __init__(self, name, parfunc, abbreviated_name, columns, n_params, description=""):
         self.name = name
         self.parfunc = parfunc
         self.abbreviated_name = abbreviated_name
         self.columns = columns
+        self.n_params = n_params  # free parameters actually fit (columns also has R2/T80/LEY etc.)
         self.description = description
         self.do = True
         self.data = pd.DataFrame()
@@ -369,6 +370,7 @@ available_fit_model_list = [
         parfunc=stretched_exponential_params,
         abbreviated_name="Stretched Exp",
         columns=["A", "tau", "beta", "R2", "T80", "LEY"],
+        n_params=3,
         description=r"PCE(t) = A \cdot e^{-(t/\tau)^\beta}",
     ),
     fit_model(
@@ -376,6 +378,7 @@ available_fit_model_list = [
         parfunc=linear_params,
         abbreviated_name="Linear",
         columns=["slope", "intercept", "R2", "t80", "LEY"],
+        n_params=2,
         description=r"PCE(t) = \text{slope} \cdot t + \text{intercept}",
     ),
     fit_model(
@@ -383,6 +386,7 @@ available_fit_model_list = [
         parfunc=exponential_params,
         abbreviated_name="Exponential",
         columns=["amplitude", "decay", "R2", "t80", "LEY"],
+        n_params=2,
         description=r"PCE(t) = A \cdot e^{-t/\tau}",
     ),
     fit_model(
@@ -390,6 +394,7 @@ available_fit_model_list = [
         parfunc=biexponential_params,
         abbreviated_name="Biexponential",
         columns=["A1", "tau1", "A2", "tau2", "R2", "tS", "Ts80", "LEY"],
+        n_params=4,
         description=r"PCE(t) = A_1 \cdot e^{-t/\tau_1} + A_2 \cdot e^{-t/\tau_2}",
     ),
     fit_model(
@@ -397,6 +402,7 @@ available_fit_model_list = [
         parfunc=logistic_params,
         abbreviated_name="Logistic+Exp",
         columns=["A", "tau", "L", "k", "x0", "R2", "tS", "Ts80", "LEY"],
+        n_params=5,
         description=r"PCE(t) = A \cdot e^{-t/\tau} + \frac{L}{1 + e^{-k(t - x_0)}}",
     ),
     fit_model(
@@ -404,6 +410,7 @@ available_fit_model_list = [
         parfunc=erfc_params,
         abbreviated_name="ERFC+Linear",
         columns=["PCE0", "k", "t0", "b", "R2", "T80", "T80_linear", "LEY"],
+        n_params=4,
         description=r"PCE(t) = \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{t-t_0}{b}\right)(PCE_0 - k \cdot t)",
     ),
 ]
