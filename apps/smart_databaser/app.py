@@ -132,7 +132,11 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
             finish_section,
             debug_panel,
         ],
-        layout=widgets.Layout(padding="15px", max_width="1100px"),
+        # 98vw (not a fixed pixel cap) so the app - and in particular the Varying Fields
+        # matrix, which can get wide with several varying columns - uses close to the
+        # full browser window width before that table's own horizontal scrollbar
+        # (VaryingFieldsMatrix._columns_box) ever needs to kick in.
+        layout=widgets.Layout(padding="15px", max_width="98vw"),
     )
 
     _ui_widget_ids = set(widgets.Widget.widgets.keys()) - ids_before

@@ -1086,7 +1086,17 @@ class VaryingFieldsMatrix(widgets.VBox):
     def __init__(self, state: ExperimentState, on_change=None):
         self.state = state
         self.on_change = on_change
-        self._columns_box = widgets.HBox([])
+        # overflow="auto": with enough varying columns, natural (unshrunk - see each
+        # column VBox's own flex="0 0 auto" below) column widths can exceed whatever
+        # width this widget is given by its parent. Without this, the browser's default
+        # flex behavior SHRINKS every column below its intended width to fit instead of
+        # overflowing - live-verified as the actual cause of "the table loses its
+        # format" with more than ~2 varying columns: each column's own container
+        # visibly narrower than the fixed-width Text input inside it, so inputs spilled
+        # into neighboring columns. A single shared horizontal scrollbar for the whole
+        # table (header row included, since headers live inside the same per-column
+        # VBoxes) is the fix instead - not per-cell scrolling.
+        self._columns_box = widgets.HBox([], layout=widgets.Layout(overflow="auto", width="100%"))
         self._column_boxes: dict[object, widgets.VBox] = {}
         self._header_cells: dict[object, widgets.Widget] = {}
         self._label_cells: dict[tuple[object, int], widgets.Label] = {}
@@ -1321,7 +1331,12 @@ class VaryingFieldsMatrix(widgets.VBox):
 
             column_box = self._column_boxes.get(key)
             if column_box is None:
-                column_box = widgets.VBox([], layout=widgets.Layout(align_items="center"))
+                # flex="0 0 auto": keep this column at its natural (content-driven)
+                # width instead of the browser's default flex-shrink squeezing it below
+                # that to fit _columns_box - see this class's __init__ for why.
+                column_box = widgets.VBox(
+                    [], layout=widgets.Layout(align_items="center", flex="0 0 auto")
+                )
                 self._column_boxes[key] = column_box
             column_box.children = column_widgets
             column_boxes.append(column_box)
