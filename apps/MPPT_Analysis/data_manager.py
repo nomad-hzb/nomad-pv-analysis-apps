@@ -508,6 +508,11 @@ class DataManager:
         "time", "params").
         computed_by: string identifying the app/user, stored in fit_computed_by.
 
+        For each standardized metric (T95/T80/Ts95/Ts80/initial_stabilization_time)
+        the current model didn't produce, explicitly removes that field rather
+        than leaving it untouched - otherwise a stale value from a previous fit
+        with a different model would linger, misrepresenting the current fit.
+
         Returns a list of {"sample_id", "curve_id", "success", "message"} -
         one entry per (sample_id, curve_id), attempted unconditionally; the
         caller surfaces "message" as-is (NOMAD's own error detail on
@@ -550,6 +555,13 @@ class DataManager:
                     "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
                 },
             ]
+            # Declare the full desired state for every standardized metric this app
+            # can produce - upsert what this model computed, explicitly remove
+            # whatever it didn't. Without the "remove" branch, re-fitting a sample
+            # with a model that produces fewer metrics (e.g. switching from
+            # Biexponential, which writes Ts80, to Linear, which doesn't) would
+            # leave the previous fit's Ts80 stale in NOMAD instead of reflecting
+            # what this fit actually produced.
             for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
                 value = next((params[a] for a in aliases if a in params), None)
                 if value is not None:
@@ -559,6 +571,8 @@ class DataManager:
                             "new_value": float(value) * 3600,
                         }
                     )
+                else:
+                    changes.append({"path": f"data.results.0.{schema_field}", "action": "remove"})
 
             try:
                 edit_entry(self.url, self.token, entry_id, changes)
