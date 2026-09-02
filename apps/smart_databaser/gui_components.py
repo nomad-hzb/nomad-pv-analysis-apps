@@ -1078,12 +1078,9 @@ class VaryingFieldsMatrix(widgets.VBox):
 
     _LABEL_COLUMN_WIDTH = "70px"
     _WARNING_COLUMN_WIDTH = "220px"
-    # Every header's text block reserves this much height regardless of whether it's a
-    # one-line label ("Sample", "Variation", ...) or a two-line "<process><br><field>"
-    # one, and every header's button slot (populate button, or a same-size blank
-    # placeholder when a column has none) reserves this height too - see _header_for's
-    # docstring for why both need to be uniform across every column kind.
-    _HEADER_TEXT_MIN_HEIGHT = "36px"
+    # Every header's button slot (the real populate button, or a same-size blank
+    # placeholder for a column that doesn't have one) reserves this height, so it's
+    # uniform across every column kind - see _header_for's docstring.
     _HEADER_BUTTON_HEIGHT = "28px"
 
     def __init__(self, state: ExperimentState, on_change=None):
@@ -1125,9 +1122,13 @@ class VaryingFieldsMatrix(widgets.VBox):
         if varying_fields is None:
             varying_fields = iter_varying_fields(self.state)
         variation_spec = self.state.experiment_info_fields.get("Variation")
+        # Every header's text is forced to two real HTML lines (a leading blank "<br>"
+        # for headers that are conceptually single-line) - see _header_for's docstring
+        # for why matching REAL rendered line count, not a guessed CSS min-height, is
+        # what actually keeps every column's header the same height.
         columns: list[_MatrixColumn] = [
-            ("__sample__", "sample", None, "Sample", "", "Sample"),
-            ("__subbatch__", "subbatch", None, "Subbatch", "", "Subbatch"),
+            ("__sample__", "sample", None, "<br>Sample", "", "Sample"),
+            ("__subbatch__", "subbatch", None, "<br>Subbatch", "", "Subbatch"),
         ]
         for label, spec in varying_fields:
             process_part, field_part = _split_varying_field_label(label)
@@ -1135,9 +1136,16 @@ class VaryingFieldsMatrix(widgets.VBox):
                 (id(spec), "field", spec, f"{process_part}<br>{field_part}", field_part, label)
             )
         columns.append(
-            ("__variation__", "variation", variation_spec, "Variation", "Variation", "Variation")
+            (
+                "__variation__",
+                "variation",
+                variation_spec,
+                "<br>Variation",
+                "Variation",
+                "Variation",
+            )
         )
-        columns.append(("__warning__", "warning", None, "", "", None))
+        columns.append(("__warning__", "warning", None, "&nbsp;<br>&nbsp;", "", None))
         return columns
 
     def _drop_stale(self, columns: list[_MatrixColumn], sample_numbers: list[int]) -> None:
@@ -1165,20 +1173,26 @@ class VaryingFieldsMatrix(widgets.VBox):
         self, key: object, kind: str, spec: ProcessFieldSpec | None, header_html: str
     ) -> widgets.Widget:
         """Every column's header - regardless of kind - is the SAME two-part shape: a
-        text block with a reserved minimum height (so a one-line label like "Sample" or
-        "Variation" and a two-line "<process><br><field>" one still occupy the same
-        vertical space, bottom-aligned via flexbox within that reserved height) followed
-        by a button-height slot (the real populate button for a field/Variation column,
-        or an equal-height blank placeholder for columns that don't have one - Sample/
-        Subbatch/the warning column). Without this, a field column's taller two-line-
-        plus-button header sits below a one-line header with no button (Sample/Subbatch)
-        or no second header row at all (Variation, one line + button, still shorter than
-        a two-line one) - since each column is an independently-packed VBox, that height
-        mismatch pushes every OTHER column's body rows out of alignment with it, most
-        visibly the Variation column always ending up offset from the rest. Reserving
-        identical header height on every column, live-verified against a real Voila
-        table, is what keeps every column's first body row - and therefore every row -
-        on the same line."""
+        two-line text block followed by a button-height slot (the real populate button
+        for a field/Variation column, or an equal-height blank placeholder for columns
+        that don't have one - Sample/Subbatch/the warning column).
+
+        The text block is always given TWO REAL lines - a genuine leading `<br>` for
+        headers that are conceptually single-line ("Sample", "Variation", the blank
+        warning header - see _current_columns) - rather than one line stretched to a
+        guessed CSS min-height. An earlier version tried the min-height approach (a
+        fixed pixel value meant to match a two-line block's height) and it was
+        confirmed WRONG by live measurement: a real two-line "<process><br><field>"
+        block rendered taller than the chosen min-height (the browser's actual line
+        height for this font exceeded the guess), so single-line columns still stayed
+        visibly shorter than field columns even with a "matching" min-height set -
+        the two-line content simply overflowed past the floor. Forcing every header to
+        genuinely contain two rendered lines sidesteps needing to guess a pixel value
+        at all: the browser lays out two real lines the same way for every column,
+        so their heights come out equal for free. Without this, each column's header
+        naturally ends up a different height (since each column is an independently-
+        packed VBox), which pushes every OTHER column's body rows out of alignment with
+        it - live-verified against a real Voila table both before AND after this fix."""
         widget = self._header_cells.get(key)
         if widget is not None:
             return widget
@@ -1190,11 +1204,7 @@ class VaryingFieldsMatrix(widgets.VBox):
             else "180px"
         )
         text = widgets.HTML(
-            value=(
-                f"<div style='width:{width}; min-height:{self._HEADER_TEXT_MIN_HEIGHT}; "
-                "display:flex; align-items:flex-end; justify-content:center; "
-                f"text-align:center;'>{header_html}</div>"
-            )
+            value=f"<div style='width:{width}; text-align:center;'>{header_html}</div>"
         )
         if spec is None:
             button_or_slot: widgets.Widget = widgets.Label(
