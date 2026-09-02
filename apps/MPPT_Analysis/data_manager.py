@@ -32,6 +32,60 @@ _ISOS_METRIC_ALIASES = {
     "Ts80": ["Ts80", "ts80"],
     "initial_stabilization_time": ["tS", "ts"],
 }
+_ISOS_ALIAS_COLUMNS = {alias for aliases in _ISOS_METRIC_ALIASES.values() for alias in aliases}
+# model.columns entries that go to their own dedicated schema field, not the
+# generic fit_parameters bag: the ISOS metrics above, plus R2 -> fit_r_squared
+# and LEY -> lifetime_energy_yield.
+_DEDICATED_FIELD_COLUMNS = _ISOS_ALIAS_COLUMNS | {"R2", "LEY"}
+
+# Everything else in a model's columns (its actual free parameters, e.g. A,
+# tau, beta, slope, intercept, PCE0, k, t0, b, ...) goes into fit_parameters -
+# a generic {name, value, unit, error} bag, since the parameter set genuinely
+# varies per model. (value, unit, factor): factor converts the app's internal
+# value (hours for time, mW/cm^2 for power-density-like amplitudes) into the
+# unit written to NOMAD - times 3600 for hours->seconds, matching every other
+# time-based field this app writes. Derived by dimensional analysis of each
+# model's own equation in this file's docstrings/comments - not guessed.
+# Same parameter *name* can mean different things in different models (e.g.
+# "k" is 1/time in Logistic+Exp but power-density/time in ERFC+Linear), so
+# this is keyed by model.abbreviated_name, not by parameter name alone.
+_LEFTOVER_PARAM_UNITS = {
+    "Stretched Exp": {
+        "A": ("mW/cm^2", 1.0),
+        "tau": ("s", 3600.0),
+        "beta": ("", 1.0),
+    },
+    "Linear": {
+        "slope": ("mW/cm^2/s", 1.0 / 3600.0),
+        "intercept": ("mW/cm^2", 1.0),
+    },
+    "Exponential": {
+        "amplitude": ("mW/cm^2", 1.0),
+        "decay": ("s", 3600.0),
+    },
+    "Biexponential": {
+        "A1": ("mW/cm^2", 1.0),
+        "tau1": ("s", 3600.0),
+        "A2": ("mW/cm^2", 1.0),
+        "tau2": ("s", 3600.0),
+    },
+    "Logistic+Exp": {
+        "A": ("mW/cm^2", 1.0),
+        "tau": ("s", 3600.0),
+        "L": ("mW/cm^2", 1.0),
+        "k": ("1/s", 1.0 / 3600.0),
+        "x0": ("s", 3600.0),
+    },
+    "ERFC+Linear": {
+        "PCE0": ("mW/cm^2", 1.0),
+        "k": ("mW/cm^2/s", 1.0 / 3600.0),
+        "t0": ("s", 3600.0),
+        "b": ("s", 3600.0),
+        "T80_linear": ("s", 3600.0),
+    },
+}
+
+RESAMPLE_POINTS = 200  # fitted_time/fitted_power_density point cap agreed with nomad-baseclasses
 
 
 class MPPTRow(BaseModel):
@@ -87,7 +141,7 @@ def fit_curve(t_data, y_data, model, frame_range=None):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            fit_params, fitted_curve = model.parfunc(y_sliced, t_sliced)
+            fit_params, fitted_curve, lmfit_result = model.parfunc(y_sliced, t_sliced)
     except Exception:
         logger.warning("Fit failed for model %s", model.name, exc_info=True)
         return None
@@ -107,6 +161,10 @@ def fit_curve(t_data, y_data, model, frame_range=None):
         "point_start": start,
         "point_end": resolved_end,
         "params": params,
+        # kept only to let write_fit_results_to_nomad evaluate the model at a
+        # dense, evenly-spaced-in-time grid on demand (see _resample_fit_curve) -
+        # not otherwise touched by the app itself.
+        "lmfit_result": lmfit_result,
     }
     if len(t_sliced) <= model.n_params:
         result["warning"] = (
@@ -115,6 +173,25 @@ def fit_curve(t_data, y_data, model, frame_range=None):
             "not statistically meaningful."
         )
     return result
+
+
+def _resample_fit_curve(lmfit_result, time_h):
+    """Evaluate a fitted model at RESAMPLE_POINTS points evenly spaced in time
+    (not a subsample of the original, possibly unevenly-sampled, data points),
+    spanning exactly [time_h[0], time_h[-1]] so the curve's endpoints line up
+    with fit_range_start/fit_range_end. Returns (time_seconds, power_density)
+    numpy arrays, or (None, None) if there's no fit range to resample.
+
+    Uses the model's own declared independent variable name (lmfit exposes it
+    as model.independent_vars[0]) rather than hardcoding "t" or "x", since
+    fitting_tools.py's models are a mix of both conventions.
+    """
+    if lmfit_result is None or len(time_h) == 0:
+        return None, None
+    resample_time_h = np.linspace(time_h[0], time_h[-1], RESAMPLE_POINTS)
+    indep_var = lmfit_result.model.independent_vars[0]
+    resample_power = lmfit_result.eval(params=lmfit_result.params, **{indep_var: resample_time_h})
+    return resample_time_h * 3600, np.asarray(resample_power)
 
 
 class DataManager:
@@ -573,6 +650,65 @@ class DataManager:
                     )
                 else:
                     changes.append({"path": f"data.results.0.{schema_field}", "action": "remove"})
+
+            # R2 and LEY are computed by every model (unlike the model-specific
+            # parameters below), so they get their own typed fields rather than
+            # living in the generic fit_parameters bag.
+            if "R2" in params:
+                changes.append(
+                    {"path": "data.results.0.fit_r_squared", "new_value": float(params["R2"])}
+                )
+            else:
+                changes.append({"path": "data.results.0.fit_r_squared", "action": "remove"})
+            if "LEY" in params:
+                changes.append(
+                    {
+                        "path": "data.results.0.lifetime_energy_yield",
+                        "new_value": float(params["LEY"]),
+                    }
+                )
+            else:
+                changes.append({"path": "data.results.0.lifetime_energy_yield", "action": "remove"})
+
+            # Everything else this model actually fit (A, tau, beta, slope,
+            # intercept, ...) - always upsert the full list, even if empty, so a
+            # re-fit with a model that has fewer/different parameters doesn't
+            # leave a previous fit's parameters stale (same reasoning as the
+            # ISOS metrics above).
+            leftover_units = _LEFTOVER_PARAM_UNITS.get(model.abbreviated_name, {})
+            fit_parameters = []
+            for column in model.columns:
+                if column in _DEDICATED_FIELD_COLUMNS or column not in params:
+                    continue
+                unit_str, factor = leftover_units.get(column, ("", 1.0))
+                entry = {
+                    "name": column,
+                    "value": float(params[column]) * factor,
+                    "unit": unit_str,
+                }
+                error_raw = params.get(f"{column}_error")
+                if error_raw is not None:
+                    entry["error"] = float(error_raw) * factor
+                fit_parameters.append(entry)
+            changes.append({"path": "data.results.0.fit_parameters", "new_value": fit_parameters})
+
+            # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
+            # the fit range in time (not a subsample of the raw data points),
+            # matching the convention agreed with nomad-baseclasses.
+            resample_time_s, resample_power = _resample_fit_curve(fit.get("lmfit_result"), time_h)
+            if resample_time_s is not None:
+                changes.append(
+                    {
+                        "path": "data.results.0.fitted_time",
+                        "new_value": resample_time_s.tolist(),
+                    }
+                )
+                changes.append(
+                    {
+                        "path": "data.results.0.fitted_power_density",
+                        "new_value": resample_power.tolist(),
+                    }
+                )
 
             try:
                 edit_entry(self.url, self.token, entry_id, changes)

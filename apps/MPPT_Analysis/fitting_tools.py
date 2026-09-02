@@ -92,7 +92,7 @@ def stretched_exponential_params(power, times):
             T80_capped,
             lifetime_energy,
         ]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 def linear_params(power, times):
@@ -123,7 +123,7 @@ def linear_params(power, times):
             t80_capped,
             lifetime_energy,
         ]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 def exponential_params(power, times):
@@ -156,7 +156,7 @@ def exponential_params(power, times):
             t80_capped,
             lifetime_energy,
         ]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 def biexponential_params(power, times):
@@ -210,7 +210,7 @@ def biexponential_params(power, times):
             Ts80_capped,
             lifetime_energy,
         ]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 def logistic_params(power, times):
@@ -256,7 +256,7 @@ def logistic_params(power, times):
         ]
     else:
         result_values = [A, tau, L, k, x0, result.rsquared, tS_capped, Ts80_capped, lifetime_energy]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 def erfc_params(power, times):
@@ -300,7 +300,7 @@ def erfc_params(power, times):
             T80_linear,
             lifetime_energy,
         ]
-    return result_values, result.best_fit
+    return result_values, result.best_fit, result
 
 
 # ------------------------
