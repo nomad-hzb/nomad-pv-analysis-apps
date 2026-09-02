@@ -4,6 +4,7 @@ GUI components for MPPT Analysis App
 
 import base64
 import io
+import os
 import zipfile
 from datetime import datetime
 
@@ -15,6 +16,8 @@ from IPython.display import HTML, display
 from plotly.subplots import make_subplots
 
 from hysprint_utils.batch_selection import create_batch_selection
+
+APP_VERSION = "0.2.0"
 
 
 class GUIComponents:
@@ -246,8 +249,17 @@ class GUIComponents:
         return {"checkbox": checkbox, "text": text_input, "container": container}
 
     def create_fitting_tab(self):
-        """Create the curve fitting tab"""
+        """Create the curve fitting tab: model/range controls on the left, a
+        live raw-data + fit preview on the right, apply-to-all-or-one-sample-
+        at-a-time fitting, and a results table covering every selected sample
+        (fitted or not)."""
+        from data_manager import fit_curve
         from fitting_tools import available_fit_model_list
+
+        dm = self.data_manager
+        curves = self.app_state.data["curves"]
+        sample_ids = self.app_state.data["sample_ids"]
+        selected_samples = list(self.app_state.data.get("selected_samples", []))
 
         model_options = [
             (f"{model.abbreviated_name}", i) for i, model in enumerate(available_fit_model_list)
@@ -257,40 +269,34 @@ class GUIComponents:
             options=model_options,
             value=0,
             description="Model:",
-            layout=widgets.Layout(width="400px"),
+            layout=widgets.Layout(width="380px"),
             style={"description_width": "initial"},
         )
-
-        # Compute the minimum point count across all selected curves so the
-        # slider range is guaranteed to be valid for every curve being fitted.
-        _point_counts = []
-        if self.app_state.has_curves_data():
-            _curves = self.app_state.data["curves"]
-            _selected = self.app_state.data.get("selected_samples", [])
-            for _sid in _selected:
-                try:
-                    _sd = _curves.loc[_sid]
-                    if hasattr(_sd.index, "nlevels") and _sd.index.nlevels > 1:
-                        for _cidx in _sd.index.get_level_values(0).unique():
-                            _point_counts.append(len(_sd.loc[_cidx]))
-                    else:
-                        _point_counts.append(len(_sd))
-                except (KeyError, IndexError):
-                    continue
-        _min_points = min(_point_counts) if _point_counts else 100
+        formula_display = widgets.HTMLMath(value="")
 
         frame_range_selector = widgets.IntRangeSlider(
-            value=(0, _min_points - 1),
+            value=(0, 0),
             min=0,
-            max=_min_points - 1,
+            max=0,
             step=1,
             description="Point Range:",
-            layout=widgets.Layout(width="500px"),
+            continuous_update=False,  # refit/redraw the preview only on release, not every drag tick
+            layout=widgets.Layout(width="380px"),
             style={"description_width": "initial"},
         )
-        frame_range_info = widgets.HTML(
-            value=f"<small>0 – {_min_points - 1} measurement points "
-            f"(limited to shortest measurement among selected samples)</small>"
+        frame_range_info = widgets.HTML(value="")
+
+        apply_to_all_checkbox = widgets.Checkbox(
+            value=True,
+            description="Apply to all selected samples",
+            indent=False,
+        )
+        sample_dropdown = widgets.Dropdown(
+            options=selected_samples,
+            value=selected_samples[0] if selected_samples else None,
+            description="Sample:",
+            layout=widgets.Layout(width="380px", display="none"),
+            style={"description_width": "initial"},
         )
 
         fit_button = widgets.Button(
@@ -298,19 +304,31 @@ class GUIComponents:
             button_style="primary",
             layout=widgets.Layout(width="200px"),
         )
-
         fit_status = widgets.Output()
-        formula_display = widgets.HTMLMath(value="")
+        preview_output = widgets.Output()
 
         results_toggle = widgets.Accordion(
             children=[widgets.Output()], titles=("Show all fitting results",)
         )
-        results_toggle.selected_index = None
+        results_toggle.selected_index = 0
 
         stats_toggle = widgets.Accordion(
             children=[widgets.Output()], titles=("Statistical Summary",)
         )
-        stats_toggle.selected_index = 0
+        stats_toggle.selected_index = None
+
+        def _sample_point_count(sample_id):
+            lengths = []
+            for curve_id in dm.get_curve_ids_for_sample(curves, sample_ids, sample_id):
+                t_data, _ = dm.get_raw_curve(curves, sample_ids, sample_id, curve_id)
+                if t_data is not None:
+                    lengths.append(len(t_data))
+            return min(lengths) if lengths else 0
+
+        def _current_preview_sample():
+            if apply_to_all_checkbox.value:
+                return selected_samples[0] if selected_samples else None
+            return sample_dropdown.value
 
         def update_formula(change):
             model = available_fit_model_list[model_selector.value]
@@ -319,106 +337,350 @@ class GUIComponents:
                 f"<b>Selected Model:</b> $${model.description}$$<br><b>Parameters:</b> {params}"
             )
 
+        def update_range_bounds(change=None):
+            if apply_to_all_checkbox.value:
+                n_points = min((_sample_point_count(sid) for sid in selected_samples), default=0)
+                suffix = " (limited to shortest measurement among selected samples)"
+            else:
+                n_points = (
+                    _sample_point_count(sample_dropdown.value) if sample_dropdown.value else 0
+                )
+                suffix = ""
+            new_max = max(n_points - 1, 0)
+            frame_range_selector.max = new_max
+            frame_range_selector.value = (0, new_max)
+            frame_range_info.value = f"<small>0 – {new_max} measurement points{suffix}</small>"
+
+        def update_preview(change=None):
+            sample_id = _current_preview_sample()
+            with preview_output:
+                preview_output.clear_output(wait=True)
+                if not sample_id:
+                    print("Select a sample to preview.")
+                    return
+
+                t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, 0)
+                if t_data is None or len(y_data) == 0:
+                    print(f"No curve data available for {sample_id}.")
+                    return
+
+                start, end = frame_range_selector.value
+                model = available_fit_model_list[model_selector.value]
+
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.arange(len(y_data)),
+                        y=y_data,
+                        mode="lines",
+                        name="Raw data",
+                        line=dict(width=2, color="#1f77b4"),
+                    )
+                )
+                fig.add_vline(x=start, line_dash="dash", line_color="green")
+                fig.add_vline(x=end, line_dash="dash", line_color="green")
+
+                fit = fit_curve(t_data, y_data, model, (start, end))
+                if fit is not None:
+                    x_fit = np.arange(
+                        fit["point_start"], fit["point_start"] + len(fit["fitted_power"])
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=fit["fitted_power"],
+                            mode="lines",
+                            name="Fit",
+                            line=dict(width=2, color="red", dash="dash"),
+                        )
+                    )
+
+                curve_note = (
+                    ""
+                    if len(dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)) <= 1
+                    else " (curve 0)"
+                )
+                fig.update_layout(
+                    title=f"Preview - {sample_id}{curve_note}",
+                    xaxis_title="Measurement point index",
+                    yaxis_title="Power Density",
+                    height=450,
+                    margin=dict(t=40),
+                )
+                display(go.FigureWidget(fig))
+                if fit is None:
+                    print("⚠️ Not enough points in the selected range to fit (need at least 3).")
+
+        def build_full_results_df():
+            """Every selected sample/curve, fitted or not - unfitted ones get an
+            explicit 'Not fitted' marker in every parameter column rather than a
+            blank cell."""
+            fitted_rows = []
+            not_fitted_keys = []
+            for sample_id in selected_samples:
+                curve_ids = dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)
+                known = [
+                    cid for (sid, cid) in self.app_state.fitted_curves_data if sid == sample_id
+                ]
+                for cid in known:
+                    if cid not in curve_ids:
+                        curve_ids.append(cid)
+                if not curve_ids:
+                    curve_ids = known or [0]
+
+                for curve_id in curve_ids:
+                    fit = self.app_state.fitted_curves_data.get((sample_id, curve_id))
+                    if fit is None:
+                        not_fitted_keys.append((sample_id, curve_id))
+                        continue
+                    row = {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "model": fit["model"].abbreviated_name,
+                        "n_frames": len(fit["time"]),
+                        "max_time_h": float(fit["time"].max()) if len(fit["time"]) else None,
+                    }
+                    row.update(fit.get("params", {}))
+                    fitted_rows.append(row)
+
+            fitted_df = (
+                pd.DataFrame(fitted_rows)
+                if fitted_rows
+                else pd.DataFrame(columns=["sample_id", "curve_id"])
+            )
+            columns = (
+                list(fitted_df.columns)
+                if not fitted_df.empty
+                else ["sample_id", "curve_id", "model", "n_frames", "max_time_h"]
+            )
+            not_fitted_rows = []
+            for sample_id, curve_id in not_fitted_keys:
+                row = dict.fromkeys(columns, "Not fitted")
+                row["sample_id"] = sample_id
+                row["curve_id"] = curve_id
+                not_fitted_rows.append(row)
+
+            if not_fitted_rows:
+                return pd.concat([fitted_df, pd.DataFrame(not_fitted_rows)], ignore_index=True)
+            return fitted_df
+
+        def refresh_results_panels():
+            full_df = build_full_results_df()
+            with results_toggle.children[0]:
+                results_toggle.children[0].clear_output(wait=True)
+                display(HTML("<h4>Detailed Fit Results</h4>"))
+                if full_df.empty:
+                    print("No samples selected.")
+                else:
+                    display(
+                        HTML(
+                            '<div style="overflow-x:auto;">'
+                            + full_df.to_html(index=False, float_format="%.4f")
+                            + "</div>"
+                        )
+                    )
+
+            with stats_toggle.children[0]:
+                stats_toggle.children[0].clear_output(wait=True)
+                display(HTML("<h4>Statistical Summary</h4>"))
+                if self.app_state.has_fit_results():
+                    numerical_cols = self.app_state.fit_results.select_dtypes(
+                        include=[np.number]
+                    ).columns
+                    if len(numerical_cols) > 0:
+                        stats_df = self.app_state.fit_results[numerical_cols].describe()
+                        display(
+                            HTML(
+                                '<div style="overflow-x:auto;">'
+                                + stats_df.to_html(float_format="%.4f")
+                                + "</div>"
+                            )
+                        )
+                    else:
+                        print("No numerical parameters to summarize")
+                else:
+                    print("No fitting results available yet.")
+
+        def on_mode_toggle(change):
+            sample_dropdown.layout.display = "none" if apply_to_all_checkbox.value else ""
+            fit_button.description = (
+                "Fit All Curves" if apply_to_all_checkbox.value else "Fit This Sample"
+            )
+            if not apply_to_all_checkbox.value and not sample_dropdown.value and selected_samples:
+                sample_dropdown.value = selected_samples[0]
+            update_range_bounds()
+            update_preview()
+
         def perform_fitting(b):
-            if not self.app_state.has_selected_samples():
+            if not selected_samples:
                 with fit_status:
                     fit_status.clear_output()
                     print("⚠️ No samples selected. Please complete sample selection first.")
                 return
 
+            model = available_fit_model_list[model_selector.value]
+            frame_range = frame_range_selector.value
+
             with fit_status:
                 fit_status.clear_output()
-                print("🔄 Fitting curves...")
-
+                print("🔄 Fitting...")
                 try:
-                    model = available_fit_model_list[model_selector.value]
-
-                    # Get both results and fitted curves data
-                    _start, _end = frame_range_selector.value
-                    _frame_range = (_start, None if _end >= _min_points - 1 else _end)
-                    fit_results, fitted_curves_data = self.data_manager.fit_all_samples_lmfit(
-                        self.app_state.data["curves"],
-                        self.app_state.data["sample_ids"],
-                        self.app_state.data["selected_samples"],
-                        model,
-                        frame_range=_frame_range,
-                    )
-
-                    self.app_state.set_fit_results(fit_results, fitted_curves_data, model)
-
-                    if self.app_state.has_fit_results():
-                        print(
-                            f"✅ Fitting completed! {len(fit_results)} curves fitted successfully"
+                    if apply_to_all_checkbox.value:
+                        fitted = {}
+                        for sample_id in selected_samples:
+                            for curve_id, fit in dm.fit_sample(
+                                curves, sample_ids, sample_id, model, frame_range=frame_range
+                            ).items():
+                                fitted[(sample_id, curve_id)] = fit
+                        self.app_state.set_fit_results(fitted)
+                        fit_count = len(fitted)
+                    else:
+                        sample_id = sample_dropdown.value
+                        if not sample_id:
+                            print("⚠️ No sample selected.")
+                            return
+                        fits = dm.fit_sample(
+                            curves, sample_ids, sample_id, model, frame_range=frame_range
                         )
+                        self.app_state.update_sample_fit_results(sample_id, fits)
+                        fit_count = len(fits)
 
-                        with results_toggle.children[0]:
-                            results_toggle.children[0].clear_output()
-                            display(HTML("<h4>Detailed Fit Results</h4>"))
-                            display(
-                                HTML(
-                                    '<div style="overflow-x:auto;">'
-                                    + fit_results.to_html(index=False, float_format="%.4f")
-                                    + "</div>"
-                                )
-                            )
-
-                        with stats_toggle.children[0]:
-                            stats_toggle.children[0].clear_output()
-                            display(HTML("<h4>Statistical Summary</h4>"))
-
-                            numerical_cols = fit_results.select_dtypes(include=[np.number]).columns
-                            if len(numerical_cols) > 0:
-                                stats_df = fit_results[numerical_cols].describe()
-                                display(
-                                    HTML(
-                                        '<div style="overflow-x:auto;">'
-                                        + stats_df.to_html(float_format="%.4f")
-                                        + "</div>"
-                                    )
-                                )
-                            else:
-                                print("No numerical parameters to summarize")
-
-                        # Enable plotting tab through app controller
+                    if fit_count:
+                        print(f"✅ Fitting completed! {fit_count} curve(s) fitted successfully")
                         if self.app_controller:
                             self.app_controller.enable_plotting_tab()
-
                     else:
                         print("❌ Fitting failed. No curves could be fitted successfully.")
                         print("This might be due to insufficient data points or numerical issues.")
-
                 except Exception as e:
                     print(f"❌ Error during fitting: {str(e)}")
                     import traceback
 
                     traceback.print_exc()
 
+            refresh_results_panels()
+            update_preview()
+
         update_formula(None)
+        update_range_bounds()
+        refresh_results_panels()
 
         model_selector.observe(update_formula, names="value")
+        model_selector.observe(update_preview, names="value")
+        frame_range_selector.observe(update_preview, names="value")
+        apply_to_all_checkbox.observe(on_mode_toggle, names="value")
+        sample_dropdown.observe(
+            lambda change: (update_range_bounds(), update_preview()), names="value"
+        )
         fit_button.on_click(perform_fitting)
 
-        controls = widgets.VBox(
+        left_column = widgets.VBox(
             [
-                widgets.HTML("<h3>Curve Fitting</h3>"),
-                widgets.HTML(
-                    f"<p>Fit mathematical models to {self.app_state.get_selected_samples_count()} selected samples.</p>"
-                ),
                 model_selector,
                 formula_display,
                 frame_range_selector,
                 frame_range_info,
                 fit_button,
                 fit_status,
-                stats_toggle,
+            ],
+            layout=widgets.Layout(width="420px"),
+        )
+        right_column = widgets.VBox(
+            [
+                widgets.HBox([apply_to_all_checkbox, sample_dropdown]),
+                preview_output,
+            ],
+            layout=widgets.Layout(width="700px"),
+        )
+
+        update_preview()
+
+        controls = widgets.VBox(
+            [
+                widgets.HTML("<h3>Curve Fitting</h3>"),
+                widgets.HTML(
+                    f"<p>Fit mathematical models to {len(selected_samples)} selected samples.</p>"
+                ),
+                widgets.HBox([left_column, right_column]),
                 results_toggle,
+                stats_toggle,
             ]
         )
 
         return controls
 
+    def _create_write_to_nomad_section(self):
+        """'Add fit results to NOMAD' button + explicit modify-the-database
+        warning, gated behind a second Confirm/Cancel step before anything is
+        actually written."""
+        write_button = widgets.Button(
+            description="Add fit results to NOMAD",
+            button_style="warning",
+            layout=widgets.Layout(width="260px"),
+        )
+        confirm_button = widgets.Button(
+            description="Confirm - write to NOMAD", button_style="danger"
+        )
+        cancel_button = widgets.Button(description="Cancel")
+        confirm_box = widgets.HBox(
+            [confirm_button, cancel_button], layout=widgets.Layout(display="none")
+        )
+        write_status = widgets.Output()
+
+        def on_write_click(b):
+            confirm_box.layout.display = ""
+            write_button.disabled = True
+            with write_status:
+                write_status.clear_output()
+                display(
+                    HTML(
+                        "<div style='padding:10px;border:1px solid #f0ad4e;background:#fcf8e3;'>"
+                        "⚠️ <b>This will modify existing values in the NOMAD database</b> "
+                        "for every fitted sample's entry (fit method, point range used, and "
+                        "any computed T95/T80/Ts95/Ts80/stabilization time). This cannot be "
+                        "undone from this app. Are you sure?</div>"
+                    )
+                )
+
+        def do_cancel(b):
+            confirm_box.layout.display = "none"
+            write_button.disabled = False
+            with write_status:
+                write_status.clear_output()
+
+        def do_confirm(b):
+            confirm_box.layout.display = "none"
+            write_button.disabled = False
+            with write_status:
+                write_status.clear_output()
+                if not self.app_state.fitted_curves_data:
+                    print("⚠️ No fitted curves to write.")
+                    return
+                print("🔄 Writing fit results to NOMAD...")
+                computed_by = f"MPPT_Analysis {APP_VERSION} ({os.environ.get('NOMAD_CLIENT_USER', 'unknown user')})"
+                outcomes = self.data_manager.write_fit_results_to_nomad(
+                    self.app_state.data.get("entries"),
+                    self.app_state.fitted_curves_data,
+                    computed_by,
+                )
+                write_status.clear_output()
+                for outcome in outcomes:
+                    icon = "✅" if outcome["success"] else "❌"
+                    print(
+                        f"{icon} {outcome['sample_id']} (curve {outcome['curve_id']}): "
+                        f"{outcome['message']}"
+                    )
+
+        write_button.on_click(on_write_click)
+        confirm_button.on_click(do_confirm)
+        cancel_button.on_click(do_cancel)
+
+        return widgets.VBox([write_button, confirm_box, write_status])
+
     def create_plotting_tab(self):
         """Create the plotting tab with curve and histogram plots"""
+        write_section = self._create_write_to_nomad_section()
+
         # Plot type selector
         plot_variable = widgets.Dropdown(
             options=[
@@ -477,8 +739,11 @@ class GUIComponents:
                         plot_variable.value, plot_style.value, show_fits_checkbox.value
                     )
                     if figs:
+                        # go.FigureWidget renders via the ipywidgets comm protocol; a
+                        # plain go.Figure relies on a notebook mimetype renderer that
+                        # isn't guaranteed to be registered (see commit 8928055).
                         for fig in figs:
-                            display(fig)
+                            display(go.FigureWidget(fig))
                     else:
                         print("⚠️ No curve data to plot.")
                 except Exception as e:
@@ -492,7 +757,7 @@ class GUIComponents:
                 try:
                     fig = self.plot_manager.plot_histograms()
                     if fig is not None:
-                        display(fig)
+                        display(go.FigureWidget(fig))
                     else:
                         print("⚠️ No histogram data available.")
                 except Exception as e:
@@ -512,6 +777,7 @@ class GUIComponents:
                 widgets.HTML(
                     f"<p>Plot analysis for {self.app_state.get_selected_samples_count()} selected samples with {self.app_state.get_fit_results_count()} fitted curves.</p>"
                 ),
+                write_section,
                 widgets.HBox([plot_variable, plot_style]),
                 show_fits_checkbox,
                 plot_button,

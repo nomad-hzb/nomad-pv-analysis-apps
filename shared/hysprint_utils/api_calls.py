@@ -8,6 +8,26 @@ import requests
 from hysprint_utils.config import ENTRY_TYPES
 
 
+def edit_entry(url, token, entry_id, changes):
+    """Patch fields on an existing entry's archive via NOMAD's own ELN-edit endpoint.
+
+    changes: list of {"path": <dotted path into the archive, e.g.
+    "data.results.0.T80">, "new_value": <value>, "action": "upsert"}
+    ("action" defaults to "upsert" server-side if omitted).
+
+    Raises requests.HTTPError on failure (400/403/404/422) - the response body
+    carries NOMAD's own detail/validation-error text, which callers should
+    surface as-is rather than replacing with a generic message.
+    """
+    response = requests.post(
+        f"{url}/entries/{entry_id}/edit",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"changes": changes},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def init_cache():
     import requests_cache
 

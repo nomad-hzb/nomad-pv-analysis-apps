@@ -5,6 +5,7 @@ Data management functions for MPPT Analysis App
 import json
 import logging
 import warnings
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,17 @@ from hysprint_utils.config import ENTRY_TYPES
 
 logger = logging.getLogger(__name__)
 
+# StabilityFiguresOfMerit field name -> fitting_tools.py model column names that
+# feed it. Column names aren't consistent across models (T80 vs t80, tS vs Ts...),
+# so write-back has to alias-match rather than assume one spelling.
+_ISOS_METRIC_ALIASES = {
+    "T95": ["T95", "t95"],
+    "T80": ["T80", "t80"],
+    "Ts95": ["Ts95", "ts95"],
+    "Ts80": ["Ts80", "ts80"],
+    "initial_stabilization_time": ["tS", "ts"],
+}
+
 
 class MPPTRow(BaseModel):
     time: float
@@ -34,6 +46,59 @@ class MPPTRow(BaseModel):
         if v is None:
             return float("nan")
         return float(v)
+
+
+def fit_curve(t_data, y_data, model, frame_range=None):
+    """Slice to frame_range (point indices), fit with model, return a result
+    dict or None if there aren't enough valid points to fit.
+
+    frame_range: (start, end) - end is the last index to include, or None for
+    "to the end of the array". point_start/point_end in the result reflect
+    the requested range (not shrunk by any NaN rows dropped internally), since
+    that's what the user actually configured.
+    """
+    if frame_range is not None:
+        start, end = frame_range
+        t_sliced = t_data[start:] if end is None else t_data[start : end + 1]
+        y_sliced = y_data[start:] if end is None else y_data[start : end + 1]
+    else:
+        start = 0
+        end = len(t_data) - 1
+        t_sliced, y_sliced = t_data, y_data
+
+    resolved_end = end if end is not None else start + len(t_sliced) - 1
+
+    valid_mask = ~(np.isnan(t_sliced) | np.isnan(y_sliced))
+    t_sliced = t_sliced[valid_mask]
+    y_sliced = y_sliced[valid_mask]
+
+    if len(t_sliced) < 3:
+        return None
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit_params, fitted_curve = model.parfunc(y_sliced, t_sliced)
+    except Exception:
+        logger.warning("Fit failed for model %s", model.name, exc_info=True)
+        return None
+
+    params = {}
+    for param_name, param_value in zip(model.columns, fit_params):
+        if hasattr(param_value, "nominal_value"):
+            params[param_name] = param_value.nominal_value
+            params[f"{param_name}_error"] = param_value.std_dev
+        else:
+            params[param_name] = param_value
+
+    return {
+        "time": t_sliced,
+        "fitted_power": fitted_curve,
+        "original_power": y_sliced,
+        "point_start": start,
+        "point_end": resolved_end,
+        "params": params,
+    }
 
 
 class DataManager:
@@ -92,10 +157,12 @@ class DataManager:
         for sample_id, entries in raw.items():
             entry_names_list = []
             entry_description_list = []
+            entry_ids_list = []
             sample_curves_list = []
 
             for mppt_entry in entries:
                 raw_data = mppt_entry[0]
+                metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
                 rows_list = self._rows_from_entry(raw_data)
                 validated_rows = []
                 for row in rows_list:
@@ -116,6 +183,7 @@ class DataManager:
                 meta = raw_data if isinstance(raw_data, dict) else {}
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
+                entry_ids_list.append(metadata.get("entry_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -126,6 +194,7 @@ class DataManager:
                         {
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
+                            "entry_id": entry_ids_list,
                         }
                     )
                 )
@@ -277,9 +346,11 @@ class DataManager:
         for sample_data in all_mppt:
             entry_names_list = []
             entry_description_list = []
+            entry_ids_list = []
             sample_curves_list = []
             for mppt_entry in all_mppt.get(sample_data):
                 raw_data = mppt_entry[0]
+                metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
                 rows_list = self._rows_from_entry(raw_data)
                 validated_rows = []
                 for row in rows_list:
@@ -301,6 +372,7 @@ class DataManager:
                 meta = raw_data if isinstance(raw_data, dict) else {}
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
+                entry_ids_list.append(metadata.get("entry_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -311,6 +383,7 @@ class DataManager:
                         {
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
+                            "entry_id": entry_ids_list,
                         }
                     )
                 )  # noqa: E501
@@ -349,129 +422,151 @@ class DataManager:
         except Exception as e:
             return None, f"Error loading data: {str(e)}"
 
-    def fit_all_samples_lmfit(
-        self, curves_data, sample_ids, selected_samples, model, frame_range=None
-    ):  # noqa: E501
-        """Fit all selected samples using existing lmfit-based fitting tools"""
-        # Suppress the specific uncertainties warning
+    def get_curve_ids_for_sample(self, curves_data, sample_ids, sample_id):
+        """Return the list of curve_ids available for one sample (empty if unknown)."""
+        if sample_id not in list(sample_ids):
+            return []
+        try:
+            sample_data = curves_data.loc[sample_id]
+        except KeyError:
+            return []
+        if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
+            return list(sample_data.index.get_level_values(0).unique())
+        return [0]
+
+    def get_raw_curve(self, curves_data, sample_ids, sample_id, curve_id):
+        """Return (time, power_density) numpy arrays for one (sample_id, curve_id)."""
+        if sample_id not in list(sample_ids):
+            return None, None
+        try:
+            sample_data = curves_data.loc[sample_id]
+            if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
+                curve_data = sample_data.loc[curve_id]
+            else:
+                curve_data = sample_data
+            return curve_data["time"].values, curve_data["power_density"].values
+        except (KeyError, IndexError):
+            return None, None
+
+    def get_entry_id(self, entries_data, sample_id, curve_id):
+        """Look up the NOMAD entry_id backing one (sample_id, curve_id), or None.
+
+        None for offline/demo data (no live entry) or if the metadata was
+        never populated with an entry_id.
+        """
+        if entries_data is None:
+            return None
+        try:
+            value = entries_data.loc[(sample_id, curve_id), "entry_id"]
+        except (KeyError, IndexError):
+            return None
+        return value if isinstance(value, str) and value else None
+
+    def fit_sample(self, curves_data, sample_ids, sample_id, model, frame_range=None):
+        """Fit every curve belonging to one sample with the given model/point range.
+
+        Returns {curve_id: fit_dict}. A curve is omitted if it has too few
+        points in range or the fit raises. fit_dict keys: time, fitted_power,
+        original_power, point_start, point_end, model, params.
+        """
         warnings.filterwarnings(
             "ignore", message="Using UFloat objects with std_dev==0 may give unexpected results."
-        )  # noqa: E501
+        )
 
-        available_samples = list(sample_ids) if hasattr(sample_ids, "__iter__") else sample_ids
-        results = []
-        fitted_curves_data = {}  # Store fitted curve data separately
+        results = {}
+        for curve_id in self.get_curve_ids_for_sample(curves_data, sample_ids, sample_id):
+            t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
+            if t_data is None:
+                continue
+            fit = fit_curve(t_data, y_data, model, frame_range)
+            if fit is not None:
+                fit["model"] = model
+                results[curve_id] = fit
+        return results
 
-        for sample_id in selected_samples:
-            if sample_id in available_samples:
+    def write_fit_results_to_nomad(self, entries_data, fits_by_key, computed_by):
+        """Push a set of accepted fits back into their NOMAD entries.
+
+        fits_by_key: {(sample_id, curve_id): fit_dict} - fit_dict as returned
+        by fit_sample (must include "model", "point_start", "point_end",
+        "time", "params").
+        computed_by: string identifying the app/user, stored in fit_computed_by.
+
+        Returns a list of {"sample_id", "curve_id", "success", "message"} -
+        one entry per (sample_id, curve_id), attempted unconditionally; the
+        caller surfaces "message" as-is (NOMAD's own error detail on
+        failure, or a local reason when there's no entry_id to write to).
+        """
+        from hysprint_utils.api_calls import edit_entry
+
+        computed_at = datetime.utcnow().isoformat()
+        outcomes = []
+
+        for (sample_id, curve_id), fit in fits_by_key.items():
+            entry_id = self.get_entry_id(entries_data, sample_id, curve_id)
+            if not entry_id:
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": False,
+                        "message": "No linked NOMAD entry_id (offline/demo data, or not resolved "
+                        "during loading) - nothing to write to.",
+                    }
+                )
+                continue
+
+            model = fit["model"]
+            time_h = fit["time"]
+            params = fit.get("params", {})
+
+            changes = [
+                {"path": "data.results.0.fit_method", "new_value": model.name},
+                {"path": "data.results.0.fit_source", "new_value": "manual"},
+                {"path": "data.results.0.fit_computed_by", "new_value": computed_by},
+                {"path": "data.results.0.fit_computed_at", "new_value": computed_at},
+                {
+                    "path": "data.results.0.fit_range_start",
+                    "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
+                },
+                {
+                    "path": "data.results.0.fit_range_end",
+                    "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
+                },
+            ]
+            for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
+                value = next((params[a] for a in aliases if a in params), None)
+                if value is not None:
+                    changes.append(
+                        {
+                            "path": f"data.results.0.{schema_field}",
+                            "new_value": float(value) * 3600,
+                        }
+                    )
+
+            try:
+                edit_entry(self.url, self.token, entry_id, changes)
+                outcomes.append(
+                    {"sample_id": sample_id, "curve_id": curve_id, "success": True, "message": "OK"}
+                )
+            except requests.HTTPError as exc:
+                message = str(exc)
                 try:
-                    sample_data = curves_data.loc[sample_id]
+                    detail = exc.response.json().get("detail")
+                    if detail:
+                        message = detail if isinstance(detail, str) else str(detail)
+                except (ValueError, AttributeError):
+                    pass
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": False,
+                        "message": message,
+                    }
+                )
 
-                    if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
-                        # Multiple curves per sample
-                        for curve_idx in sample_data.index.get_level_values(0).unique():
-                            curve_data = sample_data.loc[curve_idx]
-                            t_data = curve_data["time"].values
-                            y_data = curve_data["power_density"].values
-
-                            if frame_range is not None:
-                                start, end = frame_range
-                                t_data = t_data[start:] if end is None else t_data[start : end + 1]
-                                y_data = y_data[start:] if end is None else y_data[start : end + 1]
-
-                            valid_mask = ~(np.isnan(t_data) | np.isnan(y_data))
-                            t_data = t_data[valid_mask]
-                            y_data = y_data[valid_mask]
-
-                            if len(t_data) < 3:
-                                continue
-
-                            try:
-                                with warnings.catch_warnings():
-                                    warnings.simplefilter("ignore")
-                                    fit_params, fitted_curve = model.parfunc(y_data, t_data)
-
-                                # Store fitted curve data
-                                fitted_curves_data[(sample_id, curve_idx)] = {
-                                    "time": t_data,
-                                    "fitted_power": fitted_curve,
-                                    "original_power": y_data,
-                                }
-
-                                result = {
-                                    "sample_id": sample_id,
-                                    "curve_id": curve_idx,
-                                    "n_frames": len(t_data),
-                                    "max_time_h": float(t_data.max()),
-                                }
-
-                                for i, (param_name, param_value) in enumerate(
-                                    zip(model.columns, fit_params)
-                                ):  # noqa: E501
-                                    if hasattr(param_value, "nominal_value"):
-                                        result[param_name] = param_value.nominal_value
-                                        result[f"{param_name}_error"] = param_value.std_dev
-                                    else:
-                                        result[param_name] = param_value
-
-                                results.append(result)
-                            except:  # noqa: E722
-                                continue
-                    else:
-                        # Single curve per sample
-                        t_data = sample_data["time"].values
-                        y_data = sample_data["power_density"].values
-
-                        if frame_range is not None:
-                            start, end = frame_range
-                            t_data = t_data[start:] if end is None else t_data[start : end + 1]
-                            y_data = y_data[start:] if end is None else y_data[start : end + 1]
-
-                        valid_mask = ~(np.isnan(t_data) | np.isnan(y_data))
-                        t_data = t_data[valid_mask]
-                        y_data = y_data[valid_mask]
-
-                        if len(t_data) < 3:
-                            continue
-
-                        try:
-                            with warnings.catch_warnings():
-                                warnings.simplefilter("ignore")
-                                fit_params, fitted_curve = model.parfunc(y_data, t_data)
-
-                            # Store fitted curve data
-                            fitted_curves_data[(sample_id, 0)] = {
-                                "time": t_data,
-                                "fitted_power": fitted_curve,
-                                "original_power": y_data,
-                            }
-
-                            result = {
-                                "sample_id": sample_id,
-                                "curve_id": 0,
-                                "n_frames": len(t_data),
-                                "max_time_h": float(t_data.max()),
-                            }
-
-                            for i, (param_name, param_value) in enumerate(
-                                zip(model.columns, fit_params)
-                            ):  # noqa: E501
-                                if hasattr(param_value, "nominal_value"):
-                                    result[param_name] = param_value.nominal_value
-                                    result[f"{param_name}_error"] = param_value.std_dev
-                                else:
-                                    result[param_name] = param_value
-
-                            results.append(result)
-                        except:  # noqa: E722
-                            continue
-                except:  # noqa: E722
-                    continue
-
-        results_df = pd.DataFrame(results) if results else pd.DataFrame()
-
-        # Return both the results DataFrame and the fitted curves data
-        return results_df, fitted_curves_data
+        return outcomes
 
     def get_selected_curve_data(self, curves_data, sample_ids, selected_samples, variable):
         """Get curve data for selected samples"""
