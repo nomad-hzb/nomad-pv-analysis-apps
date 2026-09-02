@@ -2045,8 +2045,11 @@ def test_varying_fields_matrix_renders_header_and_sample_rows(fresh_state):
     set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
+    field_label = iter_varying_fields(fresh_state)[0][0]
 
-    assert len(matrix.children) == 3  # header + 2 sample rows
+    assert matrix.header_widget(field_label) is not None
+    assert matrix.cell_widget(1, field_label) is not None
+    assert matrix.cell_widget(2, field_label) is not None
 
 
 def test_varying_fields_matrix_operator_cell_gets_a_me_button(fresh_state):
@@ -2056,8 +2059,8 @@ def test_varying_fields_matrix_operator_cell_gets_a_me_button(fresh_state):
     set_field_varies(process.field_specs["Operator"], True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    sample_row = matrix.children[1]
-    operator_cell_slot = sample_row.children[2]  # Sample, Subbatch, then the one field column
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    operator_cell_slot = matrix.cell_widget(1, field_label)
 
     text_widget, quick_fill_button = operator_cell_slot.children
     assert quick_fill_button.description == "Me"
@@ -2075,10 +2078,11 @@ def test_varying_fields_matrix_column_header_has_populate_button(fresh_state):
     set_field_varies(spec, True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    header_row = matrix.children[0]
-    material_header = header_row.children[2]  # Sample, Subbatch, then the one field column
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    material_header = matrix.header_widget(field_label)
     _label, populate_button = material_header.children
     assert populate_button.icon == "arrow-down"
+    assert populate_button.tabbable is False  # excluded from the column-major Tab cycle
 
     set_field_manual(spec, "C60", sample_number=1)
     populate_button.click()
@@ -2094,10 +2098,44 @@ def test_varying_fields_matrix_shows_set_column_before_variation(fresh_state):
 
     matrix = VaryingFieldsMatrix(fresh_state)
 
-    header_row, sample_row = matrix.children
-    assert header_row.children[1].value == "Subbatch"
+    columns = matrix.columns()
+    assert columns.index("Subbatch") < columns.index("Variation")
+    # header_widget returns the uniform [text, button-or-placeholder] VBox every column
+    # header now shares (see _header_for's docstring) - the text block is children[0].
+    assert "Subbatch" in matrix.header_widget("Subbatch").children[0].value
     # 1-based: variation_group_index=2 displays as Subbatch 3, matching subbatch_for_sample
-    assert sample_row.children[1].value == "3"
+    assert matrix.cell_widget(1, "Subbatch").value == "3"
+
+
+def test_varying_fields_matrix_tab_order_is_column_major(fresh_state):
+    """Product ask: pressing Tab should move to the next SAMPLE within the same field,
+    not the next field for the same sample - achieved by inserting cells into the
+    GridBox in column-major order (visual position is pinned separately via
+    grid_row/grid_column, see the class docstring). Doesn't assume which field's column
+    comes first (that's just field_specs' own dict order) - only that, WITHIN one
+    field's column, consecutive samples are inserted back-to-back with nothing from any
+    other column interleaved."""
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=2)
+    fresh_state.add_sample(variation_group_index=0, sample_number=3)
+    spec = process.field_specs["Material name"]
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+    set_field_varies(process.field_specs["Operator"], True, fresh_state.sample_numbers())
+
+    matrix = VaryingFieldsMatrix(fresh_state)
+    labels_by_spec_id = {id(s): label for label, s in iter_varying_fields(fresh_state)}
+    material_label = labels_by_spec_id[id(spec)]
+
+    order = matrix.tab_order()
+    material_indices = [
+        order.index(matrix.cell_widget(sample_number, material_label))
+        for sample_number in (1, 2, 3)
+    ]
+
+    assert material_indices == sorted(material_indices)
+    assert material_indices[-1] - material_indices[0] == 2  # no other column interleaved
 
 
 def test_varying_fields_matrix_hard_refresh_clears_before_rebuilding(fresh_state):
@@ -2106,12 +2144,13 @@ def test_varying_fields_matrix_hard_refresh_clears_before_rebuilding(fresh_state
     fresh_state.add_sample(variation_group_index=0, sample_number=1)
     set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
     matrix = VaryingFieldsMatrix(fresh_state)
-    assert len(matrix.children) == 2  # header + 1 sample row
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    original_cell = matrix.cell_widget(1, field_label)
 
     matrix.hard_refresh()
 
-    # children were cleared and rebuilt, not left stale or duplicated
-    assert len(matrix.children) == 2
+    # children were cleared and rebuilt with fresh widgets, not left stale or duplicated
+    assert matrix.cell_widget(1, field_label) is not original_cell
 
 
 def test_varying_fields_matrix_hard_refresh_reflects_state_changes(fresh_state):
@@ -2125,7 +2164,8 @@ def test_varying_fields_matrix_hard_refresh_reflects_state_changes(fresh_state):
 
     matrix.hard_refresh()
 
-    assert len(matrix.children) == 2  # header + 1 sample row now
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    assert matrix.cell_widget(1, field_label) is not None
 
 
 def test_varying_fields_matrix_cell_edit_updates_state_without_touching_variation(fresh_state):
@@ -2321,6 +2361,7 @@ def test_create_finish_section_places_progress_bar_above_buttons(fresh_state):
         buttons_row,
         _nudge_area,
         _status_output,
+        _download_js_output,
     ) = section.children
     assert progress_bar_child is bar
     assert len(buttons_row.children) == 3
@@ -2517,7 +2558,9 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
 
         refresh_matrix_button.click()
 
-    assert len(matrix.children) == 1 + sample_count  # header + one row per sample
+    field_label = iter_varying_fields(state)[0][0]
+    for sample_number in state.sample_numbers():
+        assert matrix.cell_widget(sample_number, field_label) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2947,6 +2990,23 @@ def test_generate_full_workbook_has_three_sheets(fresh_state):
     assert set(workbook.sheetnames) == {"Experiment Data", "Data Entry Guide", "How to Cite"}
 
 
+def test_generate_full_workbook_omits_parent_id_column_when_no_children(fresh_state):
+    """Product feedback: with the per-sample child-row UI removed, Parent ID was always a
+    fully blank trailing column for the overwhelming majority of real experiments (no
+    sample ever has child_count > 0) - it should not appear at all in that case."""
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1, child_count=0)
+
+    workbook = generate_full_workbook(fresh_state)
+    worksheet = workbook["Experiment Data"]
+
+    header_values = [
+        worksheet.cell(row=2, column=col).value for col in range(1, worksheet.max_column + 1)
+    ]
+    assert "Parent ID" not in header_values
+
+
 def test_generate_full_workbook_writes_one_row_per_mother_and_child(fresh_state):
     process = fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
@@ -3121,19 +3181,53 @@ def test_sample_setup_panel_apply_sample_setup_is_public_equivalent_of_apply_cli
     assert len(fresh_state.samples) == 3
 
 
-def test_sample_setup_panel_apply_is_additive_never_removes(fresh_state):
+def test_sample_setup_panel_apply_removes_excess_samples_when_count_lowered(fresh_state):
     panel = SampleSetupPanel(fresh_state)
     panel.set_count_input.value = 1
     panel.sets_inputs_box.children[0].value = 3
     panel._on_apply(None)
-    fresh_state.samples[0].child_count = 2  # simulate user-configured data
+    fresh_state.samples[0].child_count = 2  # simulate user-configured data on sample 1
 
     # user lowers the requested count and re-applies
     panel.sets_inputs_box.children[0].value = 1
     panel._on_apply(None)
 
-    assert len(fresh_state.samples) == 3  # nothing removed
-    assert fresh_state.samples[0].child_count == 2  # untouched
+    assert len(fresh_state.samples) == 1  # excess samples removed, not just left to accumulate
+    assert fresh_state.samples[0].sample_number == 1  # earliest sample kept, not the latest
+    assert fresh_state.samples[0].child_count == 2  # its data survives the shrink
+
+
+def test_sample_setup_panel_lowering_total_samples_shrinks_after_apply(fresh_state):
+    """Regression test: changing Total samples used to clamp each Subbatch's shown value
+    to max(existing_count, new_default), so a lower total was silently ignored and
+    re-applying could only ever grow the batch, never shrink it back down."""
+    panel = SampleSetupPanel(fresh_state)
+    panel.set_count_input.value = 1
+    panel.sets_inputs_box.children[0].value = 5
+    panel._on_apply(None)
+    assert len(fresh_state.samples) == 5
+
+    panel.total_samples_input.value = 2
+
+    assert panel.sets_inputs_box.children[0].value == 2  # no longer clamped up to the old 5
+
+    panel._on_apply(None)
+
+    assert len(fresh_state.samples) == 2
+
+
+def test_sample_setup_panel_lowering_subbatch_count_removes_orphaned_samples(fresh_state):
+    """Regression test: lowering Variation Subbatch count used to leave samples from the
+    now-unconfigured Subbatches stranded in state forever, with no row left to remove them."""
+    panel = SampleSetupPanel(fresh_state)  # defaults: 16 samples / 4 subbatches
+    panel._on_apply(None)
+    assert {s.variation_group_index for s in fresh_state.samples} == {0, 1, 2, 3}
+
+    panel.set_count_input.value = 2
+
+    panel._on_apply(None)
+
+    assert {s.variation_group_index for s in fresh_state.samples} == {0, 1}
 
 
 def test_sample_setup_panel_multiple_sets_uneven_counts(fresh_state):
@@ -3371,9 +3465,15 @@ def test_create_finish_section_download_only_produces_link(fresh_state):
         "data_manager.get_all_uploads", return_value=[{"upload_id": "UP1", "upload_name": "Test"}]
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True  # bypass the nudge gate for this mechanics-only test
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3390,9 +3490,15 @@ def test_create_finish_section_upload_only_without_target_shows_error(fresh_stat
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         _download_button, upload_button, _combo_button = buttons_row.children
         upload_button.click()
@@ -3411,9 +3517,15 @@ def test_create_finish_section_upload_only_calls_upload_experiment_excel(fresh_s
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, upload_button, _combo_button = buttons_row.children
@@ -3435,9 +3547,15 @@ def test_create_finish_section_download_and_upload_does_both(fresh_state):
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, _upload_button, combo_button = buttons_row.children
@@ -3459,9 +3577,15 @@ def test_create_finish_section_download_and_upload_reports_upload_failure(fresh_
         patch("gui_components.upload_experiment_excel", side_effect=RuntimeError("network down")),
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, _upload_button, combo_button = buttons_row.children
@@ -3479,9 +3603,15 @@ def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         assert skip_checkbox.value is False
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3505,9 +3635,15 @@ def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3524,9 +3660,15 @@ def test_create_finish_section_blocks_download_when_batch_missing(fresh_state):
 
     with patch("data_manager.get_all_uploads", return_value=[]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True  # must block even with the nudge gate skipped
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3547,9 +3689,15 @@ def test_create_finish_section_blocks_upload_when_project_name_missing(fresh_sta
         patch("gui_components.upload_experiment_excel") as mock_upload,
     ):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         upload_dropdown.value = "UP1"
         _download_button, upload_button, _combo_button = buttons_row.children
@@ -3566,9 +3714,15 @@ def test_create_finish_section_blocks_both_missing_lists_both_fields(fresh_state
 
     with patch("data_manager.get_all_uploads", return_value=[]):
         section = create_finish_section(fresh_state, "url", "token", cache)
-        skip_checkbox, _caption, _upload_dropdown, buttons_row, _nudge_area, status_output = (
-            section.children
-        )
+        (
+            skip_checkbox,
+            _caption,
+            _upload_dropdown,
+            buttons_row,
+            _nudge_area,
+            status_output,
+            _download_js_output,
+        ) = section.children
         skip_checkbox.value = True
         download_button, _upload_button, _combo_button = buttons_row.children
         download_button.click()
@@ -3965,8 +4119,8 @@ def test_varying_fields_matrix_rejects_forbidden_character_cell(fresh_state):
     set_field_varies(spec, True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    header_row, sample_row = matrix.children
-    material_cell = sample_row.children[2]
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    material_cell = matrix.cell_widget(1, field_label)
 
     material_cell.value = "bad|name"
 
