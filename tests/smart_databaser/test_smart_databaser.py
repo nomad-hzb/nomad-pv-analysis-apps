@@ -2045,8 +2045,11 @@ def test_varying_fields_matrix_renders_header_and_sample_rows(fresh_state):
     set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
+    field_label = iter_varying_fields(fresh_state)[0][0]
 
-    assert len(matrix.children) == 3  # header + 2 sample rows
+    assert matrix.header_widget(field_label) is not None
+    assert matrix.cell_widget(1, field_label) is not None
+    assert matrix.cell_widget(2, field_label) is not None
 
 
 def test_varying_fields_matrix_operator_cell_gets_a_me_button(fresh_state):
@@ -2056,8 +2059,8 @@ def test_varying_fields_matrix_operator_cell_gets_a_me_button(fresh_state):
     set_field_varies(process.field_specs["Operator"], True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    sample_row = matrix.children[1]
-    operator_cell_slot = sample_row.children[2]  # Sample, Subbatch, then the one field column
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    operator_cell_slot = matrix.cell_widget(1, field_label)
 
     text_widget, quick_fill_button = operator_cell_slot.children
     assert quick_fill_button.description == "Me"
@@ -2075,10 +2078,11 @@ def test_varying_fields_matrix_column_header_has_populate_button(fresh_state):
     set_field_varies(spec, True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    header_row = matrix.children[0]
-    material_header = header_row.children[2]  # Sample, Subbatch, then the one field column
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    material_header = matrix.header_widget(field_label)
     _label, populate_button = material_header.children
     assert populate_button.icon == "arrow-down"
+    assert populate_button.tabbable is False  # excluded from the column-major Tab cycle
 
     set_field_manual(spec, "C60", sample_number=1)
     populate_button.click()
@@ -2094,10 +2098,42 @@ def test_varying_fields_matrix_shows_set_column_before_variation(fresh_state):
 
     matrix = VaryingFieldsMatrix(fresh_state)
 
-    header_row, sample_row = matrix.children
-    assert header_row.children[1].value == "Subbatch"
+    columns = matrix.columns()
+    assert columns.index("Subbatch") < columns.index("Variation")
+    assert matrix.header_widget("Subbatch").value == "Subbatch"
     # 1-based: variation_group_index=2 displays as Subbatch 3, matching subbatch_for_sample
-    assert sample_row.children[1].value == "3"
+    assert matrix.cell_widget(1, "Subbatch").value == "3"
+
+
+def test_varying_fields_matrix_tab_order_is_column_major(fresh_state):
+    """Product ask: pressing Tab should move to the next SAMPLE within the same field,
+    not the next field for the same sample - achieved by inserting cells into the
+    GridBox in column-major order (visual position is pinned separately via
+    grid_row/grid_column, see the class docstring). Doesn't assume which field's column
+    comes first (that's just field_specs' own dict order) - only that, WITHIN one
+    field's column, consecutive samples are inserted back-to-back with nothing from any
+    other column interleaved."""
+    process = fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    fresh_state.add_sample(variation_group_index=0, sample_number=1)
+    fresh_state.add_sample(variation_group_index=0, sample_number=2)
+    fresh_state.add_sample(variation_group_index=0, sample_number=3)
+    spec = process.field_specs["Material name"]
+    set_field_varies(spec, True, fresh_state.sample_numbers())
+    set_field_varies(process.field_specs["Operator"], True, fresh_state.sample_numbers())
+
+    matrix = VaryingFieldsMatrix(fresh_state)
+    labels_by_spec_id = {id(s): label for label, s in iter_varying_fields(fresh_state)}
+    material_label = labels_by_spec_id[id(spec)]
+
+    order = matrix.tab_order()
+    material_indices = [
+        order.index(matrix.cell_widget(sample_number, material_label))
+        for sample_number in (1, 2, 3)
+    ]
+
+    assert material_indices == sorted(material_indices)
+    assert material_indices[-1] - material_indices[0] == 2  # no other column interleaved
 
 
 def test_varying_fields_matrix_hard_refresh_clears_before_rebuilding(fresh_state):
@@ -2106,12 +2142,13 @@ def test_varying_fields_matrix_hard_refresh_clears_before_rebuilding(fresh_state
     fresh_state.add_sample(variation_group_index=0, sample_number=1)
     set_field_varies(process.field_specs["Material name"], True, fresh_state.sample_numbers())
     matrix = VaryingFieldsMatrix(fresh_state)
-    assert len(matrix.children) == 2  # header + 1 sample row
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    original_cell = matrix.cell_widget(1, field_label)
 
     matrix.hard_refresh()
 
-    # children were cleared and rebuilt, not left stale or duplicated
-    assert len(matrix.children) == 2
+    # children were cleared and rebuilt with fresh widgets, not left stale or duplicated
+    assert matrix.cell_widget(1, field_label) is not original_cell
 
 
 def test_varying_fields_matrix_hard_refresh_reflects_state_changes(fresh_state):
@@ -2125,7 +2162,8 @@ def test_varying_fields_matrix_hard_refresh_reflects_state_changes(fresh_state):
 
     matrix.hard_refresh()
 
-    assert len(matrix.children) == 2  # header + 1 sample row now
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    assert matrix.cell_widget(1, field_label) is not None
 
 
 def test_varying_fields_matrix_cell_edit_updates_state_without_touching_variation(fresh_state):
@@ -2518,7 +2556,9 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
 
         refresh_matrix_button.click()
 
-    assert len(matrix.children) == 1 + sample_count  # header + one row per sample
+    field_label = iter_varying_fields(state)[0][0]
+    for sample_number in state.sample_numbers():
+        assert matrix.cell_widget(sample_number, field_label) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -4077,8 +4117,8 @@ def test_varying_fields_matrix_rejects_forbidden_character_cell(fresh_state):
     set_field_varies(spec, True, fresh_state.sample_numbers())
 
     matrix = VaryingFieldsMatrix(fresh_state)
-    header_row, sample_row = matrix.children
-    material_cell = sample_row.children[2]
+    field_label = iter_varying_fields(fresh_state)[0][0]
+    material_cell = matrix.cell_widget(1, field_label)
 
     material_cell.value = "bad|name"
 
