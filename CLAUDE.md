@@ -155,6 +155,29 @@ working example — hit and fixed while building app-launch click tracking
 callback's other side effects (writing a log entry) ran fine, but the
 injected script never executed until routed through `Output()`.
 
+## Known environment gotcha — always tear down local test processes (Voila, kernels, Playwright) when done
+
+`python -m voila` spawns a server process plus one Jupyter kernel per browser
+connection; a Playwright script launches its own Chromium process per run.
+None of these self-terminate reliably when a test script errors out or times
+out — an interrupted `page.goto()`/`page.click()` can leave the kernel and/or
+browser running indefinitely. Across a long session these accumulate
+silently until the machine runs out of memory/handles badly enough that even
+basic OS tooling (`tasklist`, PowerShell's CLR startup) stops responding —
+observed for real: 10+ stray `python.exe` processes from repeated
+Voila-and-Playwright test rounds during the MPPT_Analysis fitting-UI work
+(issue #15), degrading to a point where `tasklist`/PowerShell themselves
+timed out.
+
+**How to apply:** every time you launch `voila`, `pytest`, or a Playwright
+script for manual verification, explicitly kill it (and its port) once
+you're done with it — don't just let it "finish on its own" or move on to
+the next test while it's still running. Track the PID/port you started
+explicitly so cleanup is one targeted kill, not a fishing expedition. On
+Windows, if `tasklist`/PowerShell start hanging, prefer Git Bash's own
+`ps aux` / `kill -9 <pid>` — `ps` runs in the POSIX layer and stays
+responsive even when WMI-backed tooling is struggling under load.
+
 ## Known gaps (tracked, not silently fixed)
 
 - `log_notebook_usage()` (in `shared/hysprint_utils/access_token.py`) writes
