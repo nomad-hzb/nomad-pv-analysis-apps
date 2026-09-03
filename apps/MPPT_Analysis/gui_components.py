@@ -20,6 +20,14 @@ from hysprint_utils.batch_selection import create_batch_selection
 APP_VERSION = "0.2.0"
 
 
+def _html_float_format(value):
+    """DataFrame.to_html's float_format must be a callable, unlike to_csv's -
+    passing a printf-style string like "%.4f" raises TypeError: 'str' object
+    is not callable on at least some pandas versions (confirmed on the NOMAD
+    Oasis JupyterHub's pandas, even though it didn't raise locally here)."""
+    return f"{value:.4f}"
+
+
 class GUIComponents:
     """Creates and manages GUI components for the MPPT Analysis App"""
 
@@ -486,7 +494,7 @@ class GUIComponents:
                     display(
                         HTML(
                             '<div style="overflow-x:auto;">'
-                            + full_df.to_html(index=False, float_format="%.4f")
+                            + full_df.to_html(index=False, float_format=_html_float_format)
                             + "</div>"
                         )
                     )
@@ -503,7 +511,7 @@ class GUIComponents:
                         display(
                             HTML(
                                 '<div style="overflow-x:auto;">'
-                                + stats_df.to_html(float_format="%.4f")
+                                + stats_df.to_html(float_format=_html_float_format)
                                 + "</div>"
                             )
                         )
@@ -563,7 +571,12 @@ class GUIComponents:
                             if fit.get("warning"):
                                 print(f"⚠️ {sid} (curve {cid}): {fit['warning']}")
                         if self.app_controller:
-                            self.app_controller.enable_plotting_tab()
+                            # "Fit This Sample" stays on the Curve Fitting tab so you
+                            # can keep working through samples one at a time; only
+                            # "Fit All Curves" jumps to Visualization.
+                            self.app_controller.enable_plotting_tab(
+                                navigate=apply_to_all_checkbox.value
+                            )
                     else:
                         print("❌ Fitting failed. No curves could be fitted successfully.")
                         print("This might be due to insufficient data points or numerical issues.")
@@ -788,7 +801,7 @@ class GUIComponents:
 
         controls = widgets.VBox(
             [
-                widgets.HTML("<h3>MPPT Curve Plotting</h3>"),
+                widgets.HTML("<h3>MPPT Visualization</h3>"),
                 widgets.HTML(
                     f"<p>Plot analysis for {self.app_state.get_selected_samples_count()} selected samples with {self.app_state.get_fit_results_count()} fitted curves.</p>"
                 ),
