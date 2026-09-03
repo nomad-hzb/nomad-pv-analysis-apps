@@ -412,6 +412,20 @@ class GUIComponents:
                 return selected_samples[0] if selected_samples else None
             return sample_dropdown.value
 
+        def _resolve_frame_range():
+            """(start, end) from the slider, but end=None ("to the end of
+            this curve's own data") when the slider is still at its full,
+            un-narrowed position. The slider's max is capped to the
+            shortest curve among the selected samples (see
+            update_range_bounds) purely so it stays a valid index for every
+            curve - it isn't meant to truncate every other, longer curve
+            down to that length by default. Only an end the user has
+            deliberately dragged inward should apply uniformly."""
+            start, end = frame_range_selector.value
+            if end >= frame_range_selector.max:
+                end = None
+            return start, end
+
         def get_current_param_values():
             return {name: field.value for name, field in current_param_fields.items()}
 
@@ -431,8 +445,9 @@ class GUIComponents:
             if sample_id:
                 t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, 0)
                 if t_data is not None and len(t_data):
-                    start, end = frame_range_selector.value
-                    t_sub, y_sub = t_data[start : end + 1], y_data[start : end + 1]
+                    start, end = _resolve_frame_range()
+                    t_sub = t_data[start:] if end is None else t_data[start : end + 1]
+                    y_sub = y_data[start:] if end is None else y_data[start : end + 1]
                     if len(t_sub) >= 1:
                         try:
                             defaults = model.default_guess(y_sub, t_sub)
@@ -462,8 +477,12 @@ class GUIComponents:
 
         def update_range_bounds(change=None):
             if apply_to_all_checkbox.value:
+                # Slider max is capped to the shortest selected curve purely so
+                # dragging it stays a valid index everywhere - leaving it at this
+                # max (the default) does NOT truncate longer curves; each one is
+                # fit to its own full length unless you deliberately drag inward.
                 n_points = min((_sample_point_count(sid) for sid in selected_samples), default=0)
-                suffix = " (limited to shortest measurement among selected samples)"
+                suffix = " (drag to restrict; left at max, each sample fits its own full length)"
             else:
                 n_points = (
                     _sample_point_count(sample_dropdown.value) if sample_dropdown.value else 0
@@ -487,7 +506,7 @@ class GUIComponents:
                     print(f"No curve data available for {sample_id}.")
                     return
 
-                start, end = frame_range_selector.value
+                start, end = _resolve_frame_range()
                 model = available_fit_model_list[model_selector.value]
 
                 fig = make_subplots(
@@ -508,11 +527,20 @@ class GUIComponents:
                     row=1,
                     col=1,
                 )
-                for x in (start, end):
+
+                fit = fit_curve(t_data, y_data, model, (start, end), get_current_param_values())
+                # Draw the boundary at the range actually used for this curve, not
+                # the raw slider value - when end is None (unrestricted), that's
+                # this curve's own last point, which the shared slider doesn't know.
+                marker_end = (
+                    fit["point_end"]
+                    if fit is not None
+                    else (len(y_data) - 1 if end is None else end)
+                )
+                for x in (start, marker_end):
                     fig.add_vline(x=x, line_dash="dash", line_color="green", row=1, col=1)
                     fig.add_vline(x=x, line_dash="dash", line_color="green", row=2, col=1)
 
-                fit = fit_curve(t_data, y_data, model, (start, end), get_current_param_values())
                 if fit is not None:
                     x_fit = np.arange(
                         fit["point_start"], fit["point_start"] + len(fit["fitted_power"])
@@ -557,7 +585,14 @@ class GUIComponents:
                 )
                 display(go.FigureWidget(fig))
                 if fit is None:
-                    print("⚠️ Not enough points in the selected range to fit (need at least 2).")
+                    n_selected = (len(y_data) - start) if end is None else (end - start + 1)
+                    if n_selected < 2:
+                        print("⚠️ Not enough points in the selected range to fit (need at least 2).")
+                    else:
+                        print(
+                            "⚠️ Fit failed for this range/parameters - try a different range "
+                            "or starting values. See the app log for the underlying error."
+                        )
                 elif fit.get("warning"):
                     print(f"⚠️ {fit['warning']}")
 
@@ -624,7 +659,7 @@ class GUIComponents:
                 return
 
             model = available_fit_model_list[model_selector.value]
-            frame_range = frame_range_selector.value
+            frame_range = _resolve_frame_range()
             initial_values = get_current_param_values() if use_manual_values else None
 
             with fit_status:

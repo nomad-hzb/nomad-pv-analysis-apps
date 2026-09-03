@@ -74,6 +74,12 @@ def stretched_exponential_params(power, times, initial_values=None):
     guess = stretched_exponential_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = stretched_exponential_model.make_params(**guess)  # initial values for the fit
+    # tau appears as (t/tau)**beta - an unbounded optimizer can wander tau
+    # negative, making the base negative; raised to a non-integer beta that's
+    # a NaN in numpy (and aborts the fit). Both must stay positive to keep
+    # the model well-defined at every point the optimizer visits.
+    initial_params["tau"].set(min=1e-6)
+    initial_params["beta"].set(min=1e-6)
 
     result = stretched_exponential_model.fit(
         power, initial_params, t=times
@@ -157,6 +163,9 @@ def exponential_params(power, times, initial_values=None):
     for name, value in (initial_values or {}).items():
         if name in initial_params:
             initial_params[name].set(value=value)
+    # decay is a denominator in exp(-t/decay) - keep it positive so the
+    # optimizer can't cross zero and produce a divide-by-zero/NaN.
+    initial_params["decay"].set(min=1e-6)
     result = exponential_model.fit(power, initial_params, x=times)
 
     amplitude = result.best_values["amplitude"]
@@ -216,6 +225,9 @@ def biexponential_params(power, times, initial_values=None):
     initial_params = biexp_model.make_params(
         **{_BIEXP_DISPLAY_TO_LMFIT[name]: value for name, value in guess.items()}
     )
+    # both decays are denominators in exp(-t/tau) - see stretched_exponential_params.
+    initial_params["exp1_decay"].set(min=1e-6)
+    initial_params["exp2_decay"].set(min=1e-6)
     result = biexp_model.fit(power, initial_params, x=times)
 
     tau_min = min(
@@ -274,6 +286,10 @@ def logistic_params(power, times, initial_values=None):
     guess = logistic_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = log_exp_model.make_params(**guess)
+    # tau: denominator in exp(-t/tau), see stretched_exponential_params. k: divides
+    # both L and the T80/lifetime-energy formulas below, so it can't be zero either.
+    initial_params["tau"].set(min=1e-6)
+    initial_params["k"].set(min=1e-6)
     result = log_exp_model.fit(power, initial_params, t=times)
 
     tS, time_extrapolate, pce_extrapolate = find_tS(times, result)
@@ -331,6 +347,10 @@ def erfc_params(power, times, initial_values=None):
     guess = erfc_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = erfc_model.make_params(**guess)
+    # b is a denominator inside erfc((t-t0)/b) - the same div-by-zero/NaN
+    # risk as tau elsewhere; the default guess already avoids 0 but the
+    # optimizer is still free to wander back to it without this bound.
+    initial_params["b"].set(min=1e-6)
     result = erfc_model.fit(power, initial_params, t=times)
 
     PCE0 = result.best_values["PCE0"]
