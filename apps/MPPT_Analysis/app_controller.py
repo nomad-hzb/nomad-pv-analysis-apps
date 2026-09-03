@@ -71,7 +71,7 @@ class MPPTAnalysisApp:
             "Curve Fitting", "This tab will be enabled after confirming sample selection."
         )
         plotting_tab = self.gui_components.create_disabled_tab(
-            "Plotting", "This tab will be enabled after completing curve fitting."
+            "Visualization", "This tab will be enabled after completing curve fitting."
         )
         download_tab = self.gui_components.create_disabled_tab(
             "Download Results", "This tab will be enabled after completing curve fitting."
@@ -82,7 +82,7 @@ class MPPTAnalysisApp:
             "Batch Selection",
             "Sample Selection",
             "Curve Fitting",
-            "Plotting",
+            "Visualization",
             "Download Results",
         )  # noqa: E501
 
@@ -123,8 +123,13 @@ class MPPTAnalysisApp:
         self.tab_widget.set_title(2, "Curve Fitting")
         self.tab_widget.selected_index = 2
 
-    def enable_plotting_tab(self):
-        """Enable the plotting tab"""
+    def enable_plotting_tab(self, navigate=True):
+        """Enable (or refresh) the visualization tab.
+
+        navigate=False rebuilds the tab's content (so it reflects the latest
+        fit results next time it's opened) without switching the view there -
+        used after an individual per-sample fit, which should stay on the
+        Curve Fitting tab rather than jump away."""
         if not self.app_state.has_fit_results():
             return
 
@@ -134,8 +139,9 @@ class MPPTAnalysisApp:
         current_children[3] = plotting_tab
         self.tab_widget.children = current_children
 
-        self.tab_widget.set_title(3, "Plotting")
-        self.tab_widget.selected_index = 3
+        self.tab_widget.set_title(3, "Visualization")
+        if navigate:
+            self.tab_widget.selected_index = 3
 
         # Also enable download tab
         self.enable_download_tab()

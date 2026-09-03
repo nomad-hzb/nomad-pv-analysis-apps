@@ -2,6 +2,8 @@
 Application state management for MPPT Analysis App
 """
 
+import pandas as pd
+
 
 class AppState:
     """Centralized state management for the MPPT Analysis application"""
@@ -82,11 +84,44 @@ class AppState:
         if custom_names:
             self.data["custom_names"] = custom_names
 
-    def set_fit_results(self, fit_results, fitted_curves_data, model):
-        """Set fitting results"""
-        self.fit_results = fit_results
-        self.fitted_curves_data = fitted_curves_data
-        self.last_fitted_model = model
+    def set_fit_results(self, fitted_curves_data):
+        """Replace every fit result at once (the 'apply to all' path)."""
+        self.fitted_curves_data = dict(fitted_curves_data)
+        self._rebuild_fit_results_df()
+
+    def update_sample_fit_results(self, sample_id, fits_by_curve):
+        """Replace one sample's fits, leaving every other sample's fits untouched
+        (the individual, one-sample-at-a-time fitting path)."""
+        self.fitted_curves_data = {
+            key: fit for key, fit in self.fitted_curves_data.items() if key[0] != sample_id
+        }
+        for curve_id, fit in fits_by_curve.items():
+            self.fitted_curves_data[(sample_id, curve_id)] = fit
+        self._rebuild_fit_results_df()
+
+    def get_sample_fit_results(self, sample_id):
+        """Return {curve_id: fit_dict} for whatever has already been fitted for one sample."""
+        return {key[1]: fit for key, fit in self.fitted_curves_data.items() if key[0] == sample_id}
+
+    def _rebuild_fit_results_df(self):
+        """Recompute self.fit_results from self.fitted_curves_data - the single
+        source of truth is fitted_curves_data; the DataFrame is a derived view
+        kept around because the Statistical Summary / histograms / download
+        sheet already consume it in that shape."""
+        rows = []
+        for (sample_id, curve_id), fit in self.fitted_curves_data.items():
+            row = {
+                "sample_id": sample_id,
+                "curve_id": curve_id,
+                "model": fit["model"].abbreviated_name,
+                "n_frames": len(fit["time"]),
+                "max_time_h": float(fit["time"].max()) if len(fit["time"]) else None,
+            }
+            row.update(fit.get("params", {}))
+            rows.append(row)
+        self.fit_results = pd.DataFrame(rows) if rows else pd.DataFrame()
+        if self.fitted_curves_data:
+            self.last_fitted_model = next(iter(self.fitted_curves_data.values()))["model"]
 
     def get_sample_ids_list(self):
         """Get list of sample IDs"""
