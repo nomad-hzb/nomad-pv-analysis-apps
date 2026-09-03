@@ -4,6 +4,7 @@ GUI components for MPPT Analysis App
 
 import base64
 import io
+import logging
 import os
 import zipfile
 from datetime import datetime
@@ -16,6 +17,8 @@ from IPython.display import HTML, display
 from plotly.subplots import make_subplots
 
 from hysprint_utils.batch_selection import create_batch_selection
+
+logger = logging.getLogger(__name__)
 
 APP_VERSION = "0.2.0"
 
@@ -319,10 +322,10 @@ class GUIComponents:
         return fitted_df
 
     def create_fitting_tab(self):
-        """Create the curve fitting tab: model/range controls on the left, a
-        live raw-data + fit preview on the right, apply-to-all-or-one-sample-
-        at-a-time fitting, and a results table covering every selected sample
-        (fitted or not)."""
+        """Create the curve fitting tab: model/range/parameter controls on the
+        left, a live raw-data + fit + residuals preview on the right, apply-
+        to-all-or-one-sample-at-a-time fitting, and a results table covering
+        every selected sample (fitted or not)."""
         from data_manager import fit_curve
         from fitting_tools import available_fit_model_list
 
@@ -343,6 +346,8 @@ class GUIComponents:
             style={"description_width": "initial"},
         )
         formula_display = widgets.HTMLMath(value="")
+        param_fields_container = widgets.VBox([])
+        current_param_fields = {}  # {display_name: FloatText}, rebuilt per model/sample
 
         frame_range_selector = widgets.IntRangeSlider(
             value=(0, 0),
@@ -369,9 +374,16 @@ class GUIComponents:
             style={"description_width": "initial"},
         )
 
-        fit_button = widgets.Button(
-            description="Fit All Curves",
+        auto_fit_button = widgets.Button(
+            description="Auto Fit",
             button_style="primary",
+            tooltip="Fit using this model's own default starting guess, ignoring the fields below",
+            layout=widgets.Layout(width="150px"),
+        )
+        manual_fit_button = widgets.Button(
+            description="Fit With These Values",
+            button_style="info",
+            tooltip="Fit seeded from the parameter values below instead of the model's default guess",
             layout=widgets.Layout(width="200px"),
         )
         fit_status = widgets.Output()
@@ -399,6 +411,47 @@ class GUIComponents:
             if apply_to_all_checkbox.value:
                 return selected_samples[0] if selected_samples else None
             return sample_dropdown.value
+
+        def get_current_param_values():
+            return {name: field.value for name, field in current_param_fields.items()}
+
+        def set_param_fields(params_dict):
+            """Show a fit's converged values in the fields - called after any
+            successful fit, auto or manual, per the agreed design: the fields
+            always reflect the latest optimized result, not what was typed."""
+            for name, field in current_param_fields.items():
+                if name in params_dict:
+                    field.value = float(params_dict[name])
+
+        def rebuild_param_fields(change=None):
+            nonlocal current_param_fields
+            model = available_fit_model_list[model_selector.value]
+            sample_id = _current_preview_sample()
+            defaults = {}
+            if sample_id:
+                t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, 0)
+                if t_data is not None and len(t_data):
+                    start, end = frame_range_selector.value
+                    t_sub, y_sub = t_data[start : end + 1], y_data[start : end + 1]
+                    if len(t_sub) >= 1:
+                        try:
+                            defaults = model.default_guess(y_sub, t_sub)
+                        except Exception:
+                            logger.warning("default_guess failed for %s", model.name, exc_info=True)
+            fields = {}
+            rows = []
+            for name in model.columns[: model.n_params]:
+                field = widgets.FloatText(
+                    value=round(float(defaults.get(name, 0.0)), 6),
+                    description=name,
+                    layout=widgets.Layout(width="240px"),
+                    style={"description_width": "70px"},
+                )
+                field.observe(lambda change: update_preview(), names="value")
+                fields[name] = field
+                rows.append(field)
+            current_param_fields = fields
+            param_fields_container.children = rows
 
         def update_formula(change):
             model = available_fit_model_list[model_selector.value]
@@ -437,7 +490,13 @@ class GUIComponents:
                 start, end = frame_range_selector.value
                 model = available_fit_model_list[model_selector.value]
 
-                fig = go.Figure()
+                fig = make_subplots(
+                    rows=2,
+                    cols=1,
+                    shared_xaxes=True,
+                    row_heights=[0.72, 0.28],
+                    vertical_spacing=0.04,
+                )
                 fig.add_trace(
                     go.Scatter(
                         x=np.arange(len(y_data)),
@@ -445,12 +504,15 @@ class GUIComponents:
                         mode="lines",
                         name="Raw data",
                         line=dict(width=2, color="#1f77b4"),
-                    )
+                    ),
+                    row=1,
+                    col=1,
                 )
-                fig.add_vline(x=start, line_dash="dash", line_color="green")
-                fig.add_vline(x=end, line_dash="dash", line_color="green")
+                for x in (start, end):
+                    fig.add_vline(x=x, line_dash="dash", line_color="green", row=1, col=1)
+                    fig.add_vline(x=x, line_dash="dash", line_color="green", row=2, col=1)
 
-                fit = fit_curve(t_data, y_data, model, (start, end))
+                fit = fit_curve(t_data, y_data, model, (start, end), get_current_param_values())
                 if fit is not None:
                     x_fit = np.arange(
                         fit["point_start"], fit["point_start"] + len(fit["fitted_power"])
@@ -462,19 +524,35 @@ class GUIComponents:
                             mode="lines",
                             name="Fit",
                             line=dict(width=2, color="red", dash="dash"),
-                        )
+                        ),
+                        row=1,
+                        col=1,
                     )
+                    residuals = fit["original_power"] - fit["fitted_power"]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=residuals,
+                            mode="markers",
+                            name="Residual (raw - fit)",
+                            marker=dict(size=5, color="#d62728"),
+                        ),
+                        row=2,
+                        col=1,
+                    )
+                    fig.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
 
                 curve_note = (
                     ""
                     if len(dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)) <= 1
                     else " (curve 0)"
                 )
+                fig.update_yaxes(title_text="Power Density", row=1, col=1)
+                fig.update_yaxes(title_text="Residual", row=2, col=1)
+                fig.update_xaxes(title_text="Measurement point index", row=2, col=1)
                 fig.update_layout(
                     title=f"Preview - {sample_id}{curve_note}",
-                    xaxis_title="Measurement point index",
-                    yaxis_title="Power Density",
-                    height=450,
+                    height=560,
                     margin=dict(t=40),
                 )
                 display(go.FigureWidget(fig))
@@ -520,17 +598,25 @@ class GUIComponents:
                 else:
                     print("No fitting results available yet.")
 
+        def on_model_change(change):
+            update_formula(change)
+            rebuild_param_fields()
+            update_preview()
+
         def on_mode_toggle(change):
             sample_dropdown.layout.display = "none" if apply_to_all_checkbox.value else ""
-            fit_button.description = (
-                "Fit All Curves" if apply_to_all_checkbox.value else "Fit This Sample"
-            )
             if not apply_to_all_checkbox.value and not sample_dropdown.value and selected_samples:
                 sample_dropdown.value = selected_samples[0]
             update_range_bounds()
+            rebuild_param_fields()
             update_preview()
 
-        def perform_fitting(b):
+        def on_sample_change(change):
+            update_range_bounds()
+            rebuild_param_fields()
+            update_preview()
+
+        def perform_fitting(use_manual_values):
             if not selected_samples:
                 with fit_status:
                     fit_status.clear_output()
@@ -539,6 +625,7 @@ class GUIComponents:
 
             model = available_fit_model_list[model_selector.value]
             frame_range = frame_range_selector.value
+            initial_values = get_current_param_values() if use_manual_values else None
 
             with fit_status:
                 fit_status.clear_output()
@@ -548,7 +635,12 @@ class GUIComponents:
                         fitted = {}
                         for sample_id in selected_samples:
                             for curve_id, fit in dm.fit_sample(
-                                curves, sample_ids, sample_id, model, frame_range=frame_range
+                                curves,
+                                sample_ids,
+                                sample_id,
+                                model,
+                                frame_range=frame_range,
+                                initial_values=initial_values,
                             ).items():
                                 fitted[(sample_id, curve_id)] = fit
                         self.app_state.set_fit_results(fitted)
@@ -559,7 +651,12 @@ class GUIComponents:
                             print("⚠️ No sample selected.")
                             return
                         fits = dm.fit_sample(
-                            curves, sample_ids, sample_id, model, frame_range=frame_range
+                            curves,
+                            sample_ids,
+                            sample_id,
+                            model,
+                            frame_range=frame_range,
+                            initial_values=initial_values,
                         )
                         self.app_state.update_sample_fit_results(sample_id, fits)
                         new_fits = {(sample_id, cid): fit for cid, fit in fits.items()}
@@ -570,6 +667,14 @@ class GUIComponents:
                         for (sid, cid), fit in new_fits.items():
                             if fit.get("warning"):
                                 print(f"⚠️ {sid} (curve {cid}): {fit['warning']}")
+                        # Show the converged values, not what was typed - same for
+                        # both buttons, per the agreed design.
+                        preview_sample = _current_preview_sample()
+                        preview_fit = new_fits.get((preview_sample, 0)) or next(
+                            iter(new_fits.values()), None
+                        )
+                        if preview_fit:
+                            set_param_fields(preview_fit.get("params", {}))
                         if self.app_controller:
                             # "Fit This Sample" stays on the Curve Fitting tab so you
                             # can keep working through samples one at a time; only
@@ -591,24 +696,25 @@ class GUIComponents:
 
         update_formula(None)
         update_range_bounds()
+        rebuild_param_fields()
         refresh_results_panels()
 
-        model_selector.observe(update_formula, names="value")
-        model_selector.observe(update_preview, names="value")
+        model_selector.observe(on_model_change, names="value")
         frame_range_selector.observe(update_preview, names="value")
         apply_to_all_checkbox.observe(on_mode_toggle, names="value")
-        sample_dropdown.observe(
-            lambda change: (update_range_bounds(), update_preview()), names="value"
-        )
-        fit_button.on_click(perform_fitting)
+        sample_dropdown.observe(on_sample_change, names="value")
+        auto_fit_button.on_click(lambda b: perform_fitting(False))
+        manual_fit_button.on_click(lambda b: perform_fitting(True))
 
         left_column = widgets.VBox(
             [
                 model_selector,
                 formula_display,
+                widgets.HTML('<b>Parameters (editable - seeds "Fit With These Values"):</b>'),
+                param_fields_container,
                 frame_range_selector,
                 frame_range_info,
-                fit_button,
+                widgets.HBox([auto_fit_button, manual_fit_button]),
                 fit_status,
             ],
             layout=widgets.Layout(width="420px"),

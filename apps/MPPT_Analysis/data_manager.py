@@ -102,7 +102,7 @@ class MPPTRow(BaseModel):
         return float(v)
 
 
-def fit_curve(t_data, y_data, model, frame_range=None):
+def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
     """Slice to frame_range (point indices), fit with model, return a result
     dict or None if there aren't enough valid points to fit at all.
 
@@ -110,6 +110,12 @@ def fit_curve(t_data, y_data, model, frame_range=None):
     "to the end of the array". point_start/point_end in the result reflect
     the requested range (not shrunk by any NaN rows dropped internally), since
     that's what the user actually configured.
+
+    initial_values: optional {param_name: value} seeding the optimizer's
+    starting point (overriding model's own default_guess for just the given
+    names). The fit still runs and can converge away from these - they are a
+    better starting guess, not fixed values. None/{} uses the model's own
+    defaults unchanged.
 
     Points strictly fewer than model.n_params already fail via the exception
     handler below (scipy's leastsq refuses to run when there are more free
@@ -141,7 +147,9 @@ def fit_curve(t_data, y_data, model, frame_range=None):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            fit_params, fitted_curve, lmfit_result = model.parfunc(y_sliced, t_sliced)
+            fit_params, fitted_curve, lmfit_result = model.parfunc(
+                y_sliced, t_sliced, initial_values
+            )
     except Exception:
         logger.warning("Fit failed for model %s", model.name, exc_info=True)
         return None
@@ -555,8 +563,15 @@ class DataManager:
             return None
         return value if isinstance(value, str) and value else None
 
-    def fit_sample(self, curves_data, sample_ids, sample_id, model, frame_range=None):
+    def fit_sample(
+        self, curves_data, sample_ids, sample_id, model, frame_range=None, initial_values=None
+    ):
         """Fit every curve belonging to one sample with the given model/point range.
+
+        initial_values: optional {param_name: value}, passed through to every
+        curve's fit_curve() call unchanged - each curve still gets its own
+        independent optimization from that shared starting point (see
+        fit_curve's docstring), it isn't forced to the same final result.
 
         Returns {curve_id: fit_dict}. A curve is omitted if it has too few
         points in range or the fit raises. fit_dict keys: time, fitted_power,
@@ -571,7 +586,7 @@ class DataManager:
             t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
             if t_data is None:
                 continue
-            fit = fit_curve(t_data, y_data, model, frame_range)
+            fit = fit_curve(t_data, y_data, model, frame_range, initial_values)
             if fit is not None:
                 fit["model"] = model
                 results[curve_id] = fit
