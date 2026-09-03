@@ -375,16 +375,18 @@ class GUIComponents:
         )
 
         auto_fit_button = widgets.Button(
-            description="Auto Fit",
+            description="Auto Fit & Save",
             button_style="primary",
-            tooltip="Fit using this model's own default starting guess, ignoring the fields below",
+            tooltip="Fit using this model's own default starting guess, ignoring the fields below, "
+            "and save the result into the results table below",
             layout=widgets.Layout(width="150px"),
         )
         manual_fit_button = widgets.Button(
-            description="Fit With These Values",
+            description="Fit & Save With These Values",
             button_style="info",
-            tooltip="Fit seeded from the parameter values below instead of the model's default guess",
-            layout=widgets.Layout(width="200px"),
+            tooltip="Fit seeded from the parameter values below instead of the model's default "
+            "guess, and save the result into the results table below",
+            layout=widgets.Layout(width="220px"),
         )
         fit_status = widgets.Output()
         preview_output = widgets.Output()
@@ -890,6 +892,14 @@ class GUIComponents:
             layout=widgets.Layout(width="200px"),
         )
 
+        histogram_param_selector = widgets.SelectMultiple(
+            options=self.plot_manager.get_histogram_param_options(),
+            value=tuple(self.plot_manager.get_default_histogram_params()),
+            description="Histogram of:",
+            layout=widgets.Layout(width="380px", height="90px"),
+            style={"description_width": "initial"},
+        )
+
         # Output areas
         curves_output = widgets.Output()
         histograms_output = widgets.Output()
@@ -901,39 +911,53 @@ class GUIComponents:
                     print("⚠️ No fitting results available. Please complete curve fitting first.")
                 return
 
+            plot_button.disabled = True
+            plot_button.description = "🔄 Generating..."
             with curves_output:
                 curves_output.clear_output(wait=True)
-                try:
-                    figs = self.plot_manager.plot_curves(
-                        plot_variable.value, plot_style.value, show_fits_checkbox.value
-                    )
-                    if figs:
-                        # go.FigureWidget renders via the ipywidgets comm protocol; a
-                        # plain go.Figure relies on a notebook mimetype renderer that
-                        # isn't guaranteed to be registered (see commit 8928055).
-                        for fig in figs:
-                            display(go.FigureWidget(fig))
-                    else:
-                        print("⚠️ No curve data to plot.")
-                except Exception as e:
-                    print(f"❌ Error generating curve plots: {str(e)}")
-                    import traceback
-
-                    traceback.print_exc()
-
+                print("🔄 Generating curve plots...")
             with histograms_output:
                 histograms_output.clear_output(wait=True)
-                try:
-                    fig = self.plot_manager.plot_histograms()
-                    if fig is not None:
-                        display(go.FigureWidget(fig))
-                    else:
-                        print("⚠️ No histogram data available.")
-                except Exception as e:
-                    print(f"❌ Error generating histograms: {str(e)}")
-                    import traceback
+                print("🔄 Generating histograms...")
+            try:
+                with curves_output:
+                    curves_output.clear_output(wait=True)
+                    try:
+                        figs = self.plot_manager.plot_curves(
+                            plot_variable.value, plot_style.value, show_fits_checkbox.value
+                        )
+                        if figs:
+                            # go.FigureWidget renders via the ipywidgets comm protocol; a
+                            # plain go.Figure relies on a notebook mimetype renderer that
+                            # isn't guaranteed to be registered (see commit 8928055).
+                            for fig in figs:
+                                display(go.FigureWidget(fig))
+                        else:
+                            print("⚠️ No curve data to plot.")
+                    except Exception as e:
+                        print(f"❌ Error generating curve plots: {str(e)}")
+                        import traceback
 
-                    traceback.print_exc()
+                        traceback.print_exc()
+
+                with histograms_output:
+                    histograms_output.clear_output(wait=True)
+                    try:
+                        fig = self.plot_manager.plot_histograms(
+                            list(histogram_param_selector.value)
+                        )
+                        if fig is not None:
+                            display(go.FigureWidget(fig))
+                        else:
+                            print("⚠️ No histogram data available for the selected parameter(s).")
+                    except Exception as e:
+                        print(f"❌ Error generating histograms: {str(e)}")
+                        import traceback
+
+                        traceback.print_exc()
+            finally:
+                plot_button.disabled = False
+                plot_button.description = "Generate Plots"
 
         plot_button.on_click(generate_plots)
 
@@ -949,6 +973,7 @@ class GUIComponents:
                 write_section,
                 widgets.HBox([plot_variable, plot_style]),
                 show_fits_checkbox,
+                histogram_param_selector,
                 plot_button,
                 widgets.HTML("<h4>Curve Plots</h4>"),
                 curves_output,
@@ -1002,6 +1027,17 @@ class GUIComponents:
         # Status output
         download_status = widgets.Output()
 
+        # Progress bar - stage-based (pandas/kaleido give no finer-grained hook
+        # to report against), but still turns "nothing happening" into visible
+        # steps for the slow parts (Excel writing, PNG export via kaleido).
+        download_progress = widgets.IntProgress(
+            min=0,
+            max=1,
+            value=0,
+            bar_style="info",
+            layout=widgets.Layout(width="400px", visibility="hidden"),
+        )
+
         # Download link output
         download_link = widgets.Output()
 
@@ -1012,23 +1048,31 @@ class GUIComponents:
                     print("⚠️ No fitting results available. Please complete curve fitting first.")
                 return
 
+            download_button.disabled = True
+            download_progress.layout.visibility = "visible"
+            download_progress.value = 0
             with download_status:
                 download_status.clear_output()
                 print("🔄 Generating download package...")
 
-                try:
-                    self._create_download_package(
-                        plots_format.value,
-                        include_raw_data.value,
-                        include_fitted_data.value,
-                        download_link,
-                        download_status,
-                    )
-                except Exception as e:
+            try:
+                self._create_download_package(
+                    plots_format.value,
+                    include_raw_data.value,
+                    include_fitted_data.value,
+                    download_link,
+                    download_status,
+                    download_progress,
+                )
+            except Exception as e:
+                with download_status:
                     print(f"❌ Error generating download package: {str(e)}")
                     import traceback
 
                     traceback.print_exc()
+            finally:
+                download_button.disabled = False
+                download_progress.layout.visibility = "hidden"
 
         download_button.on_click(generate_download_package)
 
@@ -1046,6 +1090,7 @@ class GUIComponents:
                 include_raw_data,
                 include_fitted_data,
                 download_button,
+                download_progress,
                 download_status,
                 download_link,
             ]
@@ -1053,56 +1098,103 @@ class GUIComponents:
 
         return controls
 
+    # Ordered, user-facing labels for each stage _create_download_package goes
+    # through - drives both the progress bar's length and its status prints.
+    _DOWNLOAD_STAGES = [
+        "Writing raw curve data",
+        "Writing fitted curve data",
+        "Writing fit results",
+        "Writing statistical summary",
+        "Writing sample information",
+        "Generating curve plots",
+        "Generating histograms",
+        "Writing README",
+        "Packaging zip file",
+    ]
+
     def _create_download_package(
-        self, plots_format, include_raw_data, include_fitted_data, download_link, download_status
+        self,
+        plots_format,
+        include_raw_data,
+        include_fitted_data,
+        download_link,
+        download_status,
+        download_progress,
     ):
-        """Create the download package with Excel files and plots"""
-        # Create a BytesIO buffer for the zip file
-        zip_buffer = io.BytesIO()
+        """Create the download package with Excel files and plots.
 
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            # 1. Create Excel file with multiple sheets
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                # Sheet 1: Raw curve data
-                if include_raw_data and self.app_state.has_curves_data():
-                    self._add_raw_data_sheet(writer)
+        Every stage's own print()s (including inside _add_plots_to_zip /
+        _add_histograms_to_zip / _add_readme_to_zip) must run while
+        download_status's Output() context is active - a bare print() during
+        a widget callback with no active Output() writes to the server's own
+        stdout, not the browser (see CLAUDE.md's Voila display() gotcha; the
+        same underlying comm-routing issue applies to print()). Hence the
+        single `with download_status:` wrapping this whole method, rather
+        than each helper reopening its own.
+        """
+        download_progress.max = len(self._DOWNLOAD_STAGES)
 
-                # Sheet 2: Fitted curve data
-                if include_fitted_data and self.app_state.fitted_curves_data:
-                    self._add_fitted_data_sheet(writer)
+        with download_status:
 
-                # Sheet 3: Fit results - every selected sample/curve, including
-                # ones not yet fitted (matches the Curve Fitting tab's own table)
-                if self.app_state.has_selected_samples():
-                    self._build_full_fit_results_df().to_excel(
-                        writer, sheet_name="Fit_Results", index=False
-                    )
+            def advance(stage_index, label):
+                download_progress.value = stage_index
+                print(f"🔄 [{stage_index}/{len(self._DOWNLOAD_STAGES)}] {label}...")
 
-                # Sheet 4: Statistical summary
-                if self.app_state.has_fit_results():
-                    self._add_statistical_summary_sheet(writer)
+            # Create a BytesIO buffer for the zip file
+            zip_buffer = io.BytesIO()
 
-                # Sheet 5: Sample information
-                if self.app_state.has_selected_samples():
-                    self._add_sample_info_sheet(writer)
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                # 1. Create Excel file with multiple sheets
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                    # Sheet 1: Raw curve data
+                    if include_raw_data and self.app_state.has_curves_data():
+                        advance(1, self._DOWNLOAD_STAGES[0])
+                        self._add_raw_data_sheet(writer)
 
-            # Add Excel file to zip
-            zip_file.writestr("MPPT_Analysis_Results.xlsx", excel_buffer.getvalue())
+                    # Sheet 2: Fitted curve data
+                    if include_fitted_data and self.app_state.fitted_curves_data:
+                        advance(2, self._DOWNLOAD_STAGES[1])
+                        self._add_fitted_data_sheet(writer)
 
-            # 2. Generate basic plots
-            print("📊 Generating basic plots...")
-            plot_counter = self._add_plots_to_zip(zip_file, plots_format)
+                    # Sheet 3: Fit results - every selected sample/curve, including
+                    # ones not yet fitted (matches the Curve Fitting tab's own table)
+                    if self.app_state.has_selected_samples():
+                        advance(3, self._DOWNLOAD_STAGES[2])
+                        self._build_full_fit_results_df().to_excel(
+                            writer, sheet_name="Fit_Results", index=False
+                        )
 
-            # 3. Generate histograms
-            self._add_histograms_to_zip(zip_file, plots_format)
+                    # Sheet 4: Statistical summary
+                    if self.app_state.has_fit_results():
+                        advance(4, self._DOWNLOAD_STAGES[3])
+                        self._add_statistical_summary_sheet(writer)
 
-            # 4. Add README
-            self._add_readme_to_zip(zip_file, plot_counter, plots_format)
+                    # Sheet 5: Sample information
+                    if self.app_state.has_selected_samples():
+                        advance(5, self._DOWNLOAD_STAGES[4])
+                        self._add_sample_info_sheet(writer)
 
-        # Prepare download
-        zip_buffer.seek(0)
-        zip_data = zip_buffer.read()
+                # Add Excel file to zip
+                zip_file.writestr("MPPT_Analysis_Results.xlsx", excel_buffer.getvalue())
+
+                # 2. Generate basic plots
+                advance(6, self._DOWNLOAD_STAGES[5])
+                plot_counter = self._add_plots_to_zip(zip_file, plots_format)
+
+                # 3. Generate histograms
+                advance(7, self._DOWNLOAD_STAGES[6])
+                self._add_histograms_to_zip(zip_file, plots_format)
+
+                # 4. Add README
+                advance(8, self._DOWNLOAD_STAGES[7])
+                self._add_readme_to_zip(zip_file, plot_counter, plots_format)
+
+                advance(9, self._DOWNLOAD_STAGES[8])
+
+            # Prepare download
+            zip_buffer.seek(0)
+            zip_data = zip_buffer.read()
 
         # Create download link
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1135,7 +1227,10 @@ class GUIComponents:
             ''')
             )
 
-        print(f"✅ Package generated successfully! ({len(zip_data) / 1024 / 1024:.2f} MB)")
+        download_progress.value = download_progress.max
+        download_progress.bar_style = "success"
+        with download_status:
+            print(f"✅ Package generated successfully! ({len(zip_data) / 1024 / 1024:.2f} MB)")
 
     def _add_raw_data_sheet(self, writer):
         """Add raw curve data to Excel"""

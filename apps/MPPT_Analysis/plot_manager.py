@@ -310,17 +310,62 @@ class PlotManager:
             figs.append(fig)
         return figs
 
-    def plot_histograms(self):
-        """Generate histograms for t80 and ts parameters; returns go.Figure or None"""
+    # Columns that aren't a fitted parameter/metric - never offered as a histogram choice.
+    _NON_HISTOGRAM_COLUMNS = {"sample_id", "curve_id", "model", "n_frames", "max_time_h", "note"}
+    # Default selection for callers that don't let the user choose (e.g. the
+    # download package export) - the standard ISOS time metrics, in this order.
+    _DEFAULT_HIST_PARAMS = ["t80", "T80", "tS", "ts", "Ts80"]
+    # Param names whose values are hours, per fitting_tools.py's model conventions -
+    # everything else (R2, beta, amplitudes, ...) is left unitless on the axis label.
+    _HOUR_PARAMS = {
+        "t80",
+        "T80",
+        "tS",
+        "ts",
+        "Ts80",
+        "T95",
+        "Ts95",
+        "tau",
+        "tau1",
+        "tau2",
+        "x0",
+        "t0",
+        "b",
+    }
+
+    def get_histogram_param_options(self):
+        """Numeric fit_results columns that can be histogrammed, for a GUI selector."""
+        if not self.app_state.has_fit_results():
+            return []
+        df = self.app_state.fit_results
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        return [c for c in numeric_cols if c not in self._NON_HISTOGRAM_COLUMNS]
+
+    def get_default_histogram_params(self):
+        """Which of get_histogram_param_options() to preselect in a GUI selector -
+        the standard ISOS time metrics if the current model produced any, else
+        every available option (so the selector never starts out empty)."""
+        available = self.get_histogram_param_options()
+        defaults = [p for p in self._DEFAULT_HIST_PARAMS if p in available]
+        return defaults or available
+
+    def plot_histograms(self, params=None):
+        """Generate histograms for the given fit_results columns (go.Figure), or
+        None if there's nothing to plot. params=None falls back to whichever of
+        the standard ISOS time metrics (t80/T80/tS/Ts80/...) are present, for
+        callers that haven't been updated to let the user choose."""
         if not self.app_state.has_fit_results():
             logger.warning("No fitting results available for histograms")
             return None
 
         available_params = list(self.app_state.fit_results.columns)
-        hist_params = [p for p in ["t80", "T80", "tS", "ts", "Ts80"] if p in available_params]
+        if params is None:
+            hist_params = [p for p in self._DEFAULT_HIST_PARAMS if p in available_params]
+        else:
+            hist_params = [p for p in params if p in available_params]
 
         if not hist_params:
-            logger.warning("No time parameters (t80, T80, tS, Ts80) found in fitting results")
+            logger.warning("No parameters selected/available for histograms")
             return None
 
         n_params = len(hist_params)
@@ -352,7 +397,8 @@ class PlotManager:
         for i, param in enumerate(hist_params):
             row = i // cols + 1
             col = i % cols + 1
-            fig.update_xaxes(title_text="%s (hours)" % param, row=row, col=col)
+            axis_title = f"{param} (hours)" if param in self._HOUR_PARAMS else param
+            fig.update_xaxes(title_text=axis_title, row=row, col=col)
             fig.update_yaxes(title_text="Count", row=row, col=col)
 
         return fig

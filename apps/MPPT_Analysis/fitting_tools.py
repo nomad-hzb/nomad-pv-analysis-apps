@@ -188,7 +188,7 @@ def exponential_params(power, times, initial_values=None):
     else:
         result_values = [
             result.best_values["amplitude"],
-            result.uvars["decay"],
+            result.best_values["decay"],
             result.rsquared,
             t80_capped,
             lifetime_energy,
