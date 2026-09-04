@@ -1,0 +1,19 @@
+[project]
+name = "thickness-tracer"
+version = "0.0.1"
+description = "Placeholder for the Thickness Tracer app; not implemented yet"
+requires-python = ">=3.10"
+dependencies = [
+    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "ipywidgets>=8.0",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
