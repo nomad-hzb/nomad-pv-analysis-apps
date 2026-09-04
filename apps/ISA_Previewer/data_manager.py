@@ -242,14 +242,23 @@ def sample_name_in_h5(h5_path: str) -> str | None:
 # Handover from the main previewer
 # ---------------------------------------------------------------------------
 def get_stored_h5_path() -> str | None:
-    """The h5 path the main previewer put into the IPython store, if any.
+    """The h5 path the main previewer put into the IPython store, if it still exists.
 
-    The store is how every linked notebook receives its file (Peak_Explorer reads it the
-    same way), and it is the only entry point the two analysis variants have. None means
-    the notebook was opened directly rather than through a previewer link, which is not an
-    error: the app then just starts on an empty selection.
+    The store is how a linked notebook receives its file (Peak_Explorer reads it the same
+    way). None means nothing usable was handed over, which is not an error: every variant
+    also stands on its own through the selectors, so it simply starts empty.
+
+    The existence check matters because the store is an on-disk database, not session state.
+    Without it a notebook opened cold from the dashboard would silently reopen whatever file
+    some previewer session stored days ago, possibly one that has since been removed.
     """
-    return _read_stored("h5_path")
+    path = _read_stored("h5_path")
+    if not path:
+        return None
+    if not os.path.exists(path):
+        logger.info("Stored h5 path %s no longer exists; starting on an empty selection", path)
+        return None
+    return path
 
 
 def get_stored_screenwidth() -> int | None:

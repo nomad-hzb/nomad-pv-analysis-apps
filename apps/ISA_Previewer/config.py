@@ -137,8 +137,12 @@ class Variant:
     optical: bool = False
     """Only read for the "overview" section: display_widgets(xrd=..., optical=...)."""
     select_from_store: bool = False
-    """True for the variants entered from the main previewer: instead of starting on an
-    empty selection, read h5_path out of the IPython store and open on that file's sample."""
+    """True for the variants reachable from a main previewer link: if a file was handed over
+    through the IPython store, open on it instead of on an empty selection.
+
+    It is a head start, never a requirement. Every variant builds the full upload, sample and
+    measurement selectors, so all three notebooks work standalone when opened from the app
+    dashboard; a linked one just arrives with the selection already made."""
 
 
 VARIANTS = {

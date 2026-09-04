@@ -22,11 +22,53 @@ def test_every_variant_section_has_a_builder(cfg, gui):
         assert set(variant.sections) <= known, f"variant {name} names an unknown section"
 
 
-def test_analysis_variants_are_entered_from_the_main_previewer(cfg):
-    """The two analysis variants only ever open a file handed to them through the store."""
+def test_analysis_variants_accept_a_file_from_the_main_previewer(cfg):
+    """The two analysis variants take a head start from a link, the main previewer does not."""
     assert cfg.VARIANTS["main"].select_from_store is False
     assert cfg.VARIANTS["giwaxs"].select_from_store is True
     assert cfg.VARIANTS["optical"].select_from_store is True
+
+
+# ---------------------------------------------------------------------------
+# standing on their own: opened from the dashboard rather than from a link
+# ---------------------------------------------------------------------------
+def test_stored_path_is_ignored_once_the_file_is_gone(dm, monkeypatch, tmp_path):
+    """The IPython store is an on-disk database, so a stale entry outlives its file."""
+    monkeypatch.setattr(dm, "_read_stored", lambda _name: str(tmp_path / "deleted.h5"))
+
+    assert dm.get_stored_h5_path() is None
+
+
+def test_stored_path_is_used_while_the_file_is_there(dm, monkeypatch, tmp_path):
+    existing = tmp_path / "run.h5"
+    existing.write_bytes(b"")
+    monkeypatch.setattr(dm, "_read_stored", lambda _name: str(existing))
+
+    assert dm.get_stored_h5_path() == str(existing)
+
+
+def test_preselect_leaves_the_selection_empty_with_nothing_stored(dm, gui, monkeypatch):
+    """Opened cold from the dashboard, an analysis notebook starts on its own selectors."""
+    monkeypatch.setattr(dm, "get_stored_h5_path", lambda: None)
+    called = []
+    monkeypatch.setattr(dm, "upload_id_from_path", lambda path: called.append(path))
+
+    gui.preselect_from_store(_Select(), _Select(), _Select(), _IntText())
+
+    assert called == []
+
+
+class _Select:
+    """Minimal stand-in for widgets.Select: enough to notice if preselect touches it."""
+
+    def __init__(self):
+        self.options = []
+        self.value = None
+
+
+class _IntText:
+    def __init__(self):
+        self.value = 0
 
 
 # ---------------------------------------------------------------------------

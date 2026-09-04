@@ -20,6 +20,14 @@ _SHARED_DIR = _REPO_ROOT / "shared"
 if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
+_MODULES: dict = {}
+"""This app's loaded modules, keyed by bare name. Held here rather than in sys.modules, which
+is shared with every other app's tests."""
+
+_DISPLACED: dict = {}
+"""What sys.modules held under those bare names before we borrowed them, so another app's
+already-registered module can be put back exactly as it was."""
+
 
 def _stub_insitu_analyser() -> None:
     """Register a stand-in for insitu_analyser before the app imports from it.
@@ -75,25 +83,47 @@ def _stub_insitu_analyser() -> None:
 def _load(module_name: str, marker: str):
     """Load one of this app's modules from its file, without putting the app dir on sys.path.
 
-    The modules are registered under their bare names because they import each other that
-    way ("import data_manager"), which is the repo's import convention for app-local
-    modules. The marker attribute check is what keeps a full "pytest tests/" run correct:
-    if another app's same-named module is in sys.modules, this reloads ours over it.
+    A module has to sit in sys.modules under its bare name while it loads, because these
+    modules import each other that way ("import data_manager"), which is the repo's import
+    convention for app-local modules. The bare names are removed again afterwards by
+    _release_bare_names: several apps have a module called data_manager, and leaving ours
+    registered would hand it to whichever app's tests import theirs next.
     """
-    existing = sys.modules.get(module_name)
-    if existing is not None and hasattr(existing, marker):
-        return existing
+    cached = _MODULES.get(module_name)
+    if cached is not None and hasattr(cached, marker):
+        return cached
     spec = importlib.util.spec_from_file_location(module_name, _APP_DIR / f"{module_name}.py")
     module = importlib.util.module_from_spec(spec)
+    _DISPLACED.setdefault(module_name, sys.modules.get(module_name))
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    _MODULES[module_name] = module
     return module
+
+
+def _release_bare_names() -> None:
+    """Put sys.modules back the way we found it, keeping the loaded objects in _MODULES.
+
+    Safe once loading is done: the modules have already bound their references to each
+    other, and the fixtures hand out the cached objects rather than re-importing. Restoring
+    rather than deleting matters because another app's conftest may already have registered
+    its own data_manager under that name, and its test module imports it later.
+    """
+    for module_name, module in _MODULES.items():
+        if sys.modules.get(module_name) is not module:
+            continue
+        displaced = _DISPLACED.get(module_name)
+        if displaced is None:
+            del sys.modules[module_name]
+        else:
+            sys.modules[module_name] = displaced
 
 
 _stub_insitu_analyser()
 _load("config", "VARIANTS")
 _load("data_manager", "upload_id_from_path")
 _load("gui_components", "build_sections")
+_release_bare_names()
 
 
 @pytest.fixture

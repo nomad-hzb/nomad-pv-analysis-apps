@@ -166,6 +166,41 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "fa-search",
         ),
     ],
+    # In-situ apps read the HDF5 files insitu_analyser writes to NOMAD. The previewer is the
+    # usual way in and hands its selection to the other three, but each of them also works on
+    # its own: opened from here they start on their own upload/sample/run selectors.
+    "µSlot-die coater": [
+        AppEntry(
+            "ISA_Previewer",
+            "isa_previewer.ipynb",
+            "ISA Previewer",
+            "Pick a NOMAD upload, sample and in-situ run, then step through its heatmaps, "
+            "diffractograms and logging.",
+            "fa-map",
+        ),
+        AppEntry(
+            "ISA_Previewer",
+            "giwaxs_analysis.ipynb",
+            "GIWAXS Analysis",
+            "Cuts and run-to-run comparison for the detector images of an in-situ run.",
+            "fa-sun",
+        ),
+        AppEntry(
+            "ISA_Previewer",
+            "optical_analysis.ipynb",
+            "Optical Analysis",
+            "Reflectance, transmission and PL spectra of an in-situ run.",
+            "fa-rainbow",
+        ),
+        AppEntry(
+            "Thickness_tracer",
+            "thickness_tracer.ipynb",
+            "Thickness Tracer",
+            "Film thickness from reflectance modelling. Not implemented yet!",
+            "fa-ruler-vertical",
+            experimental=True,
+        ),
+    ],
     "Utilities & Calculators": [
         AppEntry(
             "DesignOfExperiments",
