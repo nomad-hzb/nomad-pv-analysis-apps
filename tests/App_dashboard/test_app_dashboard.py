@@ -49,7 +49,13 @@ def test_build_voila_url_matches_expected_nomad_structure():
     assert url.startswith("/nomad-oasis/north/user/edgar/voila/voila/render/")
 
 
-def test_categories_cover_every_app_folder_exactly_once():
+def test_categories_cover_every_app_folder_without_repeating_a_notebook():
+    """Every app folder appears, and no notebook is registered twice.
+
+    Uniqueness is per (folder, notebook), not per folder: one app may expose several
+    notebooks as separate cards. ISA_Previewer does, with its previewer plus the GIWAXS and
+    optical analysis notebooks that share its codebase.
+    """
     apps_dir = os.path.join(os.path.dirname(__file__), "..", "..", "apps")
     all_folders = {
         name
@@ -57,17 +63,15 @@ def test_categories_cover_every_app_folder_exactly_once():
         if os.path.isdir(os.path.join(apps_dir, name)) and name != "App_dashboard"
     }
 
-    listed_folders = [
-        entry.folder
+    listed = [
+        (entry.folder, entry.notebook)
         for entries in CATEGORIES.values()
         for entry in entries
         if not entry.external_url
     ]
 
-    assert len(listed_folders) == len(set(listed_folders)), (
-        "duplicate app folder in dashboard registry"
-    )
-    assert set(listed_folders) == all_folders
+    assert len(listed) == len(set(listed)), "duplicate notebook in dashboard registry"
+    assert {folder for folder, _ in listed} == all_folders
 
 
 def test_url_base_has_no_trailing_slash():
