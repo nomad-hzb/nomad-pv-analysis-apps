@@ -1,7 +1,7 @@
 # app.py
 # Thin orchestrator: picks the variant and hands it to gui_components. No business logic.
 #
-# The three notebooks in this folder all end here, differing only in the variant name they
+# The four notebooks in this folder all end here, differing only in the variant name they
 # pass. What each variant shows is decided in config.VARIANTS.
 
 import logging
@@ -28,7 +28,7 @@ def initialize_ui(url: str, token: str, variant_name: str = "main") -> widgets.W
 
     url:   NOMAD API endpoint, e.g. URL_BASE + API_ENDPOINT
     token: NOMAD access token
-    variant_name: a key of config.VARIANTS ("main", "giwaxs", "optical")
+    variant_name: a key of config.VARIANTS ("main", "giwaxs", "optical", "timely")
     """
     global _ui_widget_ids
 

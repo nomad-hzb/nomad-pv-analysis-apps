@@ -1,5 +1,5 @@
 # gui_components.py
-# All ipywidgets code for the ISA Previewer. The three notebooks differ only in the Variant
+# All ipywidgets code for the ISA Previewer. The four notebooks differ only in the Variant
 # they hand to build_ui, so everything below is variant driven rather than duplicated.
 
 import logging
@@ -9,6 +9,7 @@ import data_manager
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 from insitu_analyser.Preview.perfect_previewer import PERFECTPREVIEWER
+from insitu_analyser.timely_teller import TIMELYTELLER
 from insitu_analyser.utils.search_bar_widget import create_spinner
 from IPython.display import display
 
@@ -35,16 +36,19 @@ Returned as part of the widget tree rather than display()ed, because a bare disp
 outside a cell execution is silently dropped under Voila."""
 
 
-class PreviewerSession:
-    """One opened h5 file: the PERFECTPREVIEWER and the widgets built from it.
+class Session:
+    """One opened selection: the object the sections were built from, and those widgets.
+
+    The source is a PERFECTPREVIEWER for a measurement variant and a TIMELYTELLER for an
+    upload variant; this class only has to hold it alive and let go of it again.
 
     Exists so a new selection can tear the previous one down completely. clear_output only
     hides widgets, it neither closes them nor frees the figures behind them, and an ISA h5
     is large enough that leaking one per selection is felt within a session.
     """
 
-    def __init__(self, previewer: PERFECTPREVIEWER, contents: list[widgets.Widget]):
-        self.previewer = previewer
+    def __init__(self, source, contents: list[widgets.Widget]):
+        self.source = source
         self.contents = contents
 
     def dispose(self) -> None:
@@ -59,7 +63,7 @@ class PreviewerSession:
             except Exception:
                 logger.exception("Failed to close a previewer widget")
         self.contents = []
-        self.previewer = None
+        self.source = None
 
 
 def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
@@ -79,7 +83,9 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
     all_uploads = data_manager.list_uploads_with_measurements(url, token)
     uploads.options = all_uploads
 
-    session: dict[str, PreviewerSession | None] = {"current": None}
+    upload_only = variant.selection == config.SELECTION_UPLOAD
+
+    session: dict[str, Session | None] = {"current": None}
 
     def on_filter(_change):
         """Narrow the upload list as the user types. Case insensitive substring match."""
@@ -87,6 +93,10 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
         uploads.options = [o for o in all_uploads if term in o[0].lower()] if term else all_uploads
 
     def on_select_upload(_change):
+        if upload_only:
+            # The upload is the whole selection here, so there is nothing left to narrow down.
+            open_selection()
+            return
         measurements.options = []
         if not uploads.value:
             samples.options = []
@@ -104,18 +114,30 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
         )
 
     def on_select_measurement(_change):
-        if not measurements.value:
-            return
-        open_file(measurements.value)
+        open_selection()
 
     def on_pixel_width(_change):
-        # Rebuild the current file at the new width. The old notebooks reached this by
+        # Rebuild the current selection at the new width. The old notebooks reached this by
         # re-running the sample query so the measurement list was rewritten and its observer
         # fired again; going straight at the file skips two NOMAD requests.
-        if measurements.value:
-            open_file(measurements.value)
+        open_selection()
 
-    def open_file(h5_path: str) -> None:
+    def current_target() -> str | None:
+        """What the variant opens for the current selection, or None while nothing is picked.
+
+        A path either way: the selected h5 for a measurement variant, the selected upload's
+        folder for an upload variant. None also covers an upload that is listed in NOMAD but
+        not mounted for this user, which is nothing to open rather than an error.
+        """
+        if upload_only:
+            return data_manager.upload_folder_path(uploads.value) if uploads.value else None
+        return measurements.value or None
+
+    def open_selection() -> None:
+        target = current_target()
+        if target is None:
+            return
+
         out.clear_output()
         with out:
             display(spinner)
@@ -124,19 +146,14 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
             session["current"].dispose()
             session["current"] = None
 
-        previewer = PERFECTPREVIEWER(
-            h5_path,
-            screenwidth=pixel_width.value,
-            initialize_overview=variant.initialize_overview,
-        )
-        contents = build_sections(previewer, variant)
+        source = open_source(target, variant, pixel_width.value)
+        contents = build_sections(source, variant)
         # Publish before rendering, so a link opened from the rendered page finds the file.
-        data_manager.store_for_linked_notebooks(h5_path, pixel_width.value)
-        link_row = build_link_row(h5_path, user)
-        if link_row is not None:
-            contents.append(link_row)
+        handover = handover_row(target, user, pixel_width.value, variant)
+        if handover is not None:
+            contents.append(handover)
 
-        session["current"] = PreviewerSession(previewer, contents)
+        session["current"] = Session(source, contents)
 
         out.clear_output()
         with out:
@@ -145,15 +162,20 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
 
     uploads_filter.observe(on_filter, names=["value"])
     uploads.observe(on_select_upload, names=["value"])
-    samples.observe(on_select_sample, names=["value"])
-    measurements.observe(on_select_measurement, names=["value"])
     pixel_width.observe(on_pixel_width, names=["value"])
+    if not upload_only:
+        samples.observe(on_select_sample, names=["value"])
+        measurements.observe(on_select_measurement, names=["value"])
 
     if variant.select_from_store:
         preselect_from_store(uploads, samples, measurements, pixel_width)
 
-    selectors = widgets.HBox([uploads_filter, uploads, samples, measurements])
-    return widgets.VBox([widgets.HTML(OVERFLOW_CSS), selectors, pixel_width, out])
+    # The sample and measurement columns are left out of the tree of an upload variant rather
+    # than shown empty: they would suggest a selection that has no effect on what it opens.
+    columns = [uploads_filter, uploads]
+    if not upload_only:
+        columns += [samples, measurements]
+    return widgets.VBox([widgets.HTML(OVERFLOW_CSS), widgets.HBox(columns), pixel_width, out])
 
 
 def preselect_from_store(
@@ -165,7 +187,8 @@ def preselect_from_store(
     """Open on the file the main previewer handed over, if it handed one over.
 
     Setting uploads.value cascades through the observers, so samples and measurements fill
-    themselves; this only has to pick the right entry at each step. Nothing stored means the
+    themselves; this only has to pick the right entry at each step. An upload variant is done
+    after that first step: its upload is the whole selection. Nothing stored means the
     notebook was opened directly instead of through a link, which is not an error: the app
     then starts on an empty selection like the main previewer does.
     """
@@ -185,6 +208,10 @@ def preselect_from_store(
         logger.warning("Stored file lives in upload %s, which is not selectable", upload_id)
         return
     uploads.value = upload_id
+    if not samples.options:
+        # Nothing left to narrow down: an upload variant fills no sample column at all, and an
+        # upload without samples has no measurement to pick either.
+        return
 
     sample_name = data_manager.sample_name_in_h5(h5_path)
     if sample_name:
@@ -197,20 +224,54 @@ def preselect_from_store(
         measurements.value = h5_path
 
 
-def section_builders(previewer: PERFECTPREVIEWER, variant: config.Variant) -> dict:
+def open_source(target: str, variant: config.Variant, screenwidth: int):
+    """Open what the variant selects and return the object its sections are built from.
+
+    A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant a
+    TIMELYTELLER on the selected upload folder, which scans that folder for h5 files itself.
+    """
+    if variant.selection == config.SELECTION_UPLOAD:
+        return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
+    return PERFECTPREVIEWER(
+        target,
+        screenwidth=screenwidth,
+        initialize_overview=variant.initialize_overview,
+    )
+
+
+def handover_row(
+    target: str, user: str, screenwidth: int, variant: config.Variant
+) -> widgets.Widget | None:
+    """Publish the current file for the linked notebooks and return their link row.
+
+    Only a measurement variant has a single file to hand on: an upload variant opened a whole
+    folder, so it neither overwrites the stored selection nor offers links that would be about
+    a file it is not showing.
+    """
+    if variant.selection == config.SELECTION_UPLOAD:
+        return None
+    data_manager.store_for_linked_notebooks(target, screenwidth)
+    return build_link_row(target, user)
+
+
+def section_builders(source, variant: config.Variant) -> dict:
     """One builder per section name a variant may list.
 
-    Every value is a lambda, so the keys can be read without a previewer to hand: that is
-    what lets a config listing an unknown section be caught up front rather than when
-    someone opens a file.
+    The source is whatever open_source returned for this variant, so a section only appears
+    here next to the sections built from the same kind of source.
+
+    Every value is a lambda, so the keys can be read without a source to hand: that is what
+    lets a config listing an unknown section be caught up front rather than when someone
+    opens a file.
     """
     return {
-        "overview": lambda: overview_widgets(previewer, variant),
-        "optical_data": lambda: previewer.display_optical_data(),
-        "logging": lambda: previewer.display_logging(),
-        "cuts": lambda: previewer.display_cuts(),
-        "comparison": lambda: previewer.display_comparison(),
-        "export": lambda: previewer.display_export(),
+        "overview": lambda: overview_widgets(source, variant),
+        "optical_data": lambda: source.display_optical_data(),
+        "logging": lambda: source.display_logging(),
+        "cuts": lambda: source.display_cuts(),
+        "comparison": lambda: source.display_comparison(),
+        "export": lambda: source.display_export(),
+        "timely_teller": lambda: source.display(),
     }
 
 
@@ -218,13 +279,13 @@ SECTION_NAMES = tuple(section_builders(None, None))
 """Every section name config.Variant.sections may contain."""
 
 
-def build_sections(previewer: PERFECTPREVIEWER, variant: config.Variant) -> list[widgets.Widget]:
+def build_sections(source, variant: config.Variant) -> list[widgets.Widget]:
     """The widgets this variant shows, in the order config lists them.
 
     A section that has nothing to show for this h5 returns None and is skipped, so a variant
     never has to know in advance what a given file contains.
     """
-    builders = section_builders(previewer, variant)
+    builders = section_builders(source, variant)
 
     contents: list[widgets.Widget] = []
     for section in variant.sections:

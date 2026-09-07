@@ -53,8 +53,8 @@ def test_categories_cover_every_app_folder_without_repeating_a_notebook():
     """Every app folder appears, and no notebook is registered twice.
 
     Uniqueness is per (folder, notebook), not per folder: one app may expose several
-    notebooks as separate cards. ISA_Previewer does, with its previewer plus the GIWAXS and
-    optical analysis notebooks that share its codebase.
+    notebooks as separate cards. ISA_Previewer does, with its previewer plus the GIWAXS,
+    optical analysis and timely teller notebooks that share its codebase.
     """
     apps_dir = os.path.join(os.path.dirname(__file__), "..", "..", "apps")
     all_folders = {

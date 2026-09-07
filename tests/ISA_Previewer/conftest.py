@@ -62,11 +62,15 @@ def _stub_insitu_analyser() -> None:
     previewer = types.ModuleType("insitu_analyser.Preview.perfect_previewer")
     previewer.PERFECTPREVIEWER = MagicMock(name="PERFECTPREVIEWER")
 
+    teller = types.ModuleType("insitu_analyser.timely_teller")
+    teller.TIMELYTELLER = MagicMock(name="TIMELYTELLER")
+
     utils.nomad_api_calls = api_calls
     utils.search_bar_widget = search_bar
     preview.perfect_previewer = previewer
     package.utils = utils
     package.Preview = preview
+    package.timely_teller = teller
 
     sys.modules.update(
         {
@@ -76,6 +80,7 @@ def _stub_insitu_analyser() -> None:
             "insitu_analyser.utils.search_bar_widget": search_bar,
             "insitu_analyser.Preview": preview,
             "insitu_analyser.Preview.perfect_previewer": previewer,
+            "insitu_analyser.timely_teller": teller,
         }
     )
 

@@ -167,8 +167,8 @@ CATEGORIES: dict[str, list[AppEntry]] = {
         ),
     ],
     # In-situ apps read the HDF5 files insitu_analyser writes to NOMAD. The previewer is the
-    # usual way in and hands its selection to the other three, but each of them also works on
-    # its own: opened from here they start on their own upload/sample/run selectors.
+    # usual way in and hands its selection to the others, but each of them also works on its
+    # own: opened from here they start on their own upload/sample/run selectors.
     "µSlot-die coater": [
         AppEntry(
             "ISA_Previewer",
@@ -191,6 +191,14 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Optical Analysis",
             "Reflectance, transmission and PL spectra of an in-situ run.",
             "fa-rainbow",
+        ),
+        AppEntry(
+            "ISA_Previewer",
+            "timely_teller.ipynb",
+            "Timely Teller",
+            "Plot any logged signal of a whole upload's in-situ runs against time, and "
+            "correlate them.",
+            "fa-chart-line",
         ),
         AppEntry(
             "Thickness_tracer",

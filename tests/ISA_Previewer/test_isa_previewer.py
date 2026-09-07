@@ -23,10 +23,23 @@ def test_every_variant_section_has_a_builder(cfg, gui):
 
 
 def test_analysis_variants_accept_a_file_from_the_main_previewer(cfg):
-    """The two analysis variants take a head start from a link, the main previewer does not."""
+    """The analysis variants take a head start from a link, the main previewer does not."""
     assert cfg.VARIANTS["main"].select_from_store is False
     assert cfg.VARIANTS["giwaxs"].select_from_store is True
     assert cfg.VARIANTS["optical"].select_from_store is True
+    assert cfg.VARIANTS["timely"].select_from_store is True
+
+
+def test_only_the_timely_variant_selects_by_upload(cfg):
+    """Selection depth decides what a variant opens, so an unknown value would open nothing."""
+    known = {cfg.SELECTION_MEASUREMENT, cfg.SELECTION_UPLOAD}
+    by_upload = set()
+    for name, variant in cfg.VARIANTS.items():
+        assert variant.selection in known, f"variant {name} has an unknown selection depth"
+        if variant.selection == cfg.SELECTION_UPLOAD:
+            by_upload.add(name)
+
+    assert by_upload == {"timely"}
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +103,22 @@ def test_upload_id_from_path_returns_none_outside_an_upload_folder(dm):
     assert dm.upload_id_from_path(os.path.join("/tmp", "somewhere", "run.h5")) is None
 
 
+def test_upload_folder_path_is_the_mounted_folder(dm, monkeypatch):
+    """What an upload variant opens: the folder itself, not a file inside it."""
+    monkeypatch.setattr(dm, "get_uploads_root", lambda: "/home/jovyan/uploads")
+    monkeypatch.setattr(dm, "find_upload_folder", lambda upload_id: f"run-{upload_id}")
+
+    assert dm.upload_folder_path("AbCdEfGhIjKlMnOpQrStUv") == os.path.join(
+        "/home/jovyan/uploads", "run-AbCdEfGhIjKlMnOpQrStUv"
+    )
+
+
+def test_upload_folder_path_is_none_when_the_upload_is_not_mounted(dm, monkeypatch):
+    monkeypatch.setattr(dm, "find_upload_folder", lambda _upload_id: None)
+
+    assert dm.upload_folder_path("AbCdEfGhIjKlMnOpQrStUv") is None
+
+
 def test_uploads_root_is_found_at_any_depth_inside_the_upload(dm, tmp_path, monkeypatch):
     """This repo's upload keeps the whole repo, so the app sits three levels down, not two."""
     app = tmp_path / "uploads" / "dash-AbCdEfGhIjKlMnOpQrStUv" / "repo" / "apps" / "ISA_Previewer"
@@ -143,14 +172,18 @@ def test_build_notebook_url_uses_an_upload_override_without_the_container(dm, cf
 
 
 def test_available_links_drops_links_whose_dataset_is_missing(dm, cfg, monkeypatch):
-    """Only the reflectance based link survives an h5 that holds nothing else."""
+    """The reflectance based link and the ungated ones survive an h5 that holds nothing else."""
     reflectance = cfg.APP_LINKS["thickness"].requires_h5_dataset
     monkeypatch.setattr(dm, "h5_has_dataset", lambda _path, dataset: dataset == reflectance)
     monkeypatch.setattr(dm, "build_notebook_url", lambda link, _user: f"/url/{link.notebook}")
 
     labels = [label for label, _url in dm.available_links("run.h5", "someone")]
 
-    assert labels == [cfg.APP_LINKS["thickness"].label, cfg.APP_LINKS["peak_analyzer"].label]
+    assert labels == [
+        cfg.APP_LINKS["thickness"].label,
+        cfg.APP_LINKS["peak_analyzer"].label,
+        cfg.APP_LINKS["timely_teller"].label,
+    ]
 
 
 def test_available_links_keeps_config_order(dm, cfg, monkeypatch):
@@ -240,6 +273,65 @@ def test_build_sections_skips_a_section_with_nothing_to_show(gui, cfg, fake_prev
     variant = cfg.VARIANTS["giwaxs"]
 
     assert gui.build_sections(fake_previewer, variant) == ["comparison_1", "comparison_2"]
+
+
+class _FakeTeller:
+    """Stands in for TIMELYTELLER, whose whole UI is one widget from display()."""
+
+    def display(self):
+        return "timely_teller"
+
+
+def test_build_sections_of_the_upload_variant_uses_its_own_source(gui, cfg):
+    """An upload variant is built from a TIMELYTELLER, not from a previewer."""
+    assert gui.build_sections(_FakeTeller(), cfg.VARIANTS["timely"]) == ["timely_teller"]
+
+
+def test_open_source_opens_the_upload_folder_for_an_upload_variant(gui, cfg, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(gui, "TIMELYTELLER", lambda **kwargs: seen.update(kwargs) or _FakeTeller())
+
+    gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["timely"], 1200)
+
+    assert seen == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv", "screenwidth": 1200}
+
+
+def test_open_source_opens_one_file_for_a_measurement_variant(gui, cfg, monkeypatch):
+    seen = {}
+
+    def _previewer(path, **kwargs):
+        seen.update(path=path, **kwargs)
+        return _FakePreviewer()
+
+    monkeypatch.setattr(gui, "PERFECTPREVIEWER", _previewer)
+
+    gui.open_source("/uploads/run/file.h5", cfg.VARIANTS["giwaxs"], 1200)
+
+    assert seen == {
+        "path": "/uploads/run/file.h5",
+        "screenwidth": 1200,
+        "initialize_overview": False,
+    }
+
+
+def test_an_upload_variant_hands_no_file_on(gui, cfg, monkeypatch):
+    """It opened a whole folder, so it must not overwrite the file a linked notebook reads."""
+    stored = []
+    monkeypatch.setattr(gui.data_manager, "store_for_linked_notebooks", lambda *a: stored.append(a))
+
+    assert gui.handover_row("/uploads/run", "someone", 1200, cfg.VARIANTS["timely"]) is None
+    assert stored == []
+
+
+def test_a_measurement_variant_stores_its_file_and_returns_the_links(gui, cfg, monkeypatch):
+    stored = []
+    monkeypatch.setattr(gui.data_manager, "store_for_linked_notebooks", lambda *a: stored.append(a))
+    monkeypatch.setattr(gui, "build_link_row", lambda path, user: f"links for {path}")
+
+    row = gui.handover_row("/uploads/run/file.h5", "someone", 1200, cfg.VARIANTS["main"])
+
+    assert row == "links for /uploads/run/file.h5"
+    assert stored == [("/uploads/run/file.h5", 1200)]
 
 
 def test_overview_widgets_passes_the_variant_flags_through(gui, cfg, monkeypatch):

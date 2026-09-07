@@ -219,6 +219,18 @@ def list_h5_measurements(
     return options
 
 
+def upload_folder_path(upload_id: str) -> str | None:
+    """Absolute path of one mounted upload folder, or None if it is not mounted.
+
+    What an upload level variant opens: TIMELYTELLER scans a folder for h5 files itself rather
+    than being handed one.
+    """
+    folder = find_upload_folder(upload_id)
+    if folder is None:
+        return None
+    return os.path.join(get_uploads_root(), folder)
+
+
 def resolve_h5_path(upload_id: str, file_name: str) -> str | None:
     """Absolute path of one h5 file inside a mounted upload, or None if not mounted.
 
@@ -227,10 +239,10 @@ def resolve_h5_path(upload_id: str, file_name: str) -> str | None:
     splitting the stored path into components; one absolute path from the start removes
     both, and works from an app folder that no longer sits inside the data upload.
     """
-    folder = find_upload_folder(upload_id)
+    folder = upload_folder_path(upload_id)
     if folder is None:
         return None
-    return os.path.join(get_uploads_root(), folder, file_name)
+    return os.path.join(folder, file_name)
 
 
 # ---------------------------------------------------------------------------

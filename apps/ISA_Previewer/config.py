@@ -1,7 +1,7 @@
 # config.py
 # Every value the ISA Previewer used to carry inline, in one place.
 #
-# The three notebooks in this folder are one codebase run three ways. They differ only in
+# The four notebooks in this folder are one codebase run four ways. They differ only in
 # the VARIANT they pass to app.initialize_ui(), so a section moves between notebooks by
 # editing a tuple here, never by copying notebook cells.
 #
@@ -51,6 +51,14 @@ sit at any depth inside its upload."""
 
 SELECT_LAYOUT = {"width": "800px", "height": "80px"}
 """Layout of each of the three Select columns (uploads, samples, measurements)."""
+
+SELECTION_MEASUREMENT = "measurement"
+"""Selection depth of a variant that opens one h5: upload, then sample, then measurement."""
+
+SELECTION_UPLOAD = "upload"
+"""Selection depth of a variant that opens a whole upload folder instead of a single file.
+The sample and measurement columns are not shown at all, because what is opened is the folder
+and the app behind it does its own file picking inside it."""
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +120,17 @@ APP_LINKS = {
         notebook="peak_analyzer.ipynb",
         # Ungated, as it is today: the peak analyzer opens any h5 the previewer can open.
     ),
+    "timely_teller": AppLink(
+        label="Open Timely Teller",
+        folder="",
+        notebook="timely_teller.ipynb",
+        # Ungated: it opens the whole upload the current file sits in and picks its own files
+        # from what it finds there, so no dataset of this h5 decides whether it has anything
+        # to show.
+    ),
 }
 
-LINK_ORDER = ("optical_analysis", "giwaxs_analysis", "thickness", "peak_analyzer")
+LINK_ORDER = ("optical_analysis", "giwaxs_analysis", "thickness", "peak_analyzer", "timely_teller")
 """Order the links are rendered in. Every variant offers all of them, so which links a
 given notebook shows is decided by the h5 in front of it, not by which notebook it is."""
 
@@ -129,6 +145,7 @@ given notebook shows is decided by the h5 in front of it, not by which notebook 
 #   cuts          display_cuts()
 #   comparison    display_comparison()                   returns two widgets
 #   export        display_export()
+#   timely_teller TIMELYTELLER(...).display()            the only section of an upload variant
 
 
 @dataclass(frozen=True)
@@ -138,6 +155,9 @@ class Variant:
     title: str
     """Browser tab title."""
     sections: tuple[str, ...]
+    selection: str = SELECTION_MEASUREMENT
+    """How far the selector row goes, and therefore what a section is built from: an opened h5
+    (SELECTION_MEASUREMENT) or an opened upload folder (SELECTION_UPLOAD)."""
     initialize_overview: bool = True
     """PERFECTPREVIEWER(initialize_overview=...). False skips building the heatmaps and the
     reshaped image, which the two analysis variants do not show and which dominate load
@@ -171,6 +191,16 @@ VARIANTS = {
     "optical": Variant(
         title="ISA Optical Analysis",
         sections=("optical_data",),
+        initialize_overview=False,
+        select_from_store=True,
+    ),
+    "timely": Variant(
+        title="ISA Timely Teller",
+        sections=("timely_teller",),
+        # TIMELYTELLER compares runs against each other, so it is handed the whole upload
+        # folder and scans it for h5 files itself. Picking a sample and a single measurement
+        # first would only narrow down what it is then asked to look past.
+        selection=SELECTION_UPLOAD,
         initialize_overview=False,
         select_from_store=True,
     ),
