@@ -74,14 +74,31 @@ class _IntText:
 # ---------------------------------------------------------------------------
 # upload folder <-> upload id
 # ---------------------------------------------------------------------------
-def test_upload_id_from_path_takes_the_part_after_the_last_dash(dm):
+def test_upload_id_from_path_takes_the_trailing_id(dm):
     path = os.path.join("/home/jovyan/uploads", "my-run-2026-AbCdEfGhIjKlMnOpQrStUv", "run.h5")
     assert dm.upload_id_from_path(path) == "AbCdEfGhIjKlMnOpQrStUv"
 
 
+def test_upload_id_from_path_keeps_a_dashed_id_whole(dm):
+    """Upload ids contain dashes, so the id is not the part after the last dash."""
+    path = os.path.join("/home/jovyan/uploads", "mSDC-ZN4iAst-SV2GBiI3-nKnCw", "run.h5")
+    assert dm.upload_id_from_path(path) == "ZN4iAst-SV2GBiI3-nKnCw"
+
+
 def test_upload_id_from_path_returns_none_outside_an_upload_folder(dm):
-    """A folder name with no dash is not an upload folder, so there is no id to report."""
+    """A folder too short to hold a slug and an id is not an upload folder."""
     assert dm.upload_id_from_path(os.path.join("/tmp", "somewhere", "run.h5")) is None
+
+
+def test_uploads_root_is_found_at_any_depth_inside_the_upload(dm, tmp_path, monkeypatch):
+    """This repo's upload keeps the whole repo, so the app sits three levels down, not two."""
+    app = tmp_path / "uploads" / "dash-AbCdEfGhIjKlMnOpQrStUv" / "repo" / "apps" / "ISA_Previewer"
+    app.mkdir(parents=True)
+    monkeypatch.chdir(app)
+
+    assert dm.get_uploads_root() == str(tmp_path / "uploads")
+    assert dm.get_own_upload_folder() == "dash-AbCdEfGhIjKlMnOpQrStUv"
+    assert dm.get_container() == "repo/apps"
 
 
 # ---------------------------------------------------------------------------

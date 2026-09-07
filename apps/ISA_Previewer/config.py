@@ -40,6 +40,15 @@ DEFAULT_PIXEL_WIDTH = 1680
 insitu_analyser treats screenwidth=None as "decide for me", but this app shows the number
 in a field the user can change, so it needs a concrete starting point."""
 
+UPLOAD_ID_LENGTH = 22
+"""Characters in a NOMAD upload id. Upload folders are "<slug>-<upload_id>", and ids contain
+dashes themselves, so the id is read off as this many trailing characters."""
+
+UPLOADS_ROOT_NAME = "uploads"
+"""Name of the directory every upload folder is mounted under (/home/jovyan/uploads in a
+north tool). get_uploads_root walks up to it instead of counting levels, so an app folder may
+sit at any depth inside its upload."""
+
 SELECT_LAYOUT = {"width": "800px", "height": "80px"}
 """Layout of each of the three Select columns (uploads, samples, measurements)."""
 

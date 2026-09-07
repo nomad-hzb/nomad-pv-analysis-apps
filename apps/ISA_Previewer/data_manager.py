@@ -25,24 +25,42 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Where this app is running
 # ---------------------------------------------------------------------------
-def get_own_upload_folder() -> str:
-    """The folder name of the upload this app is installed in ("<slug>-<upload_id>").
-
-    Under a NOMAD north tool the cwd is <uploads_root>/<upload_folder>/<container>/<AppFolder>,
-    so this app sits two levels below its upload, not directly inside it the way the old
-    per upload previewer notebooks did.
-    """
-    return os.path.basename(os.path.dirname(os.path.dirname(os.getcwd())))
-
-
 def get_uploads_root() -> str:
-    """The directory holding every upload folder mounted for this user."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.getcwd())))
+    """The directory holding every upload folder mounted for this user.
+
+    Found by walking up from the cwd to the mount itself rather than by counting levels: how
+    deep an app folder sits inside its upload depends on how that upload is laid out (this
+    repo's upload keeps the whole repo, so the app is three levels down, not two), and a root
+    that is one level off makes every h5 path unresolvable.
+    """
+    path = os.getcwd()
+    while True:
+        parent = os.path.dirname(path)
+        if os.path.basename(path) == config.UPLOADS_ROOT_NAME:
+            return path
+        if parent == path:
+            logger.warning(
+                "No %r directory above %s; falling back to three levels up",
+                config.UPLOADS_ROOT_NAME,
+                os.getcwd(),
+            )
+            return os.path.dirname(os.path.dirname(os.path.dirname(os.getcwd())))
+        path = parent
+
+
+def get_own_upload_folder() -> str:
+    """The folder name of the upload this app is installed in ("<slug>-<upload_id>")."""
+    return os.path.relpath(os.getcwd(), get_uploads_root()).replace(os.sep, "/").split("/")[0]
 
 
 def get_container() -> str:
-    """The folder holding all app folders. This repo's upload mirrors the repo, so "apps"."""
-    return os.path.basename(os.path.dirname(os.getcwd()))
+    """The path from this app's upload folder down to the folder holding all app folders.
+
+    One or more levels ("apps" when the upload is only the apps folder, "<repo>/apps" when it
+    mirrors this whole repo), so it is a relative path, not a single folder name.
+    """
+    inside_upload = os.path.relpath(os.path.dirname(os.getcwd()), get_uploads_root())
+    return "/".join(inside_upload.replace(os.sep, "/").split("/")[1:])
 
 
 def find_upload_folder(upload_id: str) -> str | None:
@@ -70,11 +88,13 @@ def upload_id_from_path(h5_path: str) -> str | None:
 
     The inverse of find_upload_folder, needed when a file arrives from the IPython store
     rather than from the selectors: the selection has to be rebuilt around it. Upload
-    folders are named "<slug>-<upload_id>", so the id is the part after the last dash.
+    folders are named "<slug>-<upload_id>" and the id is fixed width, so it is the tail of
+    the folder name; splitting on the last dash would cut a dashed id such as
+    "ZN4iAst-SV2GBiI3-nKnCw" in half.
     """
     folder = os.path.basename(os.path.dirname(os.path.abspath(h5_path)))
-    upload_id = folder.rsplit("-", 1)[-1]
-    if upload_id == folder:
+    upload_id = folder[-config.UPLOAD_ID_LENGTH :]
+    if len(folder) <= config.UPLOAD_ID_LENGTH:
         logger.warning("Path %s is not inside an upload folder", h5_path)
         return None
     return upload_id
