@@ -200,6 +200,28 @@ responsive even when WMI-backed tooling is struggling under load.
   `sys.path`, so their own `test_plot_manager.py` fails even in isolation).
   Pre-existing, not this repo's newest work — don't assume a red test here
   means you broke something.
+- `pytest tests/` cannot be run as a whole: collection aborts with 11 errors
+  before a single test executes. Two independent causes, both from `tests/`
+  having no packages, so every directory shares one flat module namespace:
+  duplicate test-file basenames (`test_data_manager.py` exists in six app
+  folders, `test_plot_manager.py` and `test_schema.py` in several), and
+  `tests/Entry_Auditor/test_entry_auditor.py` doing
+  `from conftest import FIXTURE_PATH`, which resolves to whichever app's
+  `conftest.py` was imported last (so even
+  `pytest tests/App_dashboard tests/Entry_Auditor` fails, with no new app
+  involved). `--import-mode=importlib` reduces it from 11 errors to 7 but
+  fixes neither fully. Run one app's folder at a time
+  (`pytest tests/<app>/`) until someone packages `tests/`. Pre-existing and
+  unrelated to whichever app you are working on.
+- A `conftest.py` that registers its app's modules under their bare names
+  (`data_manager`, `gui_components`) must restore `sys.modules` to what it
+  found afterwards, not delete the entries. Rule 3 has every app using the
+  same module names, so leaving yours registered hands it to the next app's
+  tests, while deleting outright removes the entry an earlier conftest put
+  there; both show up only when two apps' tests run together. See
+  `tests/ISA_Previewer/conftest.py::_release_bare_names` for the
+  save-and-restore pattern. Renaming an app's modules is not the fix: it
+  would break rule 3 and leaves both collisions above untouched.
 - `XPS-Automated` isn't a real app yet (one raw personal notebook, no
   `data_manager`/`plot_manager`/`gui_components`/`app.py` split, no sample
   data in-repo to validate a rewrite against). Needs a dedicated future pass.
