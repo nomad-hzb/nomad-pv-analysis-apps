@@ -686,8 +686,31 @@ class HySprintDataLoader:
     def load_annealing_data(
         self, sample_ids: List[str], variation: Dict[str, str]
     ) -> Optional[pd.DataFrame]:
-        """Load standalone Annealing process metadata (generic loader)."""
-        return self.load_generic_process_data(sample_ids, variation, "HySprint_Annealing")
+        """Load standalone Annealing process metadata (generic loader).
+
+        HySprint_Annealing (ThermalAnnealing in nomad-baseclasses) nests its own
+        temperature/time/atmosphere/ramp fields under an `annealing` SubSection -
+        the same field name and shape used for the *embedded* annealing step
+        inside Spin Coating/SDC/Inkjet Printing entries (see load_spin_coating_data
+        etc., which extract that into annealing_temperature/annealing_time/
+        annealing_atmosphere). Left alone, the generic flattener below would
+        produce dotted names (annealing.temperature, ...) that collide in
+        spirit with those - both are real but physically distinct annealing
+        events, and once merged into one dataset (e.g. for the Random Forest
+        "what matters most" analysis) there'd be no way to tell which process
+        a given "annealing time" column actually came from. Renaming to
+        standalone_annealing_* keeps them merged-dataset-safe and self-describing
+        wherever a column name ends up displayed - not just in that one report.
+        """
+        df = self.load_generic_process_data(sample_ids, variation, "HySprint_Annealing")
+        if df is None:
+            return None
+        rename_map = {
+            col: f"standalone_{col.replace('.', '_')}"
+            for col in df.columns
+            if col.startswith("annealing.")
+        }
+        return df.rename(columns=rename_map)
 
     # RESULT LOADERS
 

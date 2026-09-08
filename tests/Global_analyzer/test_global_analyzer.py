@@ -203,6 +203,37 @@ def test_load_spin_coating_data_operator_defaults_to_empty_string():
     assert df.loc[0, "operator"] == ""
 
 
+def test_load_annealing_data_renames_columns_to_avoid_embedded_annealing_collision():
+    # HySprint_Annealing (a standalone entry) nests temperature/time/atmosphere
+    # under the same "annealing" key the embedded per-process extractors
+    # (load_spin_coating_data etc.) also read - left as the generic flattener's
+    # raw dotted names, "annealing.temperature" would be easy to confuse with
+    # those extractors' own "annealing_temperature" column for a *different*,
+    # embedded annealing step once both end up in the same merged dataset.
+    fake_data = {
+        "s1": [
+            [
+                {
+                    "name": "standalone anneal",
+                    "annealing": {"temperature": 120.0, "time": 600.0, "atmosphere": "N2"},
+                }
+            ]
+        ]
+    }
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_annealing_data(["s1"], {"s1": "v1"})
+
+    assert df is not None
+    assert "standalone_annealing_temperature" in df.columns
+    assert "standalone_annealing_time" in df.columns
+    assert "standalone_annealing_atmosphere" in df.columns
+    assert not any(col.startswith("annealing.") for col in df.columns)
+    assert df.loc[0, "standalone_annealing_temperature"] == 120.0
+    assert df.loc[0, "standalone_annealing_time"] == 600.0
+    assert df.loc[0, "standalone_annealing_atmosphere"] == "N2"
+
+
 def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     dm = DataManager(data_loader=None, param_manager=ParameterManager())
 
