@@ -47,6 +47,7 @@ ENTRY_TYPES_TO_AUDIT: dict[str, str] = {
     "Batch": "HySprint_Batch",
     "Basic Sample": "HySprint_BasicSample",
     "ALD": "HySprint_AtomicLayerDeposition",
+    "Annealing": "HySprint_Annealing",
     "Blade Coating": "HySprint_BladeCoating",
     "Chemical": "HySprint_Chemical",
     "Cleaning": "HySprint_Cleaning",

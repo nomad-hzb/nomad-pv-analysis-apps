@@ -11,12 +11,14 @@ from experimental_analysis import (
     run_anova,
     run_pca,
 )
+from gui_components import GUIManager
 from ml_analysis import estimate_max_bo_steps
 from plot_manager import PlotManager, bin_numeric_column
 from pydantic import ValidationError
 from utils import (
     ParameterManager,
     ProcessStepManager,
+    _round_preserving_significance,
     build_doe_voila_url,
     get_material_column,
     get_uploads_path,
@@ -105,6 +107,11 @@ def test_process_step_manager_extract_process_types_deduplicates():
 def test_process_step_manager_extract_process_types_empty_input():
     psm = ProcessStepManager()
     assert psm.extract_process_types([]) == []
+
+
+def test_process_step_manager_maps_annealing_display_name():
+    psm = ProcessStepManager()
+    assert psm.map_display_to_measurement_type("Annealing") == "annealing"
 
 
 def _plot_manager():
@@ -198,6 +205,83 @@ def test_load_spin_coating_data_operator_defaults_to_empty_string():
     assert df.loc[0, "operator"] == ""
 
 
+def test_load_annealing_data_renames_columns_to_avoid_embedded_annealing_collision():
+    # HySprint_Annealing (a standalone entry) nests temperature/time/atmosphere
+    # under the same "annealing" key the embedded per-process extractors
+    # (load_spin_coating_data etc.) also read - left as the generic flattener's
+    # raw dotted names, "annealing.temperature" would be easy to confuse with
+    # those extractors' own "annealing_temperature" column for a *different*,
+    # embedded annealing step once both end up in the same merged dataset.
+    fake_data = {
+        "s1": [
+            [
+                {
+                    "name": "standalone anneal",
+                    "annealing": {"temperature": 120.0, "time": 600.0, "atmosphere": "N2"},
+                }
+            ]
+        ]
+    }
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_annealing_data(["s1"], {"s1": "v1"})
+
+    assert df is not None
+    assert "standalone_annealing_temperature" in df.columns
+    assert "standalone_annealing_time" in df.columns
+    assert "standalone_annealing_atmosphere" in df.columns
+    assert not any(col.startswith("annealing.") for col in df.columns)
+    assert df.loc[0, "standalone_annealing_temperature"] == 120.0
+    assert df.loc[0, "standalone_annealing_time"] == 600.0
+    assert df.loc[0, "standalone_annealing_atmosphere"] == "N2"
+
+
+def test_set_analysis_columns_preserves_unchecked_state_across_rebuild():
+    # Recalculate rebuilds these checklists from scratch (new column set after
+    # a dataframe rebuild) - a column the user already unchecked must stay
+    # unchecked, not silently revert to checked, or "Recalculate" becomes
+    # indistinguishable from "reset my selection".
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    gui.results_checklist_box.children[1].value = False  # uncheck r2
+    gui.metadata_checklist_box.children[0].value = False  # uncheck m1
+
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    assert gui.get_checked_results_columns() == ["r1"]
+    assert gui.get_checked_metadata_columns() == ["m2"]
+
+
+def test_download_output_widgets_are_distinct_per_tab():
+    # Regression guard: a single Output() widget instance placed in multiple
+    # tabs gets one live DOM view per tab under Voila (every tab stays
+    # mounted, just hidden) - the Javascript that triggers a browser download
+    # then fires once per view, i.e. the file downloads once per tab the
+    # widget appears in, all at once. Each download button needs its own
+    # dedicated Output.
+    gui = GUIManager()
+    outputs = [
+        gui.download_output,
+        gui.correlation_download_output,
+        gui.rf_download_output,
+        gui.bo_download_output,
+    ]
+    assert len(outputs) == len({id(o) for o in outputs})
+
+
+def test_set_analysis_columns_defaults_new_columns_to_checked():
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1"], ["m1"])
+    gui.results_checklist_box.children[0].value = False  # uncheck r1
+
+    # r2/m2 are new (e.g. after a batch reload) - only r1 has a prior choice.
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    assert gui.get_checked_results_columns() == ["r2"]
+    assert gui.get_checked_metadata_columns() == ["m1", "m2"]
+
+
 def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     dm = DataManager(data_loader=None, param_manager=ParameterManager())
 
@@ -225,6 +309,7 @@ def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
             "load_blade_coating_data": staticmethod(lambda *a, **k: None),
             "load_dip_coating_data": staticmethod(lambda *a, **k: None),
             "load_laser_scribing_data": staticmethod(lambda *a, **k: None),
+            "load_annealing_data": staticmethod(lambda *a, **k: None),
         },
     )()
 
@@ -406,6 +491,53 @@ def test_trigger_csv_download_returns_filename_and_displays_js(monkeypatch):
     assert filename.startswith("my_export_") and filename.endswith(".csv")
     assert "atob" in captured["data"]
     assert "download" in captured["data"]
+
+
+def test_round_preserving_significance_keeps_integer_part_intact():
+    # A plain fixed-decimal round would zero out anything smaller than
+    # 0.0001 entirely - values under 1 need extra decimals to keep 4
+    # significant digits instead. The integer part, however large, is
+    # never touched (round() only ever rounds fractional digits).
+    assert _round_preserving_significance(0.0000238798798) == "0.00002388"
+    assert _round_preserving_significance(-0.0000238798798) == "-0.00002388"
+    assert _round_preserving_significance(0.28971234) == 0.2897
+    assert _round_preserving_significance(44.891234567) == 44.8912
+    assert _round_preserving_significance(5897873.0) == 5897873.0
+    assert _round_preserving_significance(9827340897234) == 9827340897234
+    assert _round_preserving_significance(0) == 0.0
+    nan_result = _round_preserving_significance(float("nan"))
+    assert nan_result != nan_result  # nan != nan
+
+
+def test_trigger_csv_download_rounds_floats_preserving_significance(monkeypatch):
+    import base64
+
+    captured = {}
+    monkeypatch.setattr(
+        "utils.ipy_display", lambda js_obj: captured.setdefault("data", js_obj.data)
+    )
+    df = pd.DataFrame(
+        {
+            "value": [44.891234567, 0.28971234, 5897873.0, 1.0 / 3, 0.0000238798798],
+            "label": ["a", "b", "c", "d", "e"],
+        }
+    )
+
+    trigger_csv_download(df, "my_export")
+
+    b64 = captured["data"].split("atob('")[1].split("')")[0]
+    csv_text = base64.b64decode(b64).decode()
+
+    assert "44.8912" in csv_text
+    assert "0.2897" in csv_text
+    assert "5897873.0" in csv_text
+    assert "0.3333" in csv_text
+    assert "0.00002388" in csv_text
+    # Never more than 4 digits after the decimal point for values >= 1, and
+    # never scientific notation for the tiny value.
+    assert "44.891234567" not in csv_text
+    assert "0.3333333333333333" not in csv_text
+    assert "e-05" not in csv_text
 
 
 def test_run_pca_returns_scores_and_variance_ratio():

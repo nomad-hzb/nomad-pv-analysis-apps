@@ -208,6 +208,14 @@ class GUIManager:
         )
 
         self.download_output = widgets.Output()
+        # Correlations/RF/BO each need their own download-status Output - a
+        # single shared widget placed in multiple tabs gets one live DOM view
+        # per tab under Voila (all tabs stay mounted, just hidden), so the
+        # Javascript that triggers the browser download fires once per view -
+        # i.e. once per tab the widget appears in, all at the same time.
+        self.correlation_download_output = widgets.Output()
+        self.rf_download_output = widgets.Output()
+        self.bo_download_output = widgets.Output()
 
         # ====================================================================
         # PLOT PRESETS
@@ -648,13 +656,26 @@ class GUIManager:
 
     def set_analysis_columns(self, results_cols: list, metadata_cols: list):
         """(Re)build the Results / Process Metadata checkbox lists on the Analysis
-        Data tab, all checked by default. Called whenever the shared analysis
-        dataframe is rebuilt (batch load or Recalculate)."""
+        Data tab. Called whenever the shared analysis dataframe is rebuilt (batch
+        load or Recalculate) - a column already present keeps whatever checked
+        state the user gave it rather than resetting to checked, so deselecting
+        a few and hitting Recalculate doesn't silently bring them all back. A
+        column that's new (first load, or newly appeared after a batch change)
+        defaults to checked, matching the original all-checked-by-default
+        behavior for columns nobody has made a choice about yet.
+        """
+        previous_results = {cb.description: cb.value for cb in self.results_checklist_box.children}
+        previous_metadata = {
+            cb.description: cb.value for cb in self.metadata_checklist_box.children
+        }
+
         self.results_checklist_box.children = [
-            widgets.Checkbox(value=True, description=col, indent=False) for col in results_cols
+            widgets.Checkbox(value=previous_results.get(col, True), description=col, indent=False)
+            for col in results_cols
         ]
         self.metadata_checklist_box.children = [
-            widgets.Checkbox(value=True, description=col, indent=False) for col in metadata_cols
+            widgets.Checkbox(value=previous_metadata.get(col, True), description=col, indent=False)
+            for col in metadata_cols
         ]
 
     def get_checked_results_columns(self) -> list:
@@ -867,7 +888,7 @@ class GUIManager:
                 self.correlation_status_output,
                 self.correlation_widget,
                 self.correlation_scatter_output,
-                self.download_output,
+                self.correlation_download_output,
             ],
             layout={"padding": "20px"},
         )
@@ -900,7 +921,7 @@ class GUIManager:
                 ),
                 self.rf_output,
                 self.rf_widget,
-                self.download_output,
+                self.rf_download_output,
             ],
             layout={"padding": "20px"},
         )
@@ -936,7 +957,7 @@ class GUIManager:
                 ),
                 self.bo_output,
                 self.bo_widget,
-                self.download_output,
+                self.bo_download_output,
             ],
             layout={"padding": "20px"},
         )

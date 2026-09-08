@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "global-analyzer"
-version = "0.1.0"
+version = "0.2.0"
 description = "HySPRINT Global Data Analyzer — interactive batch explorer for NOMAD OASIS data"
 requires-python = ">=3.10"
 dependencies = [
