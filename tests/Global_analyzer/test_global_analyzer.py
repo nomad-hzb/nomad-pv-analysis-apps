@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from utils import (
     ParameterManager,
     ProcessStepManager,
+    _round_preserving_significance,
     build_doe_voila_url,
     get_material_column,
     get_uploads_path,
@@ -492,7 +493,23 @@ def test_trigger_csv_download_returns_filename_and_displays_js(monkeypatch):
     assert "download" in captured["data"]
 
 
-def test_trigger_csv_download_rounds_floats_to_4_decimal_places(monkeypatch):
+def test_round_preserving_significance_keeps_integer_part_intact():
+    # A plain fixed-decimal round would zero out anything smaller than
+    # 0.0001 entirely - values under 1 need extra decimals to keep 4
+    # significant digits instead. The integer part, however large, is
+    # never touched (round() only ever rounds fractional digits).
+    assert _round_preserving_significance(0.0000238798798) == "0.00002388"
+    assert _round_preserving_significance(-0.0000238798798) == "-0.00002388"
+    assert _round_preserving_significance(0.28971234) == 0.2897
+    assert _round_preserving_significance(44.891234567) == 44.8912
+    assert _round_preserving_significance(5897873.0) == 5897873.0
+    assert _round_preserving_significance(9827340897234) == 9827340897234
+    assert _round_preserving_significance(0) == 0.0
+    nan_result = _round_preserving_significance(float("nan"))
+    assert nan_result != nan_result  # nan != nan
+
+
+def test_trigger_csv_download_rounds_floats_preserving_significance(monkeypatch):
     import base64
 
     captured = {}
@@ -501,8 +518,8 @@ def test_trigger_csv_download_rounds_floats_to_4_decimal_places(monkeypatch):
     )
     df = pd.DataFrame(
         {
-            "value": [44.891234567, 0.28971234, 5897873.0, 1.0 / 3],
-            "label": ["a", "b", "c", "d"],
+            "value": [44.891234567, 0.28971234, 5897873.0, 1.0 / 3, 0.0000238798798],
+            "label": ["a", "b", "c", "d", "e"],
         }
     )
 
@@ -515,9 +532,12 @@ def test_trigger_csv_download_rounds_floats_to_4_decimal_places(monkeypatch):
     assert "0.2897" in csv_text
     assert "5897873.0" in csv_text
     assert "0.3333" in csv_text
-    # Never more than 4 digits after the decimal point.
+    assert "0.00002388" in csv_text
+    # Never more than 4 digits after the decimal point for values >= 1, and
+    # never scientific notation for the tiny value.
     assert "44.891234567" not in csv_text
     assert "0.3333333333333333" not in csv_text
+    assert "e-05" not in csv_text
 
 
 def test_run_pca_returns_scores_and_variance_ratio():

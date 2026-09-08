@@ -12,6 +12,7 @@ Author: HySprint Team
 
 import base64
 import logging
+import math
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -339,6 +340,43 @@ def build_doe_full_url(voila_url: str) -> str:
     return f"{URL_BASE}{voila_url}"
 
 
+def _round_preserving_significance(value, sig_figs: int = 4, min_decimals: int = 4):
+    """Round to at most `min_decimals` decimal places, except a value smaller
+    than 1 gets however many more decimals it needs to still show `sig_figs`
+    significant digits - plain fixed-decimal rounding would otherwise zero
+    out a small value entirely (e.g. round(0.0000238798798, 4) == 0.0). The
+    integer part is never touched regardless of size: round() only ever
+    rounds fractional digits, so e.g. 9827340897234 passes through exactly
+    as given.
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return value
+    if value == 0:
+        return 0.0
+    decimals = min_decimals
+    abs_value = abs(value)
+    if abs_value < 1:
+        magnitude = math.floor(math.log10(abs_value))
+        decimals = max(min_decimals, -magnitude + sig_figs - 1)
+        if decimals > min_decimals:
+            # Python's default float formatting switches to scientific
+            # notation for anything this small (e.g. round(x, 8) == 2.388e-05)
+            # - a plain fixed-point string keeps it as "0.00002388" in the
+            # exported CSV, matching every other value's formatting.
+            return f"{round(value, decimals):.{decimals}f}"
+    return round(value, decimals)
+
+
+def _round_dataframe_for_export(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply _round_preserving_significance to every numeric column of a copy
+    of df - per-value decimal counts vary with magnitude, so this can't be a
+    single vectorized df.round(n) call."""
+    result = df.copy()
+    for col in result.select_dtypes(include="number").columns:
+        result[col] = result[col].map(_round_preserving_significance)
+    return result
+
+
 def trigger_csv_download(df: pd.DataFrame, filename_prefix: str) -> str:
     """Base64-encode df as CSV and trigger a browser download via a Blob +
     <a download> JS snippet (client-side only - nothing is persisted server-side;
@@ -349,11 +387,12 @@ def trigger_csv_download(df: pd.DataFrame, filename_prefix: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{filename_prefix}_{timestamp}.csv"
 
-    # Round to at most 4 decimal places - raw floats (correlation coefficients,
+    # Round to at most 4 significant decimal digits - raw floats (correlation coefficients,
     # RF importances, BO suggestions, ...) otherwise export with 15+ digits of
-    # floating-point noise. round() only touches numeric columns and doesn't
-    # pad shorter values with trailing zeros, unlike a fixed float_format.
-    csv_string = df.round(4).to_csv(index=False)
+    # floating-point noise. See _round_preserving_significance for why this
+    # isn't just a flat df.round(4): that would zero out any value smaller
+    # than 0.0001 entirely.
+    csv_string = _round_dataframe_for_export(df).to_csv(index=False)
     b64 = base64.b64encode(csv_string.encode()).decode()
 
     js_code = f"""
