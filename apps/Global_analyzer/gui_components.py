@@ -648,13 +648,26 @@ class GUIManager:
 
     def set_analysis_columns(self, results_cols: list, metadata_cols: list):
         """(Re)build the Results / Process Metadata checkbox lists on the Analysis
-        Data tab, all checked by default. Called whenever the shared analysis
-        dataframe is rebuilt (batch load or Recalculate)."""
+        Data tab. Called whenever the shared analysis dataframe is rebuilt (batch
+        load or Recalculate) - a column already present keeps whatever checked
+        state the user gave it rather than resetting to checked, so deselecting
+        a few and hitting Recalculate doesn't silently bring them all back. A
+        column that's new (first load, or newly appeared after a batch change)
+        defaults to checked, matching the original all-checked-by-default
+        behavior for columns nobody has made a choice about yet.
+        """
+        previous_results = {cb.description: cb.value for cb in self.results_checklist_box.children}
+        previous_metadata = {
+            cb.description: cb.value for cb in self.metadata_checklist_box.children
+        }
+
         self.results_checklist_box.children = [
-            widgets.Checkbox(value=True, description=col, indent=False) for col in results_cols
+            widgets.Checkbox(value=previous_results.get(col, True), description=col, indent=False)
+            for col in results_cols
         ]
         self.metadata_checklist_box.children = [
-            widgets.Checkbox(value=True, description=col, indent=False) for col in metadata_cols
+            widgets.Checkbox(value=previous_metadata.get(col, True), description=col, indent=False)
+            for col in metadata_cols
         ]
 
     def get_checked_results_columns(self) -> list:

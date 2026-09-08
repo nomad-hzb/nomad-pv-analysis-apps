@@ -325,9 +325,19 @@ class SampleDataExplorer:
         self._refresh_ml_target_options()
         self._refresh_experimental_options()
 
+        checked_results = self.gui.get_checked_results_columns()
+        checked_metadata = self.gui.get_checked_metadata_columns()
         with self.gui.analysis_data_status_output:
             clear_output()
             print("✓ Analysis data updated.")
+            print(
+                f"Using {len(checked_results)} results column(s): "
+                f"{', '.join(checked_results) if checked_results else '(none checked)'}"
+            )
+            print(
+                f"Using {len(checked_metadata)} process metadata column(s): "
+                f"{', '.join(checked_metadata) if checked_metadata else '(none checked)'}"
+            )
 
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)

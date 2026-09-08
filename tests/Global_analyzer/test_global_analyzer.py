@@ -11,6 +11,7 @@ from experimental_analysis import (
     run_anova,
     run_pca,
 )
+from gui_components import GUIManager
 from ml_analysis import estimate_max_bo_steps
 from plot_manager import PlotManager, bin_numeric_column
 from pydantic import ValidationError
@@ -232,6 +233,35 @@ def test_load_annealing_data_renames_columns_to_avoid_embedded_annealing_collisi
     assert df.loc[0, "standalone_annealing_temperature"] == 120.0
     assert df.loc[0, "standalone_annealing_time"] == 600.0
     assert df.loc[0, "standalone_annealing_atmosphere"] == "N2"
+
+
+def test_set_analysis_columns_preserves_unchecked_state_across_rebuild():
+    # Recalculate rebuilds these checklists from scratch (new column set after
+    # a dataframe rebuild) - a column the user already unchecked must stay
+    # unchecked, not silently revert to checked, or "Recalculate" becomes
+    # indistinguishable from "reset my selection".
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    gui.results_checklist_box.children[1].value = False  # uncheck r2
+    gui.metadata_checklist_box.children[0].value = False  # uncheck m1
+
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    assert gui.get_checked_results_columns() == ["r1"]
+    assert gui.get_checked_metadata_columns() == ["m2"]
+
+
+def test_set_analysis_columns_defaults_new_columns_to_checked():
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1"], ["m1"])
+    gui.results_checklist_box.children[0].value = False  # uncheck r1
+
+    # r2/m2 are new (e.g. after a batch reload) - only r1 has a prior choice.
+    gui.set_analysis_columns(["r1", "r2"], ["m1", "m2"])
+
+    assert gui.get_checked_results_columns() == ["r2"]
+    assert gui.get_checked_metadata_columns() == ["m1", "m2"]
 
 
 def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
