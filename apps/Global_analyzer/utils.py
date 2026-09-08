@@ -349,7 +349,11 @@ def trigger_csv_download(df: pd.DataFrame, filename_prefix: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{filename_prefix}_{timestamp}.csv"
 
-    csv_string = df.to_csv(index=False)
+    # Round to at most 4 decimal places - raw floats (correlation coefficients,
+    # RF importances, BO suggestions, ...) otherwise export with 15+ digits of
+    # floating-point noise. round() only touches numeric columns and doesn't
+    # pad shorter values with trailing zeros, unlike a fixed float_format.
+    csv_string = df.round(4).to_csv(index=False)
     b64 = base64.b64encode(csv_string.encode()).decode()
 
     js_code = f"""

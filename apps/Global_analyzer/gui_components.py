@@ -208,6 +208,14 @@ class GUIManager:
         )
 
         self.download_output = widgets.Output()
+        # Correlations/RF/BO each need their own download-status Output - a
+        # single shared widget placed in multiple tabs gets one live DOM view
+        # per tab under Voila (all tabs stay mounted, just hidden), so the
+        # Javascript that triggers the browser download fires once per view -
+        # i.e. once per tab the widget appears in, all at the same time.
+        self.correlation_download_output = widgets.Output()
+        self.rf_download_output = widgets.Output()
+        self.bo_download_output = widgets.Output()
 
         # ====================================================================
         # PLOT PRESETS
@@ -880,7 +888,7 @@ class GUIManager:
                 self.correlation_status_output,
                 self.correlation_widget,
                 self.correlation_scatter_output,
-                self.download_output,
+                self.correlation_download_output,
             ],
             layout={"padding": "20px"},
         )
@@ -913,7 +921,7 @@ class GUIManager:
                 ),
                 self.rf_output,
                 self.rf_widget,
-                self.download_output,
+                self.rf_download_output,
             ],
             layout={"padding": "20px"},
         )
@@ -949,7 +957,7 @@ class GUIManager:
                 ),
                 self.bo_output,
                 self.bo_widget,
-                self.download_output,
+                self.bo_download_output,
             ],
             layout={"padding": "20px"},
         )

@@ -1128,7 +1128,7 @@ class SampleDataExplorer:
 
     def _on_download_correlations(self, button):
         """Download the last-computed correlation matrix as CSV via browser."""
-        with self.gui.download_output:
+        with self.gui.correlation_download_output:
             clear_output()
 
             if not self._last_correlation_result:
@@ -1143,7 +1143,7 @@ class SampleDataExplorer:
 
     def _on_download_rf_results(self, button):
         """Download the last Random Forest feature importances as CSV via browser."""
-        with self.gui.download_output:
+        with self.gui.rf_download_output:
             clear_output()
 
             if not self._last_rf_result:
@@ -1161,7 +1161,7 @@ class SampleDataExplorer:
 
     def _on_download_bo_suggestions(self, button):
         """Download the last Bayesian Optimization suggestions as CSV via browser."""
-        with self.gui.download_output:
+        with self.gui.bo_download_output:
             clear_output()
 
             if not self._last_bo_result:

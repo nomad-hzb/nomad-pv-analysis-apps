@@ -252,6 +252,23 @@ def test_set_analysis_columns_preserves_unchecked_state_across_rebuild():
     assert gui.get_checked_metadata_columns() == ["m2"]
 
 
+def test_download_output_widgets_are_distinct_per_tab():
+    # Regression guard: a single Output() widget instance placed in multiple
+    # tabs gets one live DOM view per tab under Voila (every tab stays
+    # mounted, just hidden) - the Javascript that triggers a browser download
+    # then fires once per view, i.e. the file downloads once per tab the
+    # widget appears in, all at once. Each download button needs its own
+    # dedicated Output.
+    gui = GUIManager()
+    outputs = [
+        gui.download_output,
+        gui.correlation_download_output,
+        gui.rf_download_output,
+        gui.bo_download_output,
+    ]
+    assert len(outputs) == len({id(o) for o in outputs})
+
+
 def test_set_analysis_columns_defaults_new_columns_to_checked():
     gui = GUIManager()
     gui.set_analysis_columns(["r1"], ["m1"])
@@ -473,6 +490,34 @@ def test_trigger_csv_download_returns_filename_and_displays_js(monkeypatch):
     assert filename.startswith("my_export_") and filename.endswith(".csv")
     assert "atob" in captured["data"]
     assert "download" in captured["data"]
+
+
+def test_trigger_csv_download_rounds_floats_to_4_decimal_places(monkeypatch):
+    import base64
+
+    captured = {}
+    monkeypatch.setattr(
+        "utils.ipy_display", lambda js_obj: captured.setdefault("data", js_obj.data)
+    )
+    df = pd.DataFrame(
+        {
+            "value": [44.891234567, 0.28971234, 5897873.0, 1.0 / 3],
+            "label": ["a", "b", "c", "d"],
+        }
+    )
+
+    trigger_csv_download(df, "my_export")
+
+    b64 = captured["data"].split("atob('")[1].split("')")[0]
+    csv_text = base64.b64decode(b64).decode()
+
+    assert "44.8912" in csv_text
+    assert "0.2897" in csv_text
+    assert "5897873.0" in csv_text
+    assert "0.3333" in csv_text
+    # Never more than 4 digits after the decimal point.
+    assert "44.891234567" not in csv_text
+    assert "0.3333333333333333" not in csv_text
 
 
 def test_run_pca_returns_scores_and_variance_ratio():
