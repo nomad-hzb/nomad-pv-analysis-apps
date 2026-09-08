@@ -634,16 +634,16 @@ class DataManager:
             params = fit.get("params", {})
 
             changes = [
-                {"path": "data.results.0.fit_method", "new_value": model.name},
-                {"path": "data.results.0.fit_source", "new_value": "manual"},
-                {"path": "data.results.0.fit_computed_by", "new_value": computed_by},
-                {"path": "data.results.0.fit_computed_at", "new_value": computed_at},
+                {"path": "data/results/0/fit_method", "new_value": model.name},
+                {"path": "data/results/0/fit_source", "new_value": "manual"},
+                {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
+                {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
                 {
-                    "path": "data.results.0.fit_range_start",
+                    "path": "data/results/0/fit_range_start",
                     "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
                 },
                 {
-                    "path": "data.results.0.fit_range_end",
+                    "path": "data/results/0/fit_range_end",
                     "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
                 },
             ]
@@ -659,31 +659,31 @@ class DataManager:
                 if value is not None:
                     changes.append(
                         {
-                            "path": f"data.results.0.{schema_field}",
+                            "path": f"data/results/0/{schema_field}",
                             "new_value": float(value) * 3600,
                         }
                     )
                 else:
-                    changes.append({"path": f"data.results.0.{schema_field}", "action": "remove"})
+                    changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
 
             # R2 and LEY are computed by every model (unlike the model-specific
             # parameters below), so they get their own typed fields rather than
             # living in the generic fit_parameters bag.
             if "R2" in params:
                 changes.append(
-                    {"path": "data.results.0.fit_r_squared", "new_value": float(params["R2"])}
+                    {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
                 )
             else:
-                changes.append({"path": "data.results.0.fit_r_squared", "action": "remove"})
+                changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
             if "LEY" in params:
                 changes.append(
                     {
-                        "path": "data.results.0.lifetime_energy_yield",
+                        "path": "data/results/0/lifetime_energy_yield",
                         "new_value": float(params["LEY"]),
                     }
                 )
             else:
-                changes.append({"path": "data.results.0.lifetime_energy_yield", "action": "remove"})
+                changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
 
             # Everything else this model actually fit (A, tau, beta, slope,
             # intercept, ...) - always upsert the full list, even if empty, so a
@@ -705,7 +705,7 @@ class DataManager:
                 if error_raw is not None:
                     entry["error"] = float(error_raw) * factor
                 fit_parameters.append(entry)
-            changes.append({"path": "data.results.0.fit_parameters", "new_value": fit_parameters})
+            changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
 
             # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
             # the fit range in time (not a subsample of the raw data points),
@@ -714,13 +714,13 @@ class DataManager:
             if resample_time_s is not None:
                 changes.append(
                     {
-                        "path": "data.results.0.fitted_time",
+                        "path": "data/results/0/fitted_time",
                         "new_value": resample_time_s.tolist(),
                     }
                 )
                 changes.append(
                     {
-                        "path": "data.results.0.fitted_power_density",
+                        "path": "data/results/0/fitted_power_density",
                         "new_value": resample_power.tolist(),
                     }
                 )
