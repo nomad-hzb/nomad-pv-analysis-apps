@@ -1211,17 +1211,34 @@ class SampleDataExplorer:
                     results_used, metadata_used = self.plot_manager.create_metadata_results_heatmap(
                         self.analysis_df, checked_results, checked_metadata, min_unique=min_unique
                     )
+                    dropped_results = [c for c in checked_results if c not in results_used]
+                    dropped_metadata = [c for c in checked_metadata if c not in metadata_used]
                     if not results_used or not metadata_used:
                         print(
                             f"⚠️ Not enough varying parameters (need >{min_unique} unique "
                             "values) on both axes for a heatmap."
                         )
+                        if dropped_results:
+                            print(
+                                f"  Excluded results (too few unique values): {', '.join(dropped_results)}"
+                            )
+                        if dropped_metadata:
+                            print(
+                                "  Excluded process metadata (too few unique values): "
+                                f"{', '.join(dropped_metadata)}"
+                            )
                         self._last_correlation_result = None
                     else:
                         print(
                             f"✓ Correlation heatmap computed: {len(results_used)} result(s) "
                             f"x {len(metadata_used)} metadata parameter(s)."
                         )
+                        if dropped_results or dropped_metadata:
+                            excluded = dropped_results + dropped_metadata
+                            print(
+                                f"  Excluded {len(excluded)} checked column(s) with <{min_unique + 1} "
+                                f"unique values: {', '.join(excluded)}"
+                            )
                         numeric_df = self.analysis_df.select_dtypes(include="number")
                         corr_df = (
                             pd.DataFrame(
@@ -1250,15 +1267,32 @@ class SampleDataExplorer:
                     used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
                         combined_df, min_unique=min_unique
                     )
+                    numeric_combined = combined_df.select_dtypes(include="number")
+                    dropped_for_variance = [
+                        c
+                        for c in checked_results + checked_metadata
+                        if c in numeric_combined.columns
+                        and numeric_combined[c].dropna().nunique() <= min_unique
+                        and c not in used_cols
+                    ]
                     if len(used_cols) < 2:
                         print(
                             f"⚠️ Only {len(used_cols)} numeric parameter(s) have more than "
                             f"{min_unique} unique values - need at least 2 for a scatter matrix."
                         )
+                        if dropped_for_variance:
+                            print(
+                                f"  Excluded (too few unique values): {', '.join(dropped_for_variance)}"
+                            )
                         self._last_correlation_result = None
                     else:
                         note = " (showing the first 12)" if truncated else ""
                         print(f"✓ Scatter matrix computed for {len(used_cols)} parameters{note}.")
+                        if dropped_for_variance:
+                            print(
+                                f"  Excluded {len(dropped_for_variance)} checked column(s) with "
+                                f"<{min_unique + 1} unique values: {', '.join(dropped_for_variance)}"
+                            )
                         corr_df = combined_df[used_cols].corr().reset_index()
                         corr_df = corr_df.rename(columns={"index": "parameter"})
                         self._last_correlation_result = {
