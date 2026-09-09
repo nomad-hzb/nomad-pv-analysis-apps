@@ -259,6 +259,7 @@ class DataManager:
             entry_names_list = []
             entry_description_list = []
             entry_ids_list = []
+            upload_ids_list = []
             sample_curves_list = []
 
             for mppt_entry in entries:
@@ -285,6 +286,7 @@ class DataManager:
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
                 entry_ids_list.append(metadata.get("entry_id"))
+                upload_ids_list.append(metadata.get("upload_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -296,6 +298,7 @@ class DataManager:
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
                             "entry_id": entry_ids_list,
+                            "upload_id": upload_ids_list,
                         }
                     )
                 )
@@ -448,6 +451,7 @@ class DataManager:
             entry_names_list = []
             entry_description_list = []
             entry_ids_list = []
+            upload_ids_list = []
             sample_curves_list = []
             for mppt_entry in all_mppt.get(sample_data):
                 raw_data = mppt_entry[0]
@@ -474,6 +478,7 @@ class DataManager:
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
                 entry_ids_list.append(metadata.get("entry_id"))
+                upload_ids_list.append(metadata.get("upload_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -485,6 +490,7 @@ class DataManager:
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
                             "entry_id": entry_ids_list,
+                            "upload_id": upload_ids_list,
                         }
                     )
                 )  # noqa: E501
@@ -563,6 +569,40 @@ class DataManager:
             return None
         return value if isinstance(value, str) and value else None
 
+    def get_upload_id(self, entries_data, sample_id, curve_id):
+        """Look up the NOMAD upload_id backing one (sample_id, curve_id), or None.
+
+        Same availability caveats as get_entry_id - only used to build a
+        link to the entry in the NOMAD GUI, never for API calls.
+        """
+        if entries_data is None:
+            return None
+        try:
+            value = entries_data.loc[(sample_id, curve_id), "upload_id"]
+        except (KeyError, IndexError):
+            return None
+        return value if isinstance(value, str) and value else None
+
+    def _entry_gui_url(self, upload_id, entry_id):
+        """Build a link to this entry's fitted results in the NOMAD GUI.
+
+        Derived from self.url (URL_BASE + API_ENDPOINT, e.g.
+        "https://nomad-hzb-se.de/nomad-oasis/api/v1") rather than importing
+        URL_BASE separately, since the GUI mount point is the same
+        "/nomad-oasis" prefix with "/api/v1" swapped for "/gui" - avoids a
+        second, possibly-diverging way to name the same server.
+        """
+        if not upload_id or not entry_id:
+            return None
+        api_suffix = "/api/v1"
+        api_root = self.url.rstrip("/")
+        if not api_root.endswith(api_suffix):
+            return None
+        gui_root = api_root[: -len(api_suffix)] + "/gui"
+        return (
+            f"{gui_root}/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}/data/data/results/0"
+        )
+
     def fit_sample(
         self, curves_data, sample_ids, sample_id, model, frame_range=None, initial_values=None
     ):
@@ -605,10 +645,12 @@ class DataManager:
         than leaving it untouched - otherwise a stale value from a previous fit
         with a different model would linger, misrepresenting the current fit.
 
-        Returns a list of {"sample_id", "curve_id", "success", "message"} -
-        one entry per (sample_id, curve_id), attempted unconditionally; the
-        caller surfaces "message" as-is (NOMAD's own error detail on
-        failure, or a local reason when there's no entry_id to write to).
+        Returns a list of {"sample_id", "curve_id", "success", "message",
+        "nomad_url"} - one entry per (sample_id, curve_id), attempted
+        unconditionally; the caller surfaces "message" as-is (NOMAD's own
+        error detail on failure, or a local reason when there's no entry_id
+        to write to). "nomad_url" links to the entry's fitted results in the
+        NOMAD GUI on success, None otherwise (e.g. upload_id unavailable).
         """
         from hysprint_utils.api_calls import edit_entry
 
@@ -625,9 +667,11 @@ class DataManager:
                         "success": False,
                         "message": "No linked NOMAD entry_id (offline/demo data, or not resolved "
                         "during loading) - nothing to write to.",
+                        "nomad_url": None,
                     }
                 )
                 continue
+            upload_id = self.get_upload_id(entries_data, sample_id, curve_id)
 
             model = fit["model"]
             time_h = fit["time"]
@@ -728,7 +772,13 @@ class DataManager:
             try:
                 edit_entry(self.url, self.token, entry_id, changes)
                 outcomes.append(
-                    {"sample_id": sample_id, "curve_id": curve_id, "success": True, "message": "OK"}
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": True,
+                        "message": "OK",
+                        "nomad_url": self._entry_gui_url(upload_id, entry_id),
+                    }
                 )
             except requests.HTTPError as exc:
                 message = str(exc)
@@ -744,6 +794,7 @@ class DataManager:
                         "curve_id": curve_id,
                         "success": False,
                         "message": message,
+                        "nomad_url": None,
                     }
                 )
 

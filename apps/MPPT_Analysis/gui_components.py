@@ -841,6 +841,9 @@ class GUIComponents:
                         f"{icon} {outcome['sample_id']} (curve {outcome['curve_id']}): "
                         f"{outcome['message']}"
                     )
+                    nomad_url = outcome.get("nomad_url")
+                    if nomad_url:
+                        display(HTML(f"<a href='{nomad_url}' target='_blank'>View in NOMAD</a>"))
 
         write_button.on_click(on_write_click)
         confirm_button.on_click(do_confirm)
