@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 
 def _html_float_format(value):
@@ -828,7 +828,7 @@ class GUIComponents:
                     print("⚠️ No fitted curves to write.")
                     return
                 print("🔄 Writing fit results to NOMAD...")
-                computed_by = f"MPPT_Analysis {APP_VERSION} ({os.environ.get('NOMAD_CLIENT_USER', 'unknown user')})"
+                computed_by = f"MPPT_Analysis v{APP_VERSION} ({os.environ.get('NOMAD_CLIENT_USER', 'unknown user')})"
                 outcomes = self.data_manager.write_fit_results_to_nomad(
                     self.app_state.data.get("entries"),
                     self.app_state.fitted_curves_data,
@@ -841,6 +841,9 @@ class GUIComponents:
                         f"{icon} {outcome['sample_id']} (curve {outcome['curve_id']}): "
                         f"{outcome['message']}"
                     )
+                    nomad_url = outcome.get("nomad_url")
+                    if nomad_url:
+                        display(HTML(f"<a href='{nomad_url}' target='_blank'>View in NOMAD</a>"))
 
         write_button.on_click(on_write_click)
         confirm_button.on_click(do_confirm)

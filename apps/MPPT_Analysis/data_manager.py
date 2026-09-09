@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # StabilityFiguresOfMerit field name -> fitting_tools.py model column names that
 # feed it. Column names aren't consistent across models (T80 vs t80, tS vs Ts...),
 # so write-back has to alias-match rather than assume one spelling.
+# T95/T80/Ts95/Ts80 definitions: Khenkin et al., "Consensus statement for
+# stability assessment and reporting for perovskite photovoltaics based on
+# ISOS procedures", Nature Energy 5, 35-49 (2020). DOI: 10.1038/s41560-019-0529-5
 _ISOS_METRIC_ALIASES = {
     "T95": ["T95", "t95"],
     "T80": ["T80", "t80"],
@@ -259,6 +262,7 @@ class DataManager:
             entry_names_list = []
             entry_description_list = []
             entry_ids_list = []
+            upload_ids_list = []
             sample_curves_list = []
 
             for mppt_entry in entries:
@@ -285,6 +289,7 @@ class DataManager:
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
                 entry_ids_list.append(metadata.get("entry_id"))
+                upload_ids_list.append(metadata.get("upload_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -296,6 +301,7 @@ class DataManager:
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
                             "entry_id": entry_ids_list,
+                            "upload_id": upload_ids_list,
                         }
                     )
                 )
@@ -448,6 +454,7 @@ class DataManager:
             entry_names_list = []
             entry_description_list = []
             entry_ids_list = []
+            upload_ids_list = []
             sample_curves_list = []
             for mppt_entry in all_mppt.get(sample_data):
                 raw_data = mppt_entry[0]
@@ -474,6 +481,7 @@ class DataManager:
                 entry_names_list.append(meta.get("name", ""))
                 entry_description_list.append(meta.get("description", ""))
                 entry_ids_list.append(metadata.get("entry_id"))
+                upload_ids_list.append(metadata.get("upload_id"))
 
             if sample_curves_list:
                 mppt_curves_list.append(
@@ -485,6 +493,7 @@ class DataManager:
                             "entry_names": entry_names_list,
                             "entry_description": entry_description_list,
                             "entry_id": entry_ids_list,
+                            "upload_id": upload_ids_list,
                         }
                     )
                 )  # noqa: E501
@@ -563,6 +572,40 @@ class DataManager:
             return None
         return value if isinstance(value, str) and value else None
 
+    def get_upload_id(self, entries_data, sample_id, curve_id):
+        """Look up the NOMAD upload_id backing one (sample_id, curve_id), or None.
+
+        Same availability caveats as get_entry_id - only used to build a
+        link to the entry in the NOMAD GUI, never for API calls.
+        """
+        if entries_data is None:
+            return None
+        try:
+            value = entries_data.loc[(sample_id, curve_id), "upload_id"]
+        except (KeyError, IndexError):
+            return None
+        return value if isinstance(value, str) and value else None
+
+    def _entry_gui_url(self, upload_id, entry_id):
+        """Build a link to this entry's fitted results in the NOMAD GUI.
+
+        Derived from self.url (URL_BASE + API_ENDPOINT, e.g.
+        "https://nomad-hzb-se.de/nomad-oasis/api/v1") rather than importing
+        URL_BASE separately, since the GUI mount point is the same
+        "/nomad-oasis" prefix with "/api/v1" swapped for "/gui" - avoids a
+        second, possibly-diverging way to name the same server.
+        """
+        if not upload_id or not entry_id:
+            return None
+        api_suffix = "/api/v1"
+        api_root = self.url.rstrip("/")
+        if not api_root.endswith(api_suffix):
+            return None
+        gui_root = api_root[: -len(api_suffix)] + "/gui"
+        return (
+            f"{gui_root}/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}/data/data/results/0"
+        )
+
     def fit_sample(
         self, curves_data, sample_ids, sample_id, model, frame_range=None, initial_values=None
     ):
@@ -605,10 +648,12 @@ class DataManager:
         than leaving it untouched - otherwise a stale value from a previous fit
         with a different model would linger, misrepresenting the current fit.
 
-        Returns a list of {"sample_id", "curve_id", "success", "message"} -
-        one entry per (sample_id, curve_id), attempted unconditionally; the
-        caller surfaces "message" as-is (NOMAD's own error detail on
-        failure, or a local reason when there's no entry_id to write to).
+        Returns a list of {"sample_id", "curve_id", "success", "message",
+        "nomad_url"} - one entry per (sample_id, curve_id), attempted
+        unconditionally; the caller surfaces "message" as-is (NOMAD's own
+        error detail on failure, or a local reason when there's no entry_id
+        to write to). "nomad_url" links to the entry's fitted results in the
+        NOMAD GUI on success, None otherwise (e.g. upload_id unavailable).
         """
         from hysprint_utils.api_calls import edit_entry
 
@@ -625,25 +670,27 @@ class DataManager:
                         "success": False,
                         "message": "No linked NOMAD entry_id (offline/demo data, or not resolved "
                         "during loading) - nothing to write to.",
+                        "nomad_url": None,
                     }
                 )
                 continue
+            upload_id = self.get_upload_id(entries_data, sample_id, curve_id)
 
             model = fit["model"]
             time_h = fit["time"]
             params = fit.get("params", {})
 
             changes = [
-                {"path": "data.results.0.fit_method", "new_value": model.name},
-                {"path": "data.results.0.fit_source", "new_value": "manual"},
-                {"path": "data.results.0.fit_computed_by", "new_value": computed_by},
-                {"path": "data.results.0.fit_computed_at", "new_value": computed_at},
+                {"path": "data/results/0/fit_method", "new_value": model.name},
+                {"path": "data/results/0/fit_source", "new_value": "manual"},
+                {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
+                {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
                 {
-                    "path": "data.results.0.fit_range_start",
+                    "path": "data/results/0/fit_range_start",
                     "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
                 },
                 {
-                    "path": "data.results.0.fit_range_end",
+                    "path": "data/results/0/fit_range_end",
                     "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
                 },
             ]
@@ -659,31 +706,31 @@ class DataManager:
                 if value is not None:
                     changes.append(
                         {
-                            "path": f"data.results.0.{schema_field}",
+                            "path": f"data/results/0/{schema_field}",
                             "new_value": float(value) * 3600,
                         }
                     )
                 else:
-                    changes.append({"path": f"data.results.0.{schema_field}", "action": "remove"})
+                    changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
 
             # R2 and LEY are computed by every model (unlike the model-specific
             # parameters below), so they get their own typed fields rather than
             # living in the generic fit_parameters bag.
             if "R2" in params:
                 changes.append(
-                    {"path": "data.results.0.fit_r_squared", "new_value": float(params["R2"])}
+                    {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
                 )
             else:
-                changes.append({"path": "data.results.0.fit_r_squared", "action": "remove"})
+                changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
             if "LEY" in params:
                 changes.append(
                     {
-                        "path": "data.results.0.lifetime_energy_yield",
+                        "path": "data/results/0/lifetime_energy_yield",
                         "new_value": float(params["LEY"]),
                     }
                 )
             else:
-                changes.append({"path": "data.results.0.lifetime_energy_yield", "action": "remove"})
+                changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
 
             # Everything else this model actually fit (A, tau, beta, slope,
             # intercept, ...) - always upsert the full list, even if empty, so a
@@ -705,7 +752,7 @@ class DataManager:
                 if error_raw is not None:
                     entry["error"] = float(error_raw) * factor
                 fit_parameters.append(entry)
-            changes.append({"path": "data.results.0.fit_parameters", "new_value": fit_parameters})
+            changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
 
             # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
             # the fit range in time (not a subsample of the raw data points),
@@ -714,13 +761,13 @@ class DataManager:
             if resample_time_s is not None:
                 changes.append(
                     {
-                        "path": "data.results.0.fitted_time",
+                        "path": "data/results/0/fitted_time",
                         "new_value": resample_time_s.tolist(),
                     }
                 )
                 changes.append(
                     {
-                        "path": "data.results.0.fitted_power_density",
+                        "path": "data/results/0/fitted_power_density",
                         "new_value": resample_power.tolist(),
                     }
                 )
@@ -728,7 +775,13 @@ class DataManager:
             try:
                 edit_entry(self.url, self.token, entry_id, changes)
                 outcomes.append(
-                    {"sample_id": sample_id, "curve_id": curve_id, "success": True, "message": "OK"}
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": True,
+                        "message": "OK",
+                        "nomad_url": self._entry_gui_url(upload_id, entry_id),
+                    }
                 )
             except requests.HTTPError as exc:
                 message = str(exc)
@@ -744,6 +797,7 @@ class DataManager:
                         "curve_id": curve_id,
                         "success": False,
                         "message": message,
+                        "nomad_url": None,
                     }
                 )
 
