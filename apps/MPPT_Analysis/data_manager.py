@@ -48,7 +48,17 @@ def _has_value(value):
     both None (never computed by this model) and NaN (computed, but the
     fit never reaches the target threshold within a scientifically
     meaningful extrapolation - see crossing_time()'s docstring in
-    fitting_tools.py) - neither should be written to NOMAD as a value."""
+    fitting_tools.py) - neither should be written to NOMAD as a value.
+
+    Deliberately writes "action": "remove" (an empty field) rather than a
+    literal NaN for both cases: standard JSON has no NaN, and the requests
+    library used by hysprint_utils.api_calls.edit_entry refuses to
+    serialize one at all (raises before the request is even sent) - sending
+    one would need a shared hysprint_utils change with its own sign-off,
+    for an outcome not even confirmed to be accepted server-side. An empty
+    field is also NOMAD's own native way to represent "no value" for a
+    scalar quantity - the same convention this app already relies on for
+    T80_linear when it's inapplicable (see erfc_params in fitting_tools.py)."""
     return value is not None and not (isinstance(value, float) and math.isnan(value))
 
 

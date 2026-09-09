@@ -109,7 +109,14 @@ A `NaN` from `crossing_time`/`pce_after_1000h` is never written to NOMAD as
 a value — `data_manager._has_value()` treats `NaN` the same as "not
 computed" and the write-back sends `{"action": "remove"}` for that field
 instead, so a stale value from a previous fit (with a different model)
-never lingers.
+never lingers. This means a "not reached" result shows up in NOMAD as an
+**empty field**, not a literal `NaN` - deliberate, not a shortcut: standard
+JSON has no NaN, and `requests` (used by `hysprint_utils.api_calls.edit_entry`)
+refuses to serialize one at all, so sending one would need a shared
+`hysprint_utils` change (its own sign-off) for an outcome not even confirmed
+to be accepted server-side. An empty field is also NOMAD's own native way to
+represent "no value" for a scalar quantity - already used elsewhere in this
+app for `T80_linear` when it's inapplicable (see `erfc_params`).
 
 ## Writing results back to NOMAD
 
