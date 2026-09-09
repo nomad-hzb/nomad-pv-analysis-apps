@@ -2,6 +2,7 @@ import lmfit
 import numpy as np
 import pandas as pd
 from scipy.integrate import quad
+from scipy.optimize import brentq
 from scipy.special import erfc
 
 
@@ -85,11 +86,28 @@ def stretched_exponential_params(power, times, initial_values=None):
         power, initial_params, t=times
     )  # perform fit, result is an instance of lmfit.ModelResult
 
-    # calculate additional parameters, such as t80 and lifetime energy production
-    time_extrapolate, pce_extrapolate = extrapolate(times, result)
-    T80 = find_T80(time_extrapolate, pce_extrapolate)
-    T80_capped = min(T80, times[-1])
-    lifetime_energy = calculate_ley(stretched_exponential, result.best_values.values(), T80_capped)
+    A = result.best_values["A"]
+    tau = result.best_values["tau"]
+    beta = result.best_values["beta"]
+
+    def model_at(t):
+        return stretched_exponential(t, A, tau, beta)
+
+    def closed_form(threshold):
+        # A*exp(-(t/tau)**beta) = threshold => t = tau*(-ln(threshold/A))**(1/beta)
+        if threshold >= A:
+            return 0.0  # already at/below threshold at t=0
+        return tau * (-np.log(threshold / A)) ** (1 / beta)
+
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at, closed_form)
+    T95 = crossing_time(times, power, reference, 0.95, model_at, closed_form)
+    # A monotonic decay from t=0 has no burn-in dip to stabilize from - the
+    # "stabilized" reference is the same as the initial one.
+    tS, Ts80, Ts95 = 0.0, T80, T95
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    ley_end = T80 if np.isfinite(T80) else times[-1]
+    lifetime_energy = calculate_ley(stretched_exponential, [A, tau, beta], ley_end)
 
     # put all relevant parameters into a list, if errors were calculated return parameters as uncertainties.ufloats, otherwise as normal floats
     if result.errorbars:
@@ -98,7 +116,12 @@ def stretched_exponential_params(power, times, initial_values=None):
             result.uvars["tau"],
             result.uvars["beta"],
             result.rsquared,
-            T80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
@@ -107,7 +130,12 @@ def stretched_exponential_params(power, times, initial_values=None):
             result.best_values["tau"],
             result.best_values["beta"],
             result.rsquared,
-            T80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     return result_values, result.best_fit, result
@@ -129,16 +157,36 @@ def linear_params(power, times, initial_values=None):
     slope = result.best_values["slope"]
     intercept = result.best_values["intercept"]
 
-    t80 = intercept * 0.2 / -slope
-    t80_capped = min(t80, times[-1])
-    lifetime_energy = 0.5 * slope * t80_capped**2 + intercept * t80_capped
+    def model_at(t):
+        return linear_decay(t, slope, intercept)
+
+    def closed_form(threshold):
+        # slope*t + intercept = threshold => t = (threshold - intercept) / slope
+        if intercept <= threshold:
+            return 0.0
+        if slope >= 0:
+            return None  # flat or rising - never decays to the threshold
+        return (threshold - intercept) / slope
+
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at, closed_form)
+    T95 = crossing_time(times, power, reference, 0.95, model_at, closed_form)
+    tS, Ts80, Ts95 = 0.0, T80, T95
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    ley_end = T80 if np.isfinite(T80) else times[-1]
+    lifetime_energy = 0.5 * slope * ley_end**2 + intercept * ley_end
 
     if result.errorbars:
         result_values = [
             result.uvars["slope"],
             result.uvars["intercept"],
             result.rsquared,
-            t80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
@@ -146,7 +194,12 @@ def linear_params(power, times, initial_values=None):
             result.best_values["slope"],
             result.best_values["intercept"],
             result.rsquared,
-            t80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     return result_values, result.best_fit, result
@@ -171,10 +224,23 @@ def exponential_params(power, times, initial_values=None):
     amplitude = result.best_values["amplitude"]
     decay = result.best_values["decay"]
 
-    t80 = -decay * np.log(0.8)
-    t80_capped = min(t80, times[-1])
+    def model_at(t):
+        return exponential_decay(t, amplitude, decay)
+
+    def closed_form(threshold):
+        # amplitude*exp(-t/decay) = threshold => t = decay*ln(amplitude/threshold)
+        if threshold >= amplitude:
+            return 0.0
+        return decay * np.log(amplitude / threshold)
+
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at, closed_form)
+    T95 = crossing_time(times, power, reference, 0.95, model_at, closed_form)
+    tS, Ts80, Ts95 = 0.0, T80, T95
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    ley_end = T80 if np.isfinite(T80) else times[-1]
     lifetime_energy = (
-        amplitude * decay * (1 - np.exp(-t80_capped / decay))
+        amplitude * decay * (1 - np.exp(-ley_end / decay))
     )  # explicit solution to integral
 
     if result.errorbars:
@@ -182,7 +248,12 @@ def exponential_params(power, times, initial_values=None):
             result.uvars["amplitude"],
             result.uvars["decay"],
             result.rsquared,
-            t80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
@@ -190,7 +261,12 @@ def exponential_params(power, times, initial_values=None):
             result.best_values["amplitude"],
             result.best_values["decay"],
             result.rsquared,
-            t80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     return result_values, result.best_fit, result
@@ -230,20 +306,43 @@ def biexponential_params(power, times, initial_values=None):
     initial_params["exp2_decay"].set(min=1e-6)
     result = biexp_model.fit(power, initial_params, x=times)
 
-    tau_min = min(
-        result.best_values["exp1_decay"], result.best_values["exp2_decay"]
-    )  # faster decay
-    tau_max = max(
-        result.best_values["exp1_decay"], result.best_values["exp2_decay"]
-    )  # slower decay
-    tS = -tau_min * np.log(0.01)  # Use the fast decay for tS / burn-in-time
-    Ts80 = -tau_max * np.log(0.8)  # Use slow decay for Ts80
-    tS_capped = min(tS, times[-1])
-    Ts80_capped = min(Ts80, times[-1])
-    lifetime_energy = result.best_values["exp1_amplitude"] * result.best_values["exp1_decay"] * (
-        1 - np.exp(-Ts80_capped / result.best_values["exp1_decay"])
-    ) + result.best_values["exp2_amplitude"] * result.best_values["exp2_decay"] * (
-        1 - np.exp(-Ts80_capped / result.best_values["exp2_decay"])
+    A1 = result.best_values["exp1_amplitude"]
+    tau1 = result.best_values["exp1_decay"]
+    A2 = result.best_values["exp2_amplitude"]
+    tau2 = result.best_values["exp2_decay"]
+    tau_fast = min(tau1, tau2)
+    A_slow = (
+        A1 if tau1 >= tau2 else A2
+    )  # amplitude of the slower-decaying (dominant, long-term) term
+
+    def model_at(t):
+        return biexponential_decay(t, A1, tau1, A2, tau2)
+
+    # T80/T95: relative to the initial reference, over the full two-term
+    # curve - no elementary closed form exists for a sum of two exponentials,
+    # so these are solved via bounded root-finding on the exact equation.
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at)
+    T95 = crossing_time(times, power, reference, 0.95, model_at)
+
+    # tS/Ts80/Ts95: this model's existing (pre-#26) convention treats the
+    # FASTER-decaying term as the burn-in transient and the SLOWER term as
+    # the long-term degradation once burn-in is over - tS is when the fast
+    # term has decayed to 1% of itself (a fixed closed-form constant, not a
+    # measured/extrapolated crossing), and Ts80/Ts95 are the full curve's
+    # crossings relative to the slow term's own amplitude (its value once
+    # the fast term has vanished), found the same way as T80/T95 above.
+    tS = -tau_fast * np.log(0.01)
+    Ts80 = crossing_time(times, power, A_slow, 0.8, model_at, search_from=tS)
+    Ts95 = crossing_time(times, power, A_slow, 0.95, model_at, search_from=tS)
+
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    # LEY integrates up to T80 (the initial-referenced threshold), matching
+    # this field's schema definition - biexponential previously used Ts80
+    # here only because T80 didn't exist yet for this model.
+    ley_end = T80 if np.isfinite(T80) else times[-1]
+    lifetime_energy = A1 * tau1 * (1 - np.exp(-ley_end / tau1)) + A2 * tau2 * (
+        1 - np.exp(-ley_end / tau2)
     )  # explicit solution for integral
 
     if result.errorbars:
@@ -253,8 +352,12 @@ def biexponential_params(power, times, initial_values=None):
             result.uvars["exp2_amplitude"],
             result.uvars["exp2_decay"],
             result.rsquared,
-            tS_capped,
-            Ts80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
@@ -264,8 +367,12 @@ def biexponential_params(power, times, initial_values=None):
             result.best_values["exp2_amplitude"],
             result.best_values["exp2_decay"],
             result.rsquared,
-            tS_capped,
-            Ts80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     return result_values, result.best_fit, result
@@ -292,25 +399,38 @@ def logistic_params(power, times, initial_values=None):
     initial_params["k"].set(min=1e-6)
     result = log_exp_model.fit(power, initial_params, t=times)
 
-    tS, time_extrapolate, pce_extrapolate = find_tS(times, result)
-    PCE_tS = pce_extrapolate[np.where(time_extrapolate == tS)[0][0]]
-    Ts80, _ = find_Ts80(pce_extrapolate, time_extrapolate, tS, PCE_tS)
-    tS_capped = min(tS, times[-1])
-    Ts80_capped = min(Ts80, times[-1])
-
     A = result.best_values["A"]
     tau = result.best_values["tau"]
     L = result.best_values["L"]
     k = result.best_values["k"]
     x0 = result.best_values["x0"]
 
+    def model_at(t):
+        return logistic_plus_exp(t, A, tau, L, k, x0)
+
+    tS, time_extrapolate, pce_extrapolate = find_tS(times, result)
+    PCE_tS = pce_extrapolate[np.where(time_extrapolate == tS)[0][0]]
+
+    # T80/T95: relative to the initial reference. Ts80/Ts95: relative to the
+    # post-burn-in stabilized value (PCE_tS, from find_tS above). Neither has
+    # an elementary closed form (exponential + logistic terms together), so
+    # both are solved via bounded root-finding on the exact equation.
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at)
+    T95 = crossing_time(times, power, reference, 0.95, model_at)
+    Ts80 = crossing_time(times, power, PCE_tS, 0.8, model_at, search_from=tS)
+    Ts95 = crossing_time(times, power, PCE_tS, 0.95, model_at, search_from=tS)
+
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    # LEY integrates up to T80 (the initial-referenced threshold), matching
+    # this field's schema definition - previously used Ts80 here only
+    # because T80 didn't exist yet for this model.
+    ley_end = T80 if np.isfinite(T80) else times[-1]
     lifetime_energy = (
-        A * tau * (1 - np.exp(-Ts80_capped / tau))  # exponential part
+        A * tau * (1 - np.exp(-ley_end / tau))  # exponential part
         + L
         / k
-        * (
-            np.log(1 + np.exp(k * (Ts80_capped - x0))) - np.log(1 + np.exp(-k * x0))
-        )  # logistic part
+        * (np.log(1 + np.exp(k * (ley_end - x0))) - np.log(1 + np.exp(-k * x0)))  # logistic part
     )
 
     # for some reason does not calculate errors
@@ -322,12 +442,30 @@ def logistic_params(power, times, initial_values=None):
             result.uvars["k"],
             result.uvars["x0"],
             result.rsquared,
-            tS_capped,
-            Ts80_capped,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
-        result_values = [A, tau, L, k, x0, result.rsquared, tS_capped, Ts80_capped, lifetime_energy]
+        result_values = [
+            A,
+            tau,
+            L,
+            k,
+            x0,
+            result.rsquared,
+            T80,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
+            lifetime_energy,
+        ]
     return result_values, result.best_fit, result
 
 
@@ -355,17 +493,31 @@ def erfc_params(power, times, initial_values=None):
 
     PCE0 = result.best_values["PCE0"]
     k = result.best_values["k"]
-    index_t80 = np.nonzero(np.diff(np.sign(result.best_fit - 0.8 * PCE0)))[
-        0
-    ]  # find the first index where the power falls below 80% of initial value
-    if index_t80.size > 0:
-        T80_composite = times[index_t80[0]]
-    else:
-        T80_composite = times[-1]
-    T80_composite_capped = min(T80_composite, times[-1])
-    # Calculate T80* from the linear part (PCE0 - k*t = 0.8*PCE0)
+    t0 = result.best_values["t0"]
+    b = result.best_values["b"]
+
+    def model_at(t):
+        return erfc_linear(t, PCE0, k, t0, b)
+
+    # erfc((t-t0)/b) itself always decays to 0 as t grows (for b>0), so the
+    # whole curve is suppressed toward 0 regardless of the linear term's
+    # sign - not "dominated by the linear part at large t" as one might
+    # guess. The product of erfc and a linear term in the same variable has
+    # no elementary closed-form inverse, so this is solved via bounded
+    # root-finding, same as the other compound models.
+    reference = initial_reference(power)
+    T80 = crossing_time(times, power, reference, 0.8, model_at)
+    T95 = crossing_time(times, power, reference, 0.95, model_at)
+    tS, Ts80, Ts95 = 0.0, T80, T95
+
+    # T80* from the linear part alone (PCE0 - k*t = 0.8*PCE0), ignoring the
+    # erfc envelope - a distinct, pre-existing secondary figure of merit,
+    # not this model's main T80.
     T80_linear = (0.2 * PCE0) / k if k != 0 else None
-    lifetime_energy = calculate_ley(erfc_linear, result.best_values.values(), T80_composite_capped)
+
+    PCE_1000h = pce_after_1000h(times, power, model_at)
+    ley_end = T80 if np.isfinite(T80) else times[-1]
+    lifetime_energy = calculate_ley(erfc_linear, [PCE0, k, t0, b], ley_end)
 
     if result.errorbars:
         result_values = [
@@ -374,8 +526,13 @@ def erfc_params(power, times, initial_values=None):
             result.uvars["t0"],
             result.uvars["b"],
             result.rsquared,
-            T80_composite_capped,
+            T80,
             T80_linear,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     else:
@@ -385,8 +542,13 @@ def erfc_params(power, times, initial_values=None):
             result.best_values["t0"],
             result.best_values["b"],
             result.rsquared,
-            T80_composite_capped,
+            T80,
             T80_linear,
+            T95,
+            Ts80,
+            Ts95,
+            tS,
+            PCE_1000h,
             lifetime_energy,
         ]
     return result_values, result.best_fit, result
@@ -414,18 +576,6 @@ def extrapolate(times, fit_results, time_limit=None):
     return time_extrapolate, pce_extrapolate
 
 
-# finds the first time where the power falls below the given fraction, by default the average of the 50 highest power values is taken as reference
-def find_T80(times, power, reference_power=None, target_decay=0.8):
-    if not reference_power:
-        reference = np.mean(np.partition(power, -50)[-50:])
-    else:
-        reference = reference_power
-    t80_index = np.argmax(
-        power <= reference * target_decay
-    )  # argmax returns the first value for which the expression is true
-    return times[t80_index]
-
-
 # finds the global minimum, then finds the global maximum after that, fitted function is extrapolated to 10 times the measurement time
 # exact motivation unknown
 def find_tS(times, fit_results):
@@ -439,18 +589,91 @@ def find_tS(times, fit_results):
     return tS, time_extrapolate, pce_extrapolate
 
 
-def find_Ts80(pce_extrapolate, time_extrapolate, tS, PCE_tS):
-    Ts80_value = 0.8 * PCE_tS
-    tS_idx = np.where(time_extrapolate == tS)[0][0]
-    Ts80_idx = np.where(pce_extrapolate[tS_idx:] <= Ts80_value)[0]
+# Every T80/T95/Ts80/Ts95-style figure of merit in this module follows the
+# same policy (Khenkin et al., "Consensus statement for stability assessment
+# and reporting for perovskite photovoltaics based on ISOS procedures",
+# Nature Energy 2020, DOI: 10.1038/s41560-019-0529-5):
+#   1. If the REAL measured curve already reaches the threshold, report that
+#      real, non-extrapolated time.
+#   2. Otherwise, report the time at which the FITTED model - extrapolated
+#      beyond the measurement - is predicted to reach it.
+#   3. ...but only up to EXTRAPOLATION_HORIZON_FACTOR times the measured
+#      duration (matching extrapolate()'s own existing window). Beyond that,
+#      or for a model that is flat/improving and will never reach the
+#      threshold at all, report NaN rather than an arbitrarily distant,
+#      scientifically unreliable time - the ISOS consensus statement itself
+#      cautions against extrapolating stability lifetimes far past the
+#      measured duration.
+EXTRAPOLATION_HORIZON_FACTOR = 10
 
-    if len(Ts80_idx) == 0:
-        Ts80 = time_extrapolate[-1]
+
+def initial_reference(power):
+    """Reference ("100%") power for T80/T95: mean of the 50 highest raw
+    measured values (or fewer, for a shorter curve) - robust to a single
+    noisy first sample being used as the literal t=0 value."""
+    n = min(50, len(power))
+    return float(np.mean(np.partition(power, -n)[-n:]))
+
+
+def crossing_time(
+    times, power, reference, target_fraction, model_at, closed_form=None, search_from=None
+):
+    """Time at which a fit reaches `target_fraction * reference`, per the
+    real-else-extrapolated-else-NaN policy documented above `find_tS`.
+
+    model_at(t): evaluates the fitted model at any t (including beyond the
+    real measurement) - used to test the extrapolation horizon and, when
+    `closed_form` is not given, to numerically root-find the crossing itself.
+    closed_form(threshold) -> t: optional analytic solution for models with
+    one (Linear, Exponential, Stretched Exponential); omit it for models with
+    no elementary closed form (Biexponential, Logistic+Exponential,
+    ERFC+Linear), which are solved via bounded root-finding on `model_at`
+    instead - exact to numerical tolerance, not an approximation.
+    search_from: only consider real measured points at or after this time
+    when checking whether the threshold was already reached - used for
+    Ts80/Ts95, which are relative to the post-burn-in stabilization time, so
+    a transient dip before stabilizing shouldn't count as "reached".
+    """
+    threshold = target_fraction * reference
+    if search_from is not None:
+        mask = times >= search_from
+        considered_times, considered_power = times[mask], power[mask]
     else:
-        Ts80_idx = tS_idx + Ts80_idx[0]
-        Ts80 = time_extrapolate[Ts80_idx]
+        considered_times, considered_power = times, power
+    if len(considered_times) and np.any(considered_power <= threshold):
+        reached = considered_power <= threshold
+        return float(considered_times[np.argmax(reached)])
 
-    return Ts80, time_extrapolate
+    t_last = times[-1]
+    horizon = EXTRAPOLATION_HORIZON_FACTOR * t_last
+    if model_at(horizon) > threshold:
+        return float("nan")  # flat/improving trend, or too slow to matter within the horizon
+
+    if closed_form is not None:
+        t = closed_form(threshold)
+        if t is None or not np.isfinite(t):
+            return float("nan")
+        return float(min(t, horizon))
+
+    f_last = model_at(t_last) - threshold
+    if f_last <= 0:
+        return float(t_last)  # fit already at/below threshold right at the measurement's edge
+    return float(brentq(lambda t: model_at(t) - threshold, t_last, horizon))
+
+
+def pce_after_1000h(times, power, model_at):
+    """PCE (%) at t=1000h, per the same real-else-extrapolated-else-NaN
+    policy. This app fits power density directly as a stand-in for PCE (%) -
+    the two are numerically identical under standard 1-sun/100 mW/cm^2
+    illumination, the same assumption already implicit in every other figure
+    of merit this module computes (T80/T95/... are likewise computed
+    directly on power density, never converted).
+    """
+    if times[-1] >= 1000:
+        return float(np.interp(1000.0, times, power))
+    if EXTRAPOLATION_HORIZON_FACTOR * times[-1] < 1000:
+        return float("nan")
+    return float(model_at(1000.0))
 
 
 available_fit_model_list = [
@@ -458,7 +681,19 @@ available_fit_model_list = [
         name="Stretched Exponential",
         parfunc=stretched_exponential_params,
         abbreviated_name="Stretched Exp",
-        columns=["A", "tau", "beta", "R2", "T80", "LEY"],
+        columns=[
+            "A",
+            "tau",
+            "beta",
+            "R2",
+            "T80",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=3,
         default_guess=stretched_exponential_defaults,
         description=r"PCE(t) = A \cdot e^{-(t/\tau)^\beta}",
@@ -467,7 +702,18 @@ available_fit_model_list = [
         name="Linear",
         parfunc=linear_params,
         abbreviated_name="Linear",
-        columns=["slope", "intercept", "R2", "t80", "LEY"],
+        columns=[
+            "slope",
+            "intercept",
+            "R2",
+            "T80",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=2,
         default_guess=linear_defaults,
         description=r"PCE(t) = \text{slope} \cdot t + \text{intercept}",
@@ -476,7 +722,18 @@ available_fit_model_list = [
         name="Exponential",
         parfunc=exponential_params,
         abbreviated_name="Exponential",
-        columns=["amplitude", "decay", "R2", "t80", "LEY"],
+        columns=[
+            "amplitude",
+            "decay",
+            "R2",
+            "T80",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=2,
         default_guess=exponential_defaults,
         description=r"PCE(t) = A \cdot e^{-t/\tau}",
@@ -485,7 +742,20 @@ available_fit_model_list = [
         name="Biexponential",
         parfunc=biexponential_params,
         abbreviated_name="Biexponential",
-        columns=["A1", "tau1", "A2", "tau2", "R2", "tS", "Ts80", "LEY"],
+        columns=[
+            "A1",
+            "tau1",
+            "A2",
+            "tau2",
+            "R2",
+            "T80",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=4,
         default_guess=biexponential_defaults,
         description=r"PCE(t) = A_1 \cdot e^{-t/\tau_1} + A_2 \cdot e^{-t/\tau_2}",
@@ -494,7 +764,21 @@ available_fit_model_list = [
         name="Logistic + Exponential",
         parfunc=logistic_params,
         abbreviated_name="Logistic+Exp",
-        columns=["A", "tau", "L", "k", "x0", "R2", "tS", "Ts80", "LEY"],
+        columns=[
+            "A",
+            "tau",
+            "L",
+            "k",
+            "x0",
+            "R2",
+            "T80",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=5,
         default_guess=logistic_defaults,
         description=r"PCE(t) = A \cdot e^{-t/\tau} + \frac{L}{1 + e^{-k(t - x_0)}}",
@@ -503,7 +787,21 @@ available_fit_model_list = [
         name="ERFC + Linear",
         parfunc=erfc_params,
         abbreviated_name="ERFC+Linear",
-        columns=["PCE0", "k", "t0", "b", "R2", "T80", "T80_linear", "LEY"],
+        columns=[
+            "PCE0",
+            "k",
+            "t0",
+            "b",
+            "R2",
+            "T80",
+            "T80_linear",
+            "T95",
+            "Ts80",
+            "Ts95",
+            "tS",
+            "PCE_after_1000_h",
+            "LEY",
+        ],
         n_params=4,
         default_guess=erfc_defaults,
         description=r"PCE(t) = \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{t-t_0}{b}\right)(PCE_0 - k \cdot t)",

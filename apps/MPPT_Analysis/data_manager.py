@@ -4,6 +4,7 @@ Data management functions for MPPT Analysis App
 
 import json
 import logging
+import math
 import warnings
 from datetime import datetime
 
@@ -37,9 +38,19 @@ _ISOS_METRIC_ALIASES = {
 }
 _ISOS_ALIAS_COLUMNS = {alias for aliases in _ISOS_METRIC_ALIASES.values() for alias in aliases}
 # model.columns entries that go to their own dedicated schema field, not the
-# generic fit_parameters bag: the ISOS metrics above, plus R2 -> fit_r_squared
-# and LEY -> lifetime_energy_yield.
-_DEDICATED_FIELD_COLUMNS = _ISOS_ALIAS_COLUMNS | {"R2", "LEY"}
+# generic fit_parameters bag: the ISOS metrics above, plus R2 -> fit_r_squared,
+# LEY -> lifetime_energy_yield, and PCE_after_1000_h (same name both sides).
+_DEDICATED_FIELD_COLUMNS = _ISOS_ALIAS_COLUMNS | {"R2", "LEY", "PCE_after_1000_h"}
+
+
+def _has_value(value):
+    """True if a fitting_tools.py metric was actually produced - excludes
+    both None (never computed by this model) and NaN (computed, but the
+    fit never reaches the target threshold within a scientifically
+    meaningful extrapolation - see crossing_time()'s docstring in
+    fitting_tools.py) - neither should be written to NOMAD as a value."""
+    return value is not None and not (isinstance(value, float) and math.isnan(value))
+
 
 # Everything else in a model's columns (its actual free parameters, e.g. A,
 # tau, beta, slope, intercept, PCE0, k, t0, b, ...) goes into fit_parameters -
@@ -703,7 +714,7 @@ class DataManager:
             # what this fit actually produced.
             for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
                 value = next((params[a] for a in aliases if a in params), None)
-                if value is not None:
+                if _has_value(value):
                     changes.append(
                         {
                             "path": f"data/results/0/{schema_field}",
@@ -713,16 +724,16 @@ class DataManager:
                 else:
                     changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
 
-            # R2 and LEY are computed by every model (unlike the model-specific
-            # parameters below), so they get their own typed fields rather than
-            # living in the generic fit_parameters bag.
-            if "R2" in params:
+            # R2, LEY, and PCE_after_1000_h are computed by every model (unlike
+            # the model-specific parameters below), so they get their own typed
+            # fields rather than living in the generic fit_parameters bag.
+            if _has_value(params.get("R2")):
                 changes.append(
                     {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
                 )
             else:
                 changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
-            if "LEY" in params:
+            if _has_value(params.get("LEY")):
                 changes.append(
                     {
                         "path": "data/results/0/lifetime_energy_yield",
@@ -731,6 +742,15 @@ class DataManager:
                 )
             else:
                 changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
+            if _has_value(params.get("PCE_after_1000_h")):
+                changes.append(
+                    {
+                        "path": "data/results/0/PCE_after_1000_h",
+                        "new_value": float(params["PCE_after_1000_h"]),
+                    }
+                )
+            else:
+                changes.append({"path": "data/results/0/PCE_after_1000_h", "action": "remove"})
 
             # Everything else this model actually fit (A, tau, beta, slope,
             # intercept, ...) - always upsert the full list, even if empty, so a
