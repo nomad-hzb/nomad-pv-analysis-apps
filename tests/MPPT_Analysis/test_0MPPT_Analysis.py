@@ -5,6 +5,7 @@ Tests for MPPT_Analysis — data_manager and plot_manager.
 import json
 from pathlib import Path
 
+import fitting_tools
 import numpy as np
 import plotly.graph_objects as go
 import pytest
@@ -275,3 +276,144 @@ class TestPlotHistograms:
         x_vals = list(hist_traces[0].x)
         assert 80.0 in x_vals
         assert 95.0 in x_vals
+
+
+# ===========================================================================
+# fitting_tools: unified ISOS figures of merit (issue #26)
+# ===========================================================================
+
+
+class TestCrossingTimePolicy:
+    """crossing_time(): real-if-reached, else-extrapolated (bounded to
+    EXTRAPOLATION_HORIZON_FACTOR), else-NaN - see the policy documented
+    above find_tS in fitting_tools.py."""
+
+    def test_returns_real_time_when_raw_data_reaches_threshold(self):
+        times = np.linspace(0, 20, 500)
+        power = 18 * np.exp(-times / 3.0)
+        reference = fitting_tools.initial_reference(power)
+        result = fitting_tools.crossing_time(
+            times, power, reference, 0.8, lambda t: 18 * np.exp(-t / 3.0)
+        )
+        expected = times[np.argmax(power <= 0.8 * reference)]
+        assert result == pytest.approx(expected)
+
+    def test_extrapolates_when_not_reached_within_measurement(self):
+        # True crossing is at t=-3*ln(0.8)=0.669 - measure only up to t=0.3,
+        # well before it, so real data never reaches 80% and this must
+        # extrapolate from the model instead.
+        times = np.linspace(0, 0.3, 50)
+        power = 18 * np.exp(-times / 3.0)
+        result = fitting_tools.crossing_time(
+            times, power, 18.0, 0.8, lambda t: 18 * np.exp(-t / 3.0)
+        )
+        expected = -3.0 * np.log(0.8)  # closed-form crossing for this exact curve
+        assert result == pytest.approx(expected, rel=1e-3)
+        assert result > times[-1]  # genuinely extrapolated, not clamped to measurement end
+
+    def test_returns_nan_for_flat_trend(self):
+        times = np.linspace(0, 20, 50)
+        power = np.full_like(times, 18.0)
+        result = fitting_tools.crossing_time(times, power, 18.0, 0.8, lambda t: 18.0)
+        assert np.isnan(result)
+
+    def test_returns_nan_for_improving_trend(self):
+        times = np.linspace(0, 20, 50)
+        power = 18.0 + 0.1 * times
+        result = fitting_tools.crossing_time(times, power, 18.0, 0.8, lambda t: 18.0 + 0.1 * t)
+        assert np.isnan(result)
+
+    def test_closed_form_used_when_provided(self):
+        times = np.linspace(0, 0.3, 50)  # before the true crossing at t=0.669 - see above
+        power = 18 * np.exp(-times / 3.0)
+
+        def closed_form(threshold):
+            return -3.0 * np.log(threshold / 18.0)
+
+        result = fitting_tools.crossing_time(
+            times, power, 18.0, 0.8, lambda t: 18 * np.exp(-t / 3.0), closed_form
+        )
+        assert result == pytest.approx(-3.0 * np.log(0.8), rel=1e-6)
+
+
+class TestPceAfter1000h:
+    def test_reads_real_value_when_measurement_covers_1000h(self):
+        times = np.linspace(0, 1500, 500)
+        power = 18 * np.exp(-times / 2000.0)
+        result = fitting_tools.pce_after_1000h(times, power, lambda t: 18 * np.exp(-t / 2000.0))
+        assert result == pytest.approx(np.interp(1000.0, times, power))
+
+    def test_extrapolates_within_ten_x_horizon(self):
+        times = np.linspace(0, 150, 50)  # 10x horizon = 1500h, covers 1000h
+        power = 18 * np.exp(-times / 2000.0)
+        result = fitting_tools.pce_after_1000h(times, power, lambda t: 18 * np.exp(-t / 2000.0))
+        assert result == pytest.approx(18 * np.exp(-1000.0 / 2000.0), rel=1e-6)
+
+    def test_nan_beyond_ten_x_horizon(self):
+        times = np.linspace(0, 20, 50)  # 10x horizon = 200h, doesn't reach 1000h
+        power = 18 * np.exp(-times / 2000.0)
+        result = fitting_tools.pce_after_1000h(times, power, lambda t: 18 * np.exp(-t / 2000.0))
+        assert np.isnan(result)
+
+
+class TestModelListProducesFullMetricSet:
+    """Every model (direct product feedback on issue #26) computes the same
+    full set of figures of merit, not a hand-picked subset per model."""
+
+    _REQUIRED_COLUMNS = {"R2", "T80", "T95", "Ts80", "Ts95", "tS", "PCE_after_1000_h", "LEY"}
+
+    @pytest.mark.parametrize("model", fitting_tools.available_fit_model_list, ids=lambda m: m.name)
+    def test_columns_include_full_metric_set(self, model):
+        assert self._REQUIRED_COLUMNS.issubset(set(model.columns))
+
+    @pytest.mark.parametrize("model", fitting_tools.available_fit_model_list, ids=lambda m: m.name)
+    def test_fit_produces_a_value_for_every_declared_column(self, model):
+        times = np.linspace(0.01, 20, 200)
+        power = 18 * np.exp(-((times / 5.0) ** 0.8))
+        values, fitted_curve, result = model.parfunc(power, times)
+        assert len(values) == len(model.columns)
+        assert len(fitted_curve) == len(power)
+
+
+class TestWriteFitResultsToNomadNaNHandling:
+    def test_nan_metrics_are_removed_not_written(self, mocker):
+        import pandas as pd
+
+        dm = DataManager.__new__(DataManager)
+        dm.url = "https://nomad-hzb-se.de/nomad-oasis/api/v1"
+        dm.token = "test-token"
+
+        entries_data = pd.DataFrame(
+            {"entry_id": ["entry-1"], "upload_id": ["upload-1"]},
+            index=pd.MultiIndex.from_tuples([("sample1", 0)]),
+        )
+        model = fitting_tools.available_fit_model_list[1]  # Linear
+        fit = {
+            "model": model,
+            "time": np.array([0.0, 1.0, 2.0]),
+            "params": {
+                "slope": 0.1,
+                "intercept": 18.0,
+                "R2": 0.9,
+                "T80": float("nan"),
+                "T95": float("nan"),
+                "Ts80": float("nan"),
+                "Ts95": float("nan"),
+                "tS": 0.0,
+                "PCE_after_1000_h": float("nan"),
+                "LEY": 12.3,
+            },
+            "lmfit_result": None,
+        }
+        mock_edit = mocker.patch("hysprint_utils.api_calls.edit_entry")
+        outcomes = dm.write_fit_results_to_nomad(
+            entries_data, {("sample1", 0): fit}, "test-computed-by"
+        )
+
+        assert outcomes[0]["success"] is True
+        changes = mock_edit.call_args.args[3]
+        by_path = {c["path"]: c for c in changes}
+        assert by_path["data/results/0/T80"]["action"] == "remove"
+        assert by_path["data/results/0/PCE_after_1000_h"]["action"] == "remove"
+        assert by_path["data/results/0/fit_r_squared"]["new_value"] == pytest.approx(0.9)
+        assert by_path["data/results/0/lifetime_energy_yield"]["new_value"] == pytest.approx(12.3)
