@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # StabilityFiguresOfMerit field name -> fitting_tools.py model column names that
 # feed it. Column names aren't consistent across models (T80 vs t80, tS vs Ts...),
 # so write-back has to alias-match rather than assume one spelling.
+# T95/T80/Ts95/Ts80 definitions: Khenkin et al., "Consensus statement for
+# stability assessment and reporting for perovskite photovoltaics based on
+# ISOS procedures", Nature Energy 5, 35-49 (2020). DOI: 10.1038/s41560-019-0529-5
 _ISOS_METRIC_ALIASES = {
     "T95": ["T95", "t95"],
     "T80": ["T80", "t80"],
