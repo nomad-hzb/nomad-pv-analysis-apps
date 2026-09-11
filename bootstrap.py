@@ -101,10 +101,40 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
 
 def _install_shared() -> None:
     shared = REPO_ROOT / "shared"
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", str(shared)],
-        check=True,
+    # Captured, not inherited: this runs as cell 0 of a Voila app, where
+    # anything pip writes to stdout/stderr is rendered into the app's own UI.
+    # A successful install has nothing a user of the app needs to see, so it
+    # stays silent (the captured log goes to the logger, visible to anyone who
+    # configures one); a failed one prints everything, since at that point the
+    # pip output is the only useful diagnostic.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "--disable-pip-version-check",
+            str(shared),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    if result.returncode != 0:
+        # The pip output goes in the exception, not the log line: a traceback
+        # always renders in the notebook, whereas a log record only shows if
+        # something configured logging. Putting it in both duplicates a very
+        # long diagnostic in the one place it is hardest to read.
+        logger.error("pip install of %s failed with exit code %d", shared, result.returncode)
+        raise RuntimeError(
+            f"bootstrap: pip install of {shared} failed with exit code "
+            f"{result.returncode}.\n{output}"
+        )
+    if output:
+        logger.info("pip install of %s reported:\n%s", shared, output)
+
     # A fresh kernel already ran site.py before this install happened, so it
     # won't pick up the newly installed package on its own until restarted.
     # Adding shared/ to sys.path directly makes THIS kernel see hysprint_utils
