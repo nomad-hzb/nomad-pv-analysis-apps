@@ -269,3 +269,63 @@ export HYSPRINT_API_ENDPOINT=/nomad-oasis/api/v1
 ```
 
 See `README.md` for the local install and how to supply an access token.
+
+## 7. Git cheat sheet for the NORTH terminal
+
+Everything here assumes `HTTPS_PROXY` is exported first on a proxied Oasis
+(section 2a) - anything touching the network fails without it.
+
+### Get the repo and pick a branch
+
+```bash
+git clone https://github.com/nomad-hzb/nomad-pv-analysis-apps.git
+cd nomad-pv-analysis-apps
+
+git branch -a                    # every branch, including remote ones
+git checkout <branch-name>       # switch; a fresh clone needs no fetch first
+git branch --show-current        # confirm where you are
+```
+
+If `checkout` says `pathspec ... did not match`, your clone predates the
+branch. `git fetch origin`, then retry.
+
+### Stay up to date
+
+```bash
+git pull                         # tracking is set up by checkout, no args needed
+git log --oneline -5             # what you have
+git fetch origin && git status   # see if you are behind without changing anything
+```
+
+### Notebook outputs, the usual reason a checkout is refused
+
+Running a notebook in the `jupyter2` tool writes its output cells back into
+the `.ipynb`, so git reports it as modified and refuses to switch branches.
+Those outputs are exhaust - discard them:
+
+```bash
+git status                       # always look before discarding
+git restore <notebook>.ipynb     # one file
+git restore .                    # every modified tracked file
+```
+
+`git restore` does not touch untracked or ignored files, so
+`oasis_local_config.py` is never at risk. It is irreversible for the files it
+does touch, hence checking `git status` first.
+
+Use `git stash` only for changes you actually want back:
+
+```bash
+git stash                        # shelve, giving a clean tree
+git stash pop                    # take them back
+git stash list                   # what is shelved
+```
+
+Stashing run-output noise is the wrong tool: `pop` would just replay it onto
+the other branch, possibly as a conflict.
+
+### What never needs protecting
+
+`oasis_local_config.py` and `secrets.py` are gitignored. They survive
+`checkout`, `pull`, `restore` and `stash` untouched - create them once on the
+Oasis and they stay put across every branch switch.
