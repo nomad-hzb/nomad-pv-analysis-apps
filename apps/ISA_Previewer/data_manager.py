@@ -63,6 +63,11 @@ def get_container() -> str:
     return "/".join(inside_upload.replace(os.sep, "/").split("/")[1:])
 
 
+def get_own_app_folder() -> str:
+    """This app's own folder name under the container ("ISA_Previewer")."""
+    return os.path.basename(os.getcwd())
+
+
 def find_upload_folder(upload_id: str) -> str | None:
     """Map an API upload id to the mounted folder name that ends with it.
 
@@ -119,12 +124,18 @@ def build_notebook_url(link: config.AppLink, user: str) -> str:
     base = config.VOILA_PATH_TEMPLATE.format(user=user)
     if link.upload_id:
         # A target in a different upload is addressed by that upload alone: it does not
-        # necessarily mirror this repo's apps/<AppFolder> layout.
+        # necessarily mirror this repo's apps/<AppFolder> layout, so an empty folder
+        # there really does mean "at the top of that upload".
         path = f"uploads/{link.upload_id}"
+        folder = link.folder
     else:
+        # get_container() stops at the folder holding all app folders, so the app folder
+        # itself still has to be appended. An empty link.folder means "a sibling in this
+        # app's own folder", not "directly under the container" - treating it as the
+        # latter produced .../apps/timely_teller.ipynb, with ISA_Previewer missing.
         path = f"uploads/{get_own_upload_folder()}/{get_container()}"
-    folder = f"{link.folder}/" if link.folder else ""
-    return f"{base}/{path}/{folder}{link.notebook}"
+        folder = link.folder or get_own_app_folder()
+    return f"{base}/{path}/{f'{folder}/' if folder else ''}{link.notebook}"
 
 
 def available_links(h5_path: str, user: str) -> list[tuple[str, str]]:

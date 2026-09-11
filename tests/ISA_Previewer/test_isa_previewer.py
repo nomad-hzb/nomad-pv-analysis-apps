@@ -134,14 +134,37 @@ def test_uploads_root_is_found_at_any_depth_inside_the_upload(dm, tmp_path, monk
 # links
 # ---------------------------------------------------------------------------
 def test_build_notebook_url_addresses_a_sibling_in_this_app(dm, cfg, monkeypatch):
+    """A sibling notebook lives in this app's own folder, which the URL must contain.
+
+    An empty AppLink.folder means "next to me", not "directly under the container": the
+    container path stops at apps/, so leaving the app folder off produced
+    .../apps/giwaxs_analysis.ipynb and 404ed.
+    """
     monkeypatch.setattr(dm, "get_own_upload_folder", lambda: "apps-upload-AAAAAAAAAAAAAAAAAAAAAA")
     monkeypatch.setattr(dm, "get_container", lambda: "apps")
+    monkeypatch.setattr(dm, "get_own_app_folder", lambda: "ISA_Previewer")
 
     url = dm.build_notebook_url(cfg.APP_LINKS["giwaxs_analysis"], "someone")
 
     assert url == (
         "/nomad-oasis/north/user/someone/voila/voila/render"
-        "/uploads/apps-upload-AAAAAAAAAAAAAAAAAAAAAA/apps/giwaxs_analysis.ipynb"
+        "/uploads/apps-upload-AAAAAAAAAAAAAAAAAAAAAA/apps/ISA_Previewer/giwaxs_analysis.ipynb"
+    )
+
+
+def test_build_notebook_url_in_a_cloned_repo_inside_an_upload(dm, cfg, monkeypatch):
+    """The deployed CE-AME layout: the repo is a git clone one level inside the upload."""
+    monkeypatch.setattr(
+        dm, "get_own_upload_folder", lambda: "dashboard_test-ne_Y0arITbmweei7SZW5ug"
+    )
+    monkeypatch.setattr(dm, "get_container", lambda: "nomad-pv-analysis-apps/apps")
+    monkeypatch.setattr(dm, "get_own_app_folder", lambda: "ISA_Previewer")
+
+    url = dm.build_notebook_url(cfg.APP_LINKS["timely_teller"], "someone")
+
+    assert url.endswith(
+        "/uploads/dashboard_test-ne_Y0arITbmweei7SZW5ug"
+        "/nomad-pv-analysis-apps/apps/ISA_Previewer/timely_teller.ipynb"
     )
 
 
