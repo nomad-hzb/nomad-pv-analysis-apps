@@ -33,7 +33,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +86,12 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
 
     no_proxy = config.get("NO_PROXY")
     if no_proxy is None:
-        # The Oasis this notebook talks to is a local/in-house call, not an
-        # external one - route it (and localhost) around the proxy unless
-        # the deployment says otherwise. _apply_config_env ran first, so
-        # HYSPRINT_URL_BASE is already this deployment's own Oasis here.
-        oasis_url = os.environ.get("HYSPRINT_URL_BASE", "https://nomad-hzb-se.de")
-        oasis_host = urlparse(oasis_url).hostname or ""
-        no_proxy = ",".join(filter(None, ["localhost", "127.0.0.1", oasis_host]))
+        # Loopback only. The Oasis host is deliberately NOT excluded: a
+        # container that needs a proxy at all usually has no direct route to
+        # anything, in-house hosts included - CE-AME answers a direct call to
+        # its own Oasis with "Errno 113 No route to host". A deployment whose
+        # Oasis really is directly reachable sets NO_PROXY explicitly.
+        no_proxy = "localhost,127.0.0.1"
     os.environ["NO_PROXY"] = no_proxy
 
     logger.info("Applied local proxy configuration: %s", os.environ["HTTPS_PROXY"])

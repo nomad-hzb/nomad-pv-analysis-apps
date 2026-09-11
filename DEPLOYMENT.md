@@ -91,15 +91,16 @@ uppercase-only form is not enough in general:
 
 ```bash
 export HTTP_PROXY=http://proxy.example.org:3128
-export NO_PROXY=localhost,127.0.0.1,.helmholtz-berlin.de
+export NO_PROXY=localhost,127.0.0.1
 export http_proxy=$HTTP_PROXY
 export https_proxy=$HTTPS_PROXY
 export no_proxy=$NO_PROXY
 ```
 
-`NO_PROXY` matters as soon as you talk to the Oasis itself from the shell: it
-is in-house, and without the exclusion those calls would take a pointless trip
-through an external proxy.
+Keep `NO_PROXY` to loopback unless you have checked otherwise. Excluding the
+Oasis host looks right - it is in-house, so why proxy it - but a container that
+needs a proxy at all usually has no direct route to anything: CE-AME answers a
+direct call to its own Oasis with `No route to host`.
 
 If a clone still fails, check the proxy is reachable at all before varying the
 value:
@@ -122,7 +123,7 @@ simply the normal workflow:
 cat >> ~/.bashrc <<'EOF'
 export HTTP_PROXY=http://proxy.example.org:3128
 export HTTPS_PROXY=http://proxy.example.org:3128
-export NO_PROXY=localhost,127.0.0.1,.helmholtz-berlin.de
+export NO_PROXY=localhost,127.0.0.1
 export http_proxy=$HTTP_PROXY
 export https_proxy=$HTTPS_PROXY
 export no_proxy=$NO_PROXY
@@ -167,7 +168,7 @@ HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
 # --- Outbound network ---
 HTTP_PROXY = "http://proxy.example.org:3128"
 HTTPS_PROXY = "http://proxy.example.org:3128"
-NO_PROXY = "localhost,127.0.0.1,.helmholtz-berlin.de"
+NO_PROXY = "localhost,127.0.0.1"
 ```
 
 ### What each variable does
@@ -177,7 +178,7 @@ NO_PROXY = "localhost,127.0.0.1,.helmholtz-berlin.de"
 | `HYSPRINT_URL_BASE` | always, on any non-HZB Oasis | Read by `shared/hysprint_utils/config.py`. No trailing slash. This is the one variable you cannot skip. |
 | `HYSPRINT_API_ENDPOINT` | only if the API is not at `/nomad-oasis/api/v1` | Identical to the HZB default on CE-AME. Set anyway so the deployment is fully described by one file. |
 | `HTTP_PROXY`, `HTTPS_PROXY` | the container has no direct outbound route | Applied *before* `pip install shared/` runs, because pip fetches `hatchling` from PyPI to build it. Also picked up by `git` for the `insitu_analyser` dependency. |
-| `NO_PROXY` | whenever a proxy is set | Without it, `requests` sends *every* call through the proxy, including in-house API traffic to the Oasis itself. If omitted, `bootstrap.py` derives a sensible default from `HYSPRINT_URL_BASE` (`localhost,127.0.0.1,<oasis host>`); the explicit form above additionally covers other `helmholtz-berlin.de` hosts. |
+| `NO_PROXY` | whenever a proxy is set | Hosts that must be reached *without* the proxy. Defaults to `localhost,127.0.0.1` if omitted. Do not add the Oasis host unless a direct call to it actually works from the container - on CE-AME it does not, and excluding it breaks every API call with `Errno 113 No route to host`. |
 
 ### Ordering, and why it is not cosmetic
 
@@ -215,8 +216,9 @@ print("info        :", requests.get(f"{URL_BASE}{API_ENDPOINT}/info", timeout=30
 ```
 
 Expected on CE-AME: the URL and proxy values from the config file, and `200`
-from the `/info` call. A `200` here proves `NO_PROXY` is working, since the
-call has to reach an in-house host.
+from the `/info` call. That `200` is the single most useful result here - it
+proves the URL, the proxy and `NO_PROXY` are all correct together, since the
+call has to reach the Oasis through the proxy.
 
 Checklist for the dashboard itself:
 
