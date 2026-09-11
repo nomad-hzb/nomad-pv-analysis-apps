@@ -85,7 +85,7 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
 8. **Notebooks: exactly 2 cells.** No `sys.path.append`/`insert` anywhere,
    in any app file or notebook — except inside `bootstrap.py` itself (see
    gotcha below), which every notebook's cell 0 invokes via
-   `runpy.run_path("../../bootstrap.py")`.
+   `_ = runpy.run_path("../../bootstrap.py")`.
 9. **Tests live at `tests/<app_name>/test_<app_name>.py`**, never inside
    `apps/`. Each app's `conftest.py` must load its own `data_manager`/
    `plot_manager`/etc. under a **unique** name via
@@ -197,8 +197,14 @@ against `App_dashboard`, see `memory/project_voila_hysprint_utils_install.md`.
 **How to apply:** every notebook's cell 0 is exactly:
 ```python
 import runpy
-runpy.run_path("../../bootstrap.py")
+_ = runpy.run_path("../../bootstrap.py")
 ```
+The `_ =` is load-bearing, not a style tic: `runpy.run_path()` **returns the
+executed module's globals dict**, and a notebook auto-displays the value of
+its last expression — so without the binding, cell 0 dumps `__builtins__`,
+every imported module and every bootstrap function into the app's UI under
+Voila. Hit for real on CE-AME. Don't "simplify" it away.
+
 `bootstrap.py` (repo root) installs `shared/` and then inserts it directly
 into `sys.path` — a deliberate, sanctioned exception to rule 8, not
 something to "clean up" if seen again. Before that install runs it also

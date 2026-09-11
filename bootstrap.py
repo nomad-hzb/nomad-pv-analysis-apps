@@ -24,7 +24,7 @@ notebook's own directory under Voila, regardless of the upload session
 hash, so the relative path here is invariant):
 
     import runpy
-    runpy.run_path("../../bootstrap.py")
+    _ = runpy.run_path("../../bootstrap.py")
 """
 
 import importlib

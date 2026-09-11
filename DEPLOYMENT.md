@@ -46,7 +46,7 @@ more than the name: every notebook's cell 0 is
 
 ```python
 import runpy
-runpy.run_path("../../bootstrap.py")
+_ = runpy.run_path("../../bootstrap.py")
 ```
 
 which resolves from `apps/<AppName>/` to the repo root. As long as `apps/`,
@@ -200,7 +200,7 @@ before debugging anything else:
 
 ```python
 import runpy
-runpy.run_path("../../bootstrap.py")
+_ = runpy.run_path("../../bootstrap.py")
 
 import os
 from hysprint_utils.config import API_ENDPOINT, URL_BASE
