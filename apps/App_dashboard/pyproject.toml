@@ -1,10 +1,10 @@
 [project]
 name = "app-dashboard"
-version = "0.4.1"
+version = "0.5.1"
 description = "HySPRINT App dashboard app"
 requires-python = ">=3.10"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     "ipython>=8.12",
     "ipywidgets>=8.1",
 ]

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "EQE curve and parameter analysis for HySPRINT perovskite samples"
 requires-python = ">=3.10"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     "ipywidgets>=8.0",
     "plotly>=5.0",
     "pandas>=2.0",

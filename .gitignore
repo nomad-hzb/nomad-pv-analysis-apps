@@ -179,6 +179,10 @@ cython_debug/
 !apps/Hansen_green_calculator/db.csv
 !uploads/analysis-tools-mr60amaQRZ-Ta21fXdf64Q/Excel_creator/templates/process_templates.json
 secrets.py
+# The active per-deployment config, plus any parked variants
+# (oasis_local_config.<oasis>.py). Only the exact name is read by
+# bootstrap.py, so renaming one is how you deactivate it locally.
+oasis_local_config*.py
 *.zip
 *.tar.gz
 

@@ -9,7 +9,7 @@ description = "HySPRINT Global Data Analyzer — interactive batch explorer for 
 requires-python = ">=3.10"
 dependencies = [
     # Shared HySPRINT utilities (monorepo sibling package)
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     # Data / validation
     "pandas>=2.0",
     "numpy>=1.24",
