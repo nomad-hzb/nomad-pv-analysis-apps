@@ -244,10 +244,18 @@ second Oasis. They are pre-existing raw notebooks (`!pip install impedance` in
 cell 0, star imports) that have not been through the unification pass.
 
 **`ISA_Previewer` needs outbound git access.** It pins `insitu_analyser` from
-`codebase.helmholtz.cloud`. `git` reads `HTTPS_PROXY` from the environment and
-pip's subprocess inherits it, so the bootstrap proxy should cover it - but
-whether that host is reachable *through* the outbound proxy, or needs to be
-added to `NO_PROXY` instead, is unverified.
+`codebase.helmholtz.cloud`, installed by `bootstrap.py` with the rest of that
+app's dependencies (section 8). The clone runs through `git`, which reads
+`HTTPS_PROXY` from the environment and inherits it from pip's subprocess.
+Verified on CE-AME: that host is reachable through the proxy, so no extra
+routing is needed. If the app ever reports `ModuleNotFoundError: No module
+named 'insitu_analyser'`, install it by hand in a NORTH terminal to see the
+real error:
+
+```bash
+export HTTPS_PROXY=http://proxy.example.org:3128
+pip install "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@v0.1.49"
+```
 
 **Some `/nomad-oasis/...` path literals bypass `API_ENDPOINT`.** GUI-link and
 NORTH-path templates in `auth_manager.py`, `App_dashboard/data_manager.py`,
@@ -331,3 +339,36 @@ the other branch, possibly as a conflict.
 `oasis_local_config.py` and `secrets.py` are gitignored. They survive
 `checkout`, `pull`, `restore` and `stash` untouched - create them once on the
 Oasis and they stay put across every branch switch.
+
+## 8. How dependencies get installed
+
+Nothing on the Oasis runs `pip install` by hand. `bootstrap.py` does all of it
+from cell 0, in this order:
+
+1. **`shared/`** - the `hysprint_utils` library every app imports. A failure
+   here is fatal and raises, because no app works without it.
+2. **The app's own directory**, when it has a `pyproject.toml`. The cwd is the
+   notebook's own folder, so this installs exactly the app being launched,
+   along with everything in its `dependencies` list.
+
+Step 2 is why `apps/<App>/pyproject.toml` is worth keeping accurate: it is the
+only thing that installs an app's third-party requirements. Before it existed,
+those lists were inert at runtime - which is how `ISA_Previewer` came to fail
+with `ModuleNotFoundError: No module named 'insitu_analyser'` on a fresh
+CE-AME container while the pin sat in its dependency list all along.
+
+**It runs once per container, not once per launch.** On success bootstrap
+writes a marker into the temp directory, keyed on the app's path and the
+contents of its `pyproject.toml`. Later launches of the same app skip the
+install entirely; editing the dependency list changes the key, so the next
+launch reinstalls. Nothing needs clearing by hand.
+
+**A failed app install is a warning, not an error.** Most apps need nothing
+beyond what the NORTH image already provides, and none of them were installed
+at all until now - so pip failing here (no network, an unreachable git host)
+must not take down an app that would otherwise run fine. The warning names the
+app and carries pip's output. Only the `shared/` install is fatal.
+
+The practical consequence for a proxied Oasis: app launches reach the network,
+so the proxy in `oasis_local_config.py` has to be right before any app with
+third-party dependencies will start cleanly on a fresh container.

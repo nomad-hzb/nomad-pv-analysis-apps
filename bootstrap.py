@@ -27,11 +27,13 @@ hash, so the relative path here is invariant):
     _ = runpy.run_path("../../bootstrap.py")
 """
 
+import hashlib
 import importlib
 import logging
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -97,14 +99,14 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
     logger.info("Applied local proxy configuration: %s", os.environ["HTTPS_PROXY"])
 
 
-def _install_shared() -> None:
-    shared = REPO_ROOT / "shared"
-    # Captured, not inherited: this runs as cell 0 of a Voila app, where
-    # anything pip writes to stdout/stderr is rendered into the app's own UI.
-    # A successful install has nothing a user of the app needs to see, so it
-    # stays silent (the captured log goes to the logger, visible to anyone who
-    # configures one); a failed one prints everything, since at that point the
-    # pip output is the only useful diagnostic.
+def _pip_install(target: Path) -> tuple[int, str]:
+    """Install target, returning pip's exit code and its combined output.
+
+    Captured, not inherited: this runs as cell 0 of a Voila app, where anything
+    pip writes to stdout/stderr is rendered into the app's own UI. Callers
+    decide what to surface; a successful install has nothing an app user needs
+    to see.
+    """
     result = subprocess.run(
         [
             sys.executable,
@@ -113,22 +115,27 @@ def _install_shared() -> None:
             "install",
             "-q",
             "--disable-pip-version-check",
-            str(shared),
+            str(target),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
-    if result.returncode != 0:
+    return result.returncode, output
+
+
+def _install_shared() -> None:
+    shared = REPO_ROOT / "shared"
+    returncode, output = _pip_install(shared)
+    if returncode != 0:
         # The pip output goes in the exception, not the log line: a traceback
         # always renders in the notebook, whereas a log record only shows if
         # something configured logging. Putting it in both duplicates a very
         # long diagnostic in the one place it is hardest to read.
-        logger.error("pip install of %s failed with exit code %d", shared, result.returncode)
+        logger.error("pip install of %s failed with exit code %d", shared, returncode)
         raise RuntimeError(
-            f"bootstrap: pip install of {shared} failed with exit code "
-            f"{result.returncode}.\n{output}"
+            f"bootstrap: pip install of {shared} failed with exit code {returncode}.\n{output}"
         )
     if output:
         logger.info("pip install of %s reported:\n%s", shared, output)
@@ -144,8 +151,64 @@ def _install_shared() -> None:
         sys.path.insert(0, shared_str)
 
 
+def _app_install_marker(app_dir: Path, pyproject: Path) -> Path:
+    """Path of the once-per-container marker for this app's dependency install.
+
+    Keyed on the app's location and the contents of its pyproject.toml, so
+    editing the dependency list invalidates the marker and the next launch
+    reinstalls, while an unchanged app never pays for pip twice.
+    """
+    digest = hashlib.sha256(str(app_dir).encode() + pyproject.read_bytes()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"hysprint-bootstrap-{digest}.done"
+
+
+def _install_app() -> None:
+    """Install the calling app's own pyproject dependencies, once per container.
+
+    The cwd is the notebook's own directory, so this installs the app the
+    notebook belongs to. Without it an app's pyproject.toml is inert at
+    runtime: nothing on the Oasis ever installs it, which is why ISA_Previewer
+    failed with ModuleNotFoundError for insitu_analyser on a fresh container
+    while the pin sat in its dependency list all along.
+
+    Deliberately non-fatal, unlike the shared install. Most apps need nothing
+    beyond what the NORTH image already provides, and until now none of them
+    were installed at all - so a pip failure here (no network, an unreachable
+    git host) must not take down an app that would otherwise have run fine.
+    """
+    app_dir = Path.cwd()
+    pyproject = app_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return
+
+    marker = _app_install_marker(app_dir, pyproject)
+    if marker.exists():
+        logger.info("app dependencies already installed for %s", app_dir)
+        return
+
+    returncode, output = _pip_install(app_dir)
+    if returncode != 0:
+        logger.warning(
+            "could not install the dependencies of %s (pip exit %d); the app may still "
+            "work if they are already present:\n%s",
+            app_dir,
+            returncode,
+            output,
+        )
+        return
+
+    if output:
+        logger.info("pip install of %s reported:\n%s", app_dir, output)
+    try:
+        marker.write_text(f"{app_dir}\n", encoding="utf-8")
+    except OSError:
+        # A read-only or missing temp dir only costs a repeat install later.
+        logger.info("could not write the install marker %s", marker)
+
+
 _local_config = _load_local_config()
 _apply_config_env(_local_config)
 _apply_proxy_env(_local_config)
 _install_shared()
+_install_app()
 importlib.invalidate_caches()

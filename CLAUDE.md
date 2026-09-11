@@ -73,7 +73,10 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
    the root `pyproject.toml` — never add a per-app ruff config. Current
    ruleset is `E, F, I, G` (not `T20` yet — see Known gaps below).
 7. **`pyproject.toml` per app** declares `"hysprint-utils"` as a bare
-   requirement — no `file://` path. It resolves because every notebook's
+   requirement — no `file://` path. Keep the `dependencies` list accurate:
+   `bootstrap.py` installs the app's own directory from cell 0, so this list
+   is what actually installs an app's third-party requirements on the Oasis
+   (see the bootstrap gotcha below). It resolves because every notebook's
    cell 0 runs `bootstrap.py` first (see gotcha below), which installs
    `shared/` before any app code imports it. Never pin an absolute
    `file:///home/jovyan/uploads/<session-hash>/shared` path — that session
@@ -215,6 +218,19 @@ same name, so `HYSPRINT_URL_BASE` reaches `hysprint_utils.config` before
 any app imports it, and `HTTP_PROXY`/`HTTPS_PROXY` are in place before pip
 reaches PyPI for `hatchling`. Container-level variables always win. Adding
 a new override needs no change to `bootstrap.py` — see `DEPLOYMENT.md`.
+After `shared/`, it installs **the app's own directory** when the cwd has a
+`pyproject.toml` — the cwd is the notebook's folder, so that is the app being
+launched. This is the only thing that installs an app's third-party
+dependencies on the Oasis; before it existed those lists were inert at
+runtime, which is how `ISA_Previewer` hit `ModuleNotFoundError:
+insitu_analyser` on a fresh CE-AME container with the pin sitting in its
+`pyproject.toml` all along. It runs once per container, guarded by a marker
+in the temp dir keyed on the app path plus the `pyproject.toml` contents, so
+editing dependencies re-triggers it and an unchanged app never pays twice.
+A failed app install warns and continues (most apps need nothing the NORTH
+image lacks, and breaking a working app over it would be a regression);
+only the `shared/` install is fatal.
+
 Don't reimplement any of this per-app; the two apps that used to have their own
 install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
 `bootstrap.py` instead.
