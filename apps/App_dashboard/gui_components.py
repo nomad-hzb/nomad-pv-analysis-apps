@@ -22,19 +22,39 @@ STYLE = """
 .dashboard-header h1 { margin-bottom: 4px; }
 .dashboard-subtitle { color: #555; margin-top: 0; }
 .dashboard-warning { color: #a94442; }
-.whats-new-link {
+.whats-new-overlay {
+    position: relative;
     flex-shrink: 0;
+}
+.whats-new-link {
+    display: block;
     padding: 6px 12px;
     border-radius: 6px;
     background-color: rgba(52, 152, 219, 0.12);
     color: #3498db;
-    text-decoration: none;
     font-size: 0.85em;
     font-weight: 600;
     white-space: nowrap;
 }
-.whats-new-link:hover { background-color: rgba(52, 152, 219, 0.22); }
+.whats-new-overlay:hover .whats-new-link { background-color: rgba(52, 152, 219, 0.22); }
 .whats-new-link i { margin-right: 5px; }
+.whats-new-overlay-btn {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 2;
+}
 .category-title {
     margin: 0 0 10px 0;
     padding-bottom: 6px;
@@ -142,7 +162,11 @@ def create_style() -> widgets.HTML:
 WHATS_NEW_URL = "https://github.com/nomad-hzb/nomad-pv-analysis-apps/releases"
 
 
-def create_header(user: str) -> widgets.HTML:
+def create_header(user: str, on_click) -> widgets.Box:
+    """Unlike a plain <a>, the "What's New" link is a real Button under an invisible
+    overlay (same technique as create_app_card_overlay) so the click reaches the Python
+    kernel and can be logged -- opening the tab is still delegated to injected JS.
+    """
     if user:
         subtitle = (
             f"Signed in as <strong>{user}</strong> &mdash; "
@@ -154,31 +178,27 @@ def create_header(user: str) -> widgets.HTML:
             "(NOMAD_CLIENT_USER is not set) &mdash; links below may not resolve. "
             "Try reopening this dashboard from your NOMAD upload page.</span>"
         )
-    return widgets.HTML(f"""
-        <div class="dashboard-header">
-            <div>
-                <h1>NOMAD Analysis Tools</h1>
-                <p class="dashboard-subtitle">{subtitle}</p>
-            </div>
-            <a class="whats-new-link" href="{WHATS_NEW_URL}" target="_blank"
-               title="See recent changes and releases">
-                <i class="fas fa-bullhorn"></i>What's New
-            </a>
+    title_block = widgets.HTML(f"""
+        <div>
+            <h1>NOMAD Analysis Tools</h1>
+            <p class="dashboard-subtitle">{subtitle}</p>
         </div>
     """)
 
-
-def create_app_card(entry, href: str, full_url: str) -> widgets.HTML:
-    badge = '<span class="app-badge">experimental</span>' if entry.experimental else ""
-    return widgets.HTML(f"""
-        <a class="app-card" href="{href}" target="_blank" title="{full_url}">
-            <div class="app-icon"><i class="fas {entry.icon}"></i></div>
-            <div class="app-body">
-                <div class="app-title">{entry.name}{badge}</div>
-                <div class="app-description">{entry.description}</div>
-            </div>
-        </a>
+    pill = widgets.HTML("""
+        <span class="whats-new-link" title="See recent changes and releases">
+            <i class="fas fa-bullhorn"></i>What's New
+        </span>
     """)
+    btn = widgets.Button(tooltip=WHATS_NEW_URL)
+    btn.add_class("whats-new-overlay-btn")
+    btn.on_click(on_click)
+    whats_new = widgets.Box([pill, btn])
+    whats_new.add_class("whats-new-overlay")
+
+    header = widgets.Box([title_block, whats_new])
+    header.add_class("dashboard-header")
+    return header
 
 
 def create_hub_card(name: str, description: str, icon: str, on_click) -> widgets.Button:
@@ -202,23 +222,22 @@ def create_project_card(project, on_click) -> widgets.Button:
 def create_app_launch_card(entry, full_url: str, on_click) -> widgets.Button:
     """A clickable card that launches an app, logging the click on its way out.
 
-    Unlike create_app_card, this is a real Button (not an <a> link) so the
-    click reaches the Python kernel -- the tradeoff is losing native link
-    semantics (hover-preview URL, right-click/copy-link, ctrl+click). The
-    target URL is kept in the tooltip as a partial substitute.
+    A real Button (not an <a> link), so the click reaches the Python kernel --
+    the tradeoff is losing native link semantics (hover-preview URL,
+    right-click/copy-link, ctrl+click). The target URL is kept in the tooltip
+    as a partial substitute.
     """
     label = f"{entry.name} (experimental)" if entry.experimental else entry.name
     return create_hub_card(label, full_url, entry.icon, on_click)
 
 
 def create_app_card_overlay(entry, full_url: str, on_click) -> widgets.Box:
-    """Alternative to create_app_launch_card: keeps the exact current rich-card
-    look (icon, title, badge, description) by layering an invisible Button on
-    top of the same HTML markup create_app_card renders, instead of replacing
-    it with a plain Button label. The invisible Button is what makes the click
-    reach the Python kernel; the wrapper's :hover rule re-applies the original
-    hover style since the button (not the HTML div under it) is what actually
-    receives the pointer.
+    """Alternative to create_app_launch_card: keeps the rich-card look (icon, title,
+    badge, description) by layering an invisible Button on top of that same HTML
+    markup, instead of replacing it with a plain Button label. The invisible Button
+    is what makes the click reach the Python kernel; the wrapper's :hover rule
+    re-applies the original hover style since the button (not the HTML div under it)
+    is what actually receives the pointer.
     """
     badge = '<span class="app-badge">experimental</span>' if entry.experimental else ""
     visual = widgets.HTML(f"""
