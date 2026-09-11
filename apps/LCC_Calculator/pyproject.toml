@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Life Cycle Costing calculator for NOMAD batches/experiments"
 requires-python = ">=3.10"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     "pandas>=2.0",
     "pydantic>=2.0",
     "requests>=2.28",

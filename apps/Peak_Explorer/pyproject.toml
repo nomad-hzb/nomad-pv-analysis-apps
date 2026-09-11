@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "HySPRINT Peak Explorer app"
 requires-python = ">=3.10"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     "h5py>=3.16",
     "ipython>=8.12",
     "ipyvuetify>=1.11",

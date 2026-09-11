@@ -20,7 +20,7 @@ dependencies = [
     "uncertainties",
     "openpyxl",
     "pydantic>=2.0",
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
 ]
 
 [tool.hatch.build.targets.wheel]

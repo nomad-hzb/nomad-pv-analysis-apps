@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "File Uploader app for HySPRINT NOMAD Oasis"
 requires-python = ">=3.9"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
+    "hysprint-utils",
     "ipywidgets",
     "ipyvuetify",
     "requests",
