@@ -3,14 +3,16 @@ import os
 
 import requests
 
+from hysprint_utils.config import API_ENDPOINT, URL_BASE
+
 # --- Constants ---
 STRINGS = {
     "STATUS_NOT_AUTH": "Status: Not Authenticated",
     "STATUS_AUTH_CHANGED": "Status: Not Authenticated (Method changed)",
     "STATUS_AUTHENTICATING": "Status: Authenticating...",
     "AUTH_REQUIRED": "Authentication required. Please authenticate first in Connection Settings.",
-    "SE_OASIS_URL": "https://nomad-hzb-se.de",
-    "API_ENDPOINT": "/nomad-oasis/api/v1",
+    "SE_OASIS_URL": URL_BASE,
+    "API_ENDPOINT": API_ENDPOINT,
     "DATA_LOADED_SUCCESS": "Data Loaded Successfully!",
     "LOADING_DATA": "Loading Data",
     "VARIABLES_NOT_LOADED": "⚠️ Variables not loaded",

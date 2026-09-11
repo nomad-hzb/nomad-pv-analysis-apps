@@ -5,13 +5,19 @@ Place this file at:  shared/hysprint_utils/config.py
 
 All apps import from here:
     from hysprint_utils.config import URL_BASE, API_ENDPOINT, ENTRY_TYPES
+
+Deploying this suite against a different Oasis: override URL_BASE/API_ENDPOINT
+with the HYSPRINT_URL_BASE/HYSPRINT_API_ENDPOINT environment variables instead
+of editing the defaults below, so a fork can stay in sync with upstream.
 """
 
+import os
+
 # Base URL of the NOMAD Oasis instance (no trailing slash)
-URL_BASE: str = "https://nomad-hzb-se.de"
+URL_BASE: str = os.environ.get("HYSPRINT_URL_BASE", "https://nomad-hzb-se.de")
 
 # API path prefix (no trailing slash)
-API_ENDPOINT: str = "/nomad-oasis/api/v1"
+API_ENDPOINT: str = os.environ.get("HYSPRINT_API_ENDPOINT", "/nomad-oasis/api/v1")
 
 # ---------------------------------------------------------------------------
 # NOMAD schema entry-type names
