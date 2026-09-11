@@ -38,6 +38,33 @@ def test_get_uploads_path_derives_upload_id_and_container_from_cwd(monkeypatch):
     assert get_uploads_path() == f"uploads/{upload_dir}/apps"
 
 
+def test_get_uploads_path_keeps_a_repo_subdirectory_inside_the_upload(monkeypatch):
+    """A repo cloned inside an upload sits one level deeper than an unpacked one.
+
+    `git clone` adds the repo directory, so the cwd is
+    uploads/<upload_id>/nomad-pv-analysis-apps/apps/<AppFolder>. Walking a fixed two
+    levels up used to return the repo folder as the upload ID, dropping the real upload
+    from every dashboard link.
+    """
+    upload_dir = "dashboard_test-ne_Y0arITbmweei7SZW5ug"
+    monkeypatch.setattr(
+        os,
+        "getcwd",
+        lambda: f"/home/jovyan/uploads/{upload_dir}/nomad-pv-analysis-apps/apps/App_dashboard",
+    )
+
+    assert get_upload_id() == upload_dir
+    assert get_uploads_path() == f"uploads/{upload_dir}/nomad-pv-analysis-apps/apps"
+
+
+def test_get_uploads_path_uses_the_rightmost_uploads_segment(monkeypatch):
+    """An upload literally named 'uploads' must not shadow the real mount point."""
+    monkeypatch.setattr(os, "getcwd", lambda: "/home/jovyan/uploads/uploads/apps/App_dashboard")
+
+    assert get_upload_id() == "uploads"
+    assert get_uploads_path() == "uploads/uploads/apps"
+
+
 def test_build_voila_url_matches_expected_nomad_structure():
     uploads_path = "uploads/test-upload-session-abc123/apps"
     url = build_voila_url(_ENTRY, "edgar", uploads_path)
