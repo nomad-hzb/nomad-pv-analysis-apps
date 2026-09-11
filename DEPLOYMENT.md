@@ -372,3 +372,25 @@ app and carries pip's output. Only the `shared/` install is fatal.
 The practical consequence for a proxied Oasis: app launches reach the network,
 so the proxy in `oasis_local_config.py` has to be right before any app with
 third-party dependencies will start cleanly on a fresh container.
+
+### Import-time banners
+
+Bootstrap also stops libraries printing into the app's UI while they are being
+imported. INSIGHT, pulled in by `insitu_analyser`, greets stdout with a
+multi-line welcome banner (version, licence status, plot style, backend); under
+Voila that appears above the app itself and reads as an error to anyone who
+does not recognise it.
+
+Since cell 0 has finished by the time an app's imports run, bootstrap leaves a
+hook behind rather than wrapping anything: `builtins.__import__` redirects
+stdout for the duration of each outermost import, for the rest of that kernel's
+life. It is deliberately narrow - stderr is untouched so warnings still
+surface, runtime output is untouched, already-imported modules take a fast
+path, and the suppressed text is logged at debug rather than discarded.
+
+If you are debugging an import and want that output back:
+
+```python
+import os
+os.environ["HYSPRINT_KEEP_IMPORT_OUTPUT"] = "1"   # before cell 0 runs
+```

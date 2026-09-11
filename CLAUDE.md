@@ -231,6 +231,17 @@ A failed app install warns and continues (most apps need nothing the NORTH
 image lacks, and breaking a working app over it would be a regression);
 only the `shared/` install is fatal.
 
+Last, it **silences import-time stdout** for the rest of the kernel's life by
+wrapping `builtins.__import__`: several third-party packages greet stdout when
+imported (`insitu_analyser` pulls in INSIGHT, which prints a multi-line
+welcome banner), and under Voila that renders above the app where it reads as
+an error. Cell 0 has returned before an app's imports run, so this has to be a
+lasting hook rather than a `with` block. Narrow on purpose — stderr untouched
+so warnings still surface, runtime output untouched, already-imported modules
+take a fast path, text kept at DEBUG rather than dropped. Set
+`HYSPRINT_KEEP_IMPORT_OUTPUT=1` to disable it while debugging an import. Don't
+add per-app banner suppression on top of this.
+
 Don't reimplement any of this per-app; the two apps that used to have their own
 install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
 `bootstrap.py` instead.

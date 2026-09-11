@@ -27,8 +27,11 @@ hash, so the relative path here is invariant):
     _ = runpy.run_path("../../bootstrap.py")
 """
 
+import builtins
+import contextlib
 import hashlib
 import importlib
+import io
 import logging
 import os
 import subprocess
@@ -151,6 +154,50 @@ def _install_shared() -> None:
         sys.path.insert(0, shared_str)
 
 
+def _silence_import_banners() -> None:
+    """Keep what libraries print while being imported out of the app's UI.
+
+    Several third-party packages greet stdout at import time - insitu_analyser
+    pulls in INSIGHT, which prints a multi-line banner (version, licence
+    status, plot style, backend). Under Voila that lands above the app itself,
+    where it reads as an error to anyone who does not recognise it.
+
+    Cell 0 has returned by the time an app's imports run, so this cannot be a
+    `with` block: it replaces builtins.__import__ for the rest of the kernel's
+    life, redirecting stdout for the duration of each outermost import. The
+    text is logged at debug rather than dropped, so nothing is truly lost.
+
+    Deliberately narrow: stderr is untouched (warnings still surface), runtime
+    output is untouched, and an import of an already-imported module takes a
+    fast path. Set HYSPRINT_KEEP_IMPORT_OUTPUT=1 to turn the whole thing off
+    when debugging an import.
+    """
+    if os.environ.get("HYSPRINT_KEEP_IMPORT_OUTPUT"):
+        return
+
+    real_import = builtins.__import__
+    state = {"depth": 0}
+
+    def quiet_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
+        # Nested imports are already covered by the outermost redirect, and a
+        # cache hit cannot print anything - both skip the bookkeeping.
+        if state["depth"] or (level == 0 and name in sys.modules):
+            return real_import(name, globals, locals, fromlist, level)
+
+        captured = io.StringIO()
+        state["depth"] += 1
+        try:
+            with contextlib.redirect_stdout(captured):
+                return real_import(name, globals, locals, fromlist, level)
+        finally:
+            state["depth"] -= 1
+            banner = captured.getvalue().strip()
+            if banner:
+                logger.debug("suppressed import-time output of %s:\n%s", name, banner)
+
+    builtins.__import__ = quiet_import
+
+
 def _app_install_marker(app_dir: Path, pyproject: Path) -> Path:
     """Path of the once-per-container marker for this app's dependency install.
 
@@ -211,4 +258,5 @@ _apply_config_env(_local_config)
 _apply_proxy_env(_local_config)
 _install_shared()
 _install_app()
+_silence_import_banners()
 importlib.invalidate_caches()
