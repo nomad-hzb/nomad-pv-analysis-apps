@@ -72,14 +72,20 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
    leave `ruff check` clean before moving on. The ruff config lives ONLY at
    the root `pyproject.toml` — never add a per-app ruff config. Current
    ruleset is `E, F, I, G` (not `T20` yet — see Known gaps below).
-7. **`pyproject.toml` per app** needs the exact dependency string:
-   `"hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared"`
-   — no relative paths, no alternate spellings — plus
+7. **`pyproject.toml` per app** declares `"hysprint-utils"` as a bare
+   requirement — no `file://` path. It resolves because every notebook's
+   cell 0 runs `bootstrap.py` first (see gotcha below), which installs
+   `shared/` before any app code imports it. Never pin an absolute
+   `file:///home/jovyan/uploads/<session-hash>/shared` path — that session
+   hash is specific to one upload and one Oasis, so an absolute pin breaks
+   the moment either changes. Also needs
    `[tool.hatch.metadata] allow-direct-references = true` and
    `[tool.hatch.build.targets.wheel] packages = ["."]`. `pytest`/`pytest-mock`
    belong only in the root `pyproject.toml`, never per-app.
 8. **Notebooks: exactly 2 cells.** No `sys.path.append`/`insert` anywhere,
-   in any app file or notebook.
+   in any app file or notebook — except inside `bootstrap.py` itself (see
+   gotcha below), which every notebook's cell 0 invokes via
+   `runpy.run_path("../../bootstrap.py")`.
 9. **Tests live at `tests/<app_name>/test_<app_name>.py`**, never inside
    `apps/`. Each app's `conftest.py` must load its own `data_manager`/
    `plot_manager`/etc. under a **unique** name via
@@ -177,6 +183,31 @@ explicitly so cleanup is one targeted kill, not a fishing expedition. On
 Windows, if `tasklist`/PowerShell start hanging, prefer Git Bash's own
 `ps aux` / `kill -9 <pid>` — `ps` runs in the POSIX layer and stays
 responsive even when WMI-backed tooling is struggling under load.
+
+## Known environment gotcha — every notebook bootstraps via `bootstrap.py`, never its own install cell
+
+`hysprint_utils` becomes importable in the *current* kernel only if
+something puts `shared/` on `sys.path` directly. A plain
+`pip install <shared dir>` is not enough by itself: a fresh kernel's
+`site.py` already ran before that install happens, so the kernel would need
+a restart before the newly installed package becomes importable. This is
+the literal mechanism behind "Voila apps need to be run twice" — diagnosed
+against `App_dashboard`, see `memory/project_voila_hysprint_utils_install.md`.
+
+**How to apply:** every notebook's cell 0 is exactly:
+```python
+import runpy
+runpy.run_path("../../bootstrap.py")
+```
+`bootstrap.py` (repo root) installs `shared/` and then inserts it directly
+into `sys.path` — a deliberate, sanctioned exception to rule 8, not
+something to "clean up" if seen again. It also applies any local outbound
+proxy configuration (opt-in, off by default — see `oasis_local_config.py`,
+gitignored, same pattern as `secrets.py`) before that install runs, since
+installing a local directory reaches PyPI for `hatchling`. Don't
+reimplement any of this per-app; the two apps that used to have their own
+install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
+`bootstrap.py` instead.
 
 ## Known gaps (tracked, not silently fixed)
 

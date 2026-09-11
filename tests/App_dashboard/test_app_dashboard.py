@@ -31,7 +31,7 @@ def test_get_current_user_empty_when_unset(monkeypatch):
 
 
 def test_get_uploads_path_derives_upload_id_and_container_from_cwd(monkeypatch):
-    upload_dir = "analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ"
+    upload_dir = "test-upload-session-abc123"
     monkeypatch.setattr(
         os, "getcwd", lambda: f"/home/jovyan/uploads/{upload_dir}/apps/App_dashboard"
     )
@@ -39,7 +39,7 @@ def test_get_uploads_path_derives_upload_id_and_container_from_cwd(monkeypatch):
 
 
 def test_build_voila_url_matches_expected_nomad_structure():
-    uploads_path = "uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/apps"
+    uploads_path = "uploads/test-upload-session-abc123/apps"
     url = build_voila_url(_ENTRY, "edgar", uploads_path)
 
     assert url == (
@@ -79,7 +79,7 @@ def test_url_base_has_no_trailing_slash():
 
 
 def test_build_voila_url_uses_upload_id_when_set():
-    uploads_path = "uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/apps"
+    uploads_path = "uploads/test-upload-session-abc123/apps"
     entry = AppEntry(
         "", "image_cropper.ipynb", "Image Cropper", "desc", "fa-crop", upload_id="abc123"
     )
@@ -108,7 +108,7 @@ def test_build_your_own_entry_links_straight_to_the_prompt_doc():
 
 
 def test_get_upload_id_derives_from_cwd(monkeypatch):
-    upload_dir = "analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ"
+    upload_dir = "test-upload-session-abc123"
     monkeypatch.setattr(
         os, "getcwd", lambda: f"/home/jovyan/uploads/{upload_dir}/apps/App_dashboard"
     )

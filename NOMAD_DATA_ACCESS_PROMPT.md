@@ -33,7 +33,7 @@ platform. Data is organized as:
 ## Connection basics
 
 ```python
-URL_BASE = "https://nomad-hzb-se.de"      # no trailing slash
+URL_BASE = "https://nomad-hzb-se.de"      # no trailing slash - the HZB SE Oasis; replace with your own
 API_ENDPOINT = "/nomad-oasis/api/v1"       # no trailing slash
 API = f"{URL_BASE}{API_ENDPOINT}"
 ```

@@ -132,14 +132,14 @@ easy to confuse:
 - No `NORTHTool`/`NORTHToolEntryPoint` definitions, no Dockerfiles, no
   container registry, no publish workflow.
 - No `LICENSE.txt`, no `docs/`.
-- The `hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared`
-  dependency path already targets `/home/jovyan` (the standard Jupyter/NORTH
-  container home directory), which suggests this code has run inside a
-  JupyterHub-like container before -- but the specific path is a one-off
-  upload-session temp directory that will not exist inside a real published
-  image. Each tool's own Dockerfile will need to install `hysprint_utils`
-  properly at build time instead of relying on a runtime-mounted path. Do not
-  carry this exact dependency string into any Dockerfile.
+- The `hysprint-utils` dependency (bare requirement as of #23, previously an
+  absolute `file:///home/jovyan/uploads/<session-hash>/shared` path -- that
+  path targeted `/home/jovyan`, the standard Jupyter/NORTH container home
+  directory, but was a one-off upload-session temp directory that would not
+  exist inside a real published image) is currently resolved at runtime by
+  `bootstrap.py` installing `shared/` before any app code imports it. Each
+  tool's own Dockerfile will need to install `hysprint_utils` properly at
+  build time instead of relying on `bootstrap.py`'s runtime install.
 - `apps/PeroDatabase_downloader` has no `pyproject.toml` at all yet (already
   flagged above); it cannot become a NORTH tool until it does.
 
