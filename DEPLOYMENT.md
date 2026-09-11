@@ -37,8 +37,12 @@ differs, see the known gap on path literals at the end of this document.
 
 ## 2. Upload the repo
 
-Upload the repo to the target Oasis as a NOMAD upload, preserving the directory
-structure. The layout matters more than the name: every notebook's cell 0 is
+Either drag the repo in as a NOMAD upload, or clone it from a NORTH terminal.
+Cloning is usually easier to update later, but on a proxied Oasis it needs the
+proxy set up first - see 2a.
+
+Whichever route you take, preserve the directory structure. The layout matters
+more than the name: every notebook's cell 0 is
 
 ```python
 import runpy
@@ -49,6 +53,94 @@ which resolves from `apps/<AppName>/` to the repo root. As long as `apps/`,
 `shared/` and `bootstrap.py` keep their relative positions, the upload's own
 `<slug>-<hash>` folder name is irrelevant - that is the whole point of the
 bootstrap, and why no path in this repo names a specific upload any more.
+
+To clone it, from a NORTH Jupyter terminal (`jupyter2` tool, File > New >
+Terminal), in the uploads directory you want it to live in:
+
+```bash
+git clone https://github.com/nomad-hzb/nomad-pv-analysis-apps.git
+```
+
+On a proxied Oasis that fails before it starts:
+
+```
+fatal: unable to access 'https://github.com/nomad-hzb/nomad-pv-analysis-apps.git/':
+Failed to connect to github.com port 443 after 4 ms: Couldn't connect to server
+```
+
+## 2a. Proxy for the terminal (proxied Oasis only)
+
+`oasis_local_config.py` cannot help here, and not by oversight: it is applied
+by `bootstrap.py`, which runs inside a *kernel*, and which lives inside the
+repo you are trying to clone. The clone happens in a plain shell before either
+exists, so the proxy has to be exported in that shell.
+
+One variable is enough for the clone, verified on CE-AME:
+
+```bash
+export HTTPS_PROXY=http://proxy.example.org:3128
+git clone https://github.com/nomad-hzb/nomad-pv-analysis-apps.git
+```
+
+`git`'s HTTP layer is libcurl, which reads `HTTPS_PROXY` for an `https://`
+remote - and GitHub is external, so no `NO_PROXY` entry applies to it.
+
+For anything else you do from that terminal (`pip install`, `curl`), add the
+rest. libcurl reads only the *lowercase* `http_proxy` for plain HTTP, so the
+uppercase-only form is not enough in general:
+
+```bash
+export HTTP_PROXY=http://proxy.example.org:3128
+export NO_PROXY=localhost,127.0.0.1,.helmholtz-berlin.de
+export http_proxy=$HTTP_PROXY
+export https_proxy=$HTTPS_PROXY
+export no_proxy=$NO_PROXY
+```
+
+`NO_PROXY` matters as soon as you talk to the Oasis itself from the shell: it
+is in-house, and without the exclusion those calls would take a pointless trip
+through an external proxy.
+
+If a clone still fails, check the proxy is reachable at all before varying the
+value:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://github.com
+```
+
+`200` means the proxy works. A hang or `000` means the proxy host or port is
+wrong for this deployment - ask whoever administers the Oasis rather than
+varying the value.
+
+These exports last only for that terminal session. Two ways to persist them,
+both subject to whether your NORTH container keeps `/home/jovyan` between
+sessions - on many deployments it does not, and re-exporting per session is
+simply the normal workflow:
+
+```bash
+# option 1: every new shell in this container
+cat >> ~/.bashrc <<'EOF'
+export HTTP_PROXY=http://proxy.example.org:3128
+export HTTPS_PROXY=http://proxy.example.org:3128
+export NO_PROXY=localhost,127.0.0.1,.helmholtz-berlin.de
+export http_proxy=$HTTP_PROXY
+export https_proxy=$HTTPS_PROXY
+export no_proxy=$NO_PROXY
+EOF
+
+# option 2: git only, written to ~/.gitconfig
+git config --global http.proxy http://proxy.example.org:3128
+git config --global https.proxy http://proxy.example.org:3128
+```
+
+Option 2 covers `git` alone. Option 1 also covers `pip` and `curl`, which you
+will want for any manual install from that terminal.
+
+Note this proxy setup is for the *terminal* only. It does not carry into the
+Voila kernel that actually runs the apps - a kernel is a separate process
+started by NORTH, not a child of your shell. That is exactly what
+`oasis_local_config.py` and step 3 are for, and why the same values appear in
+both places.
 
 ## 3. Create `oasis_local_config.py`
 
@@ -62,14 +154,19 @@ already set at the container level wins; this file never overwrites it.
 
 ### The CE-AME file
 
+The proxy host below is a placeholder. Deployment-specific values like the
+real proxy address are deliberately not written into this repo - they belong
+in the gitignored `oasis_local_config.py` of that one deployment. Get the
+actual address from whoever administers the Oasis.
+
 ```python
 # --- Which Oasis the apps talk to ---
 HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
 HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
 
 # --- Outbound network ---
-HTTP_PROXY = "http://proxy.csn29.bessy.de:3128"
-HTTPS_PROXY = "http://proxy.csn29.bessy.de:3128"
+HTTP_PROXY = "http://proxy.example.org:3128"
+HTTPS_PROXY = "http://proxy.example.org:3128"
 NO_PROXY = "localhost,127.0.0.1,.helmholtz-berlin.de"
 ```
 
@@ -147,7 +244,7 @@ cell 0, star imports) that have not been through the unification pass.
 **`ISA_Previewer` needs outbound git access.** It pins `insitu_analyser` from
 `codebase.helmholtz.cloud`. `git` reads `HTTPS_PROXY` from the environment and
 pip's subprocess inherits it, so the bootstrap proxy should cover it - but
-whether that host is reachable *through* `proxy.csn29.bessy.de`, or needs to be
+whether that host is reachable *through* the outbound proxy, or needs to be
 added to `NO_PROXY` instead, is unverified.
 
 **Some `/nomad-oasis/...` path literals bypass `API_ENDPOINT`.** GUI-link and
