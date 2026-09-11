@@ -39,24 +39,26 @@ def setup_app():
 
     def render_app_card(entry):
         if entry.external_url:
-            href = full_url = entry.external_url
-            return gui.create_app_card(entry, href, full_url)
-
-        if not entry.upload_id and not dm.notebook_exists(entry):
-            logger.warning(
-                "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
-            )
-        href = dm.build_voila_url(entry, user, uploads_path)
-        full_url = f"{dm.URL_BASE}{href}"
+            full_url = entry.external_url
+        else:
+            if not entry.upload_id and not dm.notebook_exists(entry):
+                logger.warning(
+                    "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
+                )
+            full_url = f"{dm.URL_BASE}{dm.build_voila_url(entry, user, uploads_path)}"
         return gui.create_app_card_overlay(
             entry, full_url, lambda _b, name=entry.name, url=full_url: open_app(name, url)
         )
 
     def render_learning_card():
         entry = dm.LEARNING_FOLDER
-        href = dm.build_jupyter_url(entry, user, dm.get_upload_id())
-        full_url = f"{dm.URL_BASE}{href}"
-        return gui.create_app_card(entry, href, full_url)
+        full_url = f"{dm.URL_BASE}{dm.build_jupyter_url(entry, user, dm.get_upload_id())}"
+        return gui.create_app_card_overlay(
+            entry, full_url, lambda _b, name=entry.name, url=full_url: open_app(name, url)
+        )
+
+    def open_whats_new(_button=None):
+        open_app("whats_new", gui.WHATS_NEW_URL)
 
     def show_main(_button=None):
         project_cards = [
@@ -75,7 +77,7 @@ def setup_app():
 
         root.children = [
             gui.create_style(),
-            gui.create_header(user),
+            gui.create_header(user, open_whats_new),
             *sections,
             gui.create_footer(),
         ]
@@ -85,7 +87,7 @@ def setup_app():
         cards = [render_app_card(e) for e in project.apps]
         root.children = [
             gui.create_style(),
-            gui.create_header(user),
+            gui.create_header(user, open_whats_new),
             gui.create_back_button(go_back),
             gui.create_category_section(project.name, cards),
             gui.create_footer(),
