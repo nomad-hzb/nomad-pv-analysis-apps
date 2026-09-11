@@ -298,19 +298,29 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 }
 
 
-PROJECTS: list[Project] = [
-    Project(
-        "Slot-die coater ML",
-        "PL-imaging to JV-performance pipeline for slot-die coated devices.",
-        "fa-industry",
-        [
+def _project_upload_id(env_var: str, hzb_default: str) -> str | None:
+    """Resolve one Projects-section upload_id from env, HZB's value as default.
+
+    A fork with no matching upload sets the env var to an empty string to drop
+    that card entirely, rather than keeping a link that can only ever 404.
+    """
+    return os.environ.get(env_var, hzb_default) or None
+
+
+def _build_projects() -> list[Project]:
+    slot_die_apps = [
+        entry
+        for entry in (
             AppEntry(
                 "",
                 "image_cropper.ipynb",
                 "1. Image Cropper",
                 "Crop raw PL images down to the region used by the rest of the pipeline.",
                 "fa-crop",
-                upload_id="ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_IMAGE_CROPPER_UPLOAD_ID",
+                    "ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg",
+                ),
             ),
             AppEntry(
                 "",
@@ -319,7 +329,9 @@ PROJECTS: list[Project] = [
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -328,7 +340,9 @@ PROJECTS: list[Project] = [
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -337,7 +351,9 @@ PROJECTS: list[Project] = [
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="sSP9nxKDRhax0cuBzsrvEA",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
+                ),
             ),
             AppEntry(
                 "",
@@ -346,7 +362,9 @@ PROJECTS: list[Project] = [
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="Jeb8HXjnSNy9T0-Z5VVbhA",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
+                ),
             ),
             AppEntry(
                 "",
@@ -356,11 +374,26 @@ PROJECTS: list[Project] = [
                 "dataset back to NOMAD.",
                 "fa-object-group",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="YRS7abDQS26o2NplzjBwKg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
+                ),
             ),
-        ],
-    ),
-]
+        )
+        if entry.upload_id
+    ]
+    if not slot_die_apps:
+        return []
+    return [
+        Project(
+            "Slot-die coater ML",
+            "PL-imaging to JV-performance pipeline for slot-die coated devices.",
+            "fa-industry",
+            slot_die_apps,
+        )
+    ]
+
+
+PROJECTS: list[Project] = _build_projects()
 
 
 LEARNING_FOLDER = LearningEntry(
