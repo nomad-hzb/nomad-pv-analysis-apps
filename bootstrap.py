@@ -72,6 +72,15 @@ def _install_shared() -> None:
         [sys.executable, "-m", "pip", "install", "-q", str(shared)],
         check=True,
     )
+    # A fresh kernel already ran site.py before this install happened, so it
+    # won't pick up the newly installed package on its own until restarted.
+    # Adding shared/ to sys.path directly makes THIS kernel see hysprint_utils
+    # immediately, without needing a second run. Confirmed necessary in
+    # App_dashboard (issue with Voila needing "to be run twice"); a deliberate
+    # exception to CLAUDE.md rule 8, not a violation to clean up.
+    shared_str = str(shared)
+    if shared_str not in sys.path:
+        sys.path.insert(0, shared_str)
 
 
 _apply_local_proxy_config()
