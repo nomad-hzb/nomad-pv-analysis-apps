@@ -97,6 +97,9 @@ For authentication, export `NOMAD_CLIENT_ACCESS_TOKEN`, or create a
 `secrets.py` file at the repo root (never commit this file) defining
 `NOMAD_TOKEN = "your_token_here"`.
 
+Deploying the suite to an Oasis other than HZB SE — including one behind an
+outbound proxy — is covered step by step in [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ---
 
 ## Build Your Own Analysis (with an LLM)

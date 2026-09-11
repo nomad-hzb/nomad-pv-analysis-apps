@@ -201,11 +201,15 @@ runpy.run_path("../../bootstrap.py")
 ```
 `bootstrap.py` (repo root) installs `shared/` and then inserts it directly
 into `sys.path` — a deliberate, sanctioned exception to rule 8, not
-something to "clean up" if seen again. It also applies any local outbound
-proxy configuration (opt-in, off by default — see `oasis_local_config.py`,
-gitignored, same pattern as `secrets.py`) before that install runs, since
-installing a local directory reaches PyPI for `hatchling`. Don't
-reimplement any of this per-app; the two apps that used to have their own
+something to "clean up" if seen again. Before that install runs it also
+applies this deployment's environment from `oasis_local_config.py` (repo
+root, gitignored, same pattern as `secrets.py`; opt-in, absent by default):
+every uppercase string it defines becomes an environment variable of the
+same name, so `HYSPRINT_URL_BASE` reaches `hysprint_utils.config` before
+any app imports it, and `HTTP_PROXY`/`HTTPS_PROXY` are in place before pip
+reaches PyPI for `hatchling`. Container-level variables always win. Adding
+a new override needs no change to `bootstrap.py` — see `DEPLOYMENT.md`.
+Don't reimplement any of this per-app; the two apps that used to have their own
 install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
 `bootstrap.py` instead.
 
