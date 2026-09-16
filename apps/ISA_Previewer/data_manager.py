@@ -7,6 +7,8 @@
 #     /home/jovyan/uploads actually contains
 # resolve_h5_path is the only place that converts between them.
 
+import contextlib
+import io
 import logging
 import os
 
@@ -20,6 +22,30 @@ from insitu_analyser.utils.nomad_api_calls import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def quiet_stdout():
+    """Keep progress chatter printed by a dependency out of the app.
+
+    insitu_analyser reports progress on stdout ("[get_entryid] Entry id for sample_id ..."),
+    and IPython's %store magic announces every write ("Stored 'h5_path' (str)"). Neither has
+    a switch to turn it off. Under Voila this text lands at the top of the page, above the
+    app, where a user reads it as an error.
+
+    Captured and logged at DEBUG rather than discarded, so it is still reachable when
+    something goes wrong. bootstrap.py does the same for import-time banners; it wraps
+    __import__ and so deliberately does not cover runtime output like this.
+
+    Only wrap calls into a dependency. A print() meant for an ipywidgets Output must not be
+    routed through here.
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        yield
+    text = buffer.getvalue().strip()
+    if text:
+        logger.debug("Suppressed dependency output: %s", text)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +198,8 @@ def list_uploads_with_measurements(url: str, token: str) -> list[tuple[str, str]
     HySprint_Batch (see isa_inducer.upload_sample_json), so a batch query returns nothing
     for exactly the uploads this app exists for.
     """
-    uploads = get_uploads_with_entry_type(url, token, config.MEASUREMENT_ENTRY_TYPE)
+    with quiet_stdout():
+        uploads = get_uploads_with_entry_type(url, token, config.MEASUREMENT_ENTRY_TYPE)
     return sorted(((name, upload_id) for upload_id, name in uploads.items()), key=lambda o: o[0])
 
 
@@ -182,11 +209,12 @@ def list_samples_in_upload(url: str, token: str, upload_id: str) -> list[str]:
     get_sample_description prepends config.PLACEHOLDER_OPTION itself, so the returned list
     always starts with a "nothing selected" entry.
     """
-    sample_ids = get_samples_in_upload(url, token, upload_id)
-    if not sample_ids:
-        logger.info("Upload %s holds no samples", upload_id)
-        return [config.PLACEHOLDER_OPTION]
-    return get_sample_description(url, token, sample_ids)
+    with quiet_stdout():
+        sample_ids = get_samples_in_upload(url, token, upload_id)
+        if not sample_ids:
+            logger.info("Upload %s holds no samples", upload_id)
+            return [config.PLACEHOLDER_OPTION]
+        return get_sample_description(url, token, sample_ids)
 
 
 def sample_id_from_option(option: str) -> str:
@@ -210,14 +238,15 @@ def list_h5_measurements(
         return []
 
     sample_id = sample_id_from_option(sample_option)
-    measurements = get_specific_data_of_sample(
-        url,
-        token,
-        sample_id,
-        config.MEASUREMENT_ENTRY_TYPE,
-        with_meta=True,
-        upload_id=upload_id,
-    )
+    with quiet_stdout():
+        measurements = get_specific_data_of_sample(
+            url,
+            token,
+            sample_id,
+            config.MEASUREMENT_ENTRY_TYPE,
+            with_meta=True,
+            upload_id=upload_id,
+        )
 
     options: list[tuple[str, str]] = []
     for data, metadata in measurements:
@@ -322,8 +351,9 @@ def store_for_linked_notebooks(h5_path: str, screenwidth: int) -> None:
         return
     ipython.user_ns["h5_path"] = os.path.abspath(h5_path)
     ipython.user_ns["screenwidth"] = screenwidth
-    for name in ("h5_path", "screenwidth"):
-        ipython.run_line_magic("store", name)
+    with quiet_stdout():
+        for name in ("h5_path", "screenwidth"):
+            ipython.run_line_magic("store", name)
 
 
 def _read_stored(name: str):
@@ -331,7 +361,8 @@ def _read_stored(name: str):
     if ipython is None:
         return None
     try:
-        ipython.run_line_magic("store", f"-r {name}")
+        with quiet_stdout():
+            ipython.run_line_magic("store", f"-r {name}")
     except Exception:
         logger.exception("Reading %s from the IPython store failed", name)
         return None

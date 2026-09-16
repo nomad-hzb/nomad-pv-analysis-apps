@@ -1,6 +1,6 @@
 [project]
 name = "isa-previewer"
-version = "0.3.0"
+version = "0.3.1"
 description = "Preview and analyse in-situ (GIWAXS, optical, logging) HDF5 runs produced by insitu_analyser"
 requires-python = ">=3.10"
 dependencies = [

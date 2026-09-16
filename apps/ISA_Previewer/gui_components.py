@@ -230,13 +230,16 @@ def open_source(target: str, variant: config.Variant, screenwidth: int):
     A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant a
     TIMELYTELLER on the selected upload folder, which scans that folder for h5 files itself.
     """
-    if variant.selection == config.SELECTION_UPLOAD:
-        return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
-    return PERFECTPREVIEWER(
-        target,
-        screenwidth=screenwidth,
-        initialize_overview=variant.initialize_overview,
-    )
+    # Both constructors report their progress on stdout ("Optical 2 h5 path: ..."), which
+    # under Voila renders above the app rather than inside it.
+    with data_manager.quiet_stdout():
+        if variant.selection == config.SELECTION_UPLOAD:
+            return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
+        return PERFECTPREVIEWER(
+            target,
+            screenwidth=screenwidth,
+            initialize_overview=variant.initialize_overview,
+        )
 
 
 def handover_row(

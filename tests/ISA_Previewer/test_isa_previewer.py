@@ -1,6 +1,7 @@
 """Tests for the ISA Previewer's own logic: config consistency, path handling, link gating,
 measurement listing and section assembly. Nothing here talks to NOMAD or opens an h5."""
 
+import logging
 import os
 
 import pytest
@@ -228,6 +229,26 @@ def test_available_links_leaves_out_the_calling_notebooks_own_link(dm, cfg, monk
 
     assert cfg.APP_LINKS["heatmap_analysis"].label not in labels
     assert cfg.APP_LINKS["optical_analysis"].label in labels
+
+
+def test_quiet_stdout_keeps_dependency_chatter_off_the_page(dm, capsys, caplog):
+    """insitu_analyser and %store print progress with no switch to turn it off."""
+    with caplog.at_level(logging.DEBUG):
+        with dm.quiet_stdout():
+            print("[get_entryid] Entry id for sample_id 'Al_Ni_NP' is uwxYL4vaUU1H5Ego.")
+
+    assert capsys.readouterr().out == ""
+    assert "get_entryid" in caplog.text
+
+
+def test_quiet_stdout_restores_stdout_after_a_failure(dm, capsys):
+    """A library call that raises must not leave the rest of the app muted."""
+    with pytest.raises(ValueError):
+        with dm.quiet_stdout():
+            raise ValueError("boom")
+
+    print("visible again")
+    assert capsys.readouterr().out == "visible again\n"
 
 
 def test_every_variant_names_a_real_link_key(cfg):
