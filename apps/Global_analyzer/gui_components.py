@@ -256,7 +256,7 @@ class GUIManager:
         self.layer_selector_box = widgets.VBox()
 
         self.results_aggregation_selector = widgets.Dropdown(
-            options=["Mean", "Median", "Max"],
+            options=["All Points", "Mean", "Median", "Max"],
             value="Mean",
             description="Aggregate pixels via:",
             style={"description_width": "140px"},
@@ -972,8 +972,11 @@ class GUIManager:
                     "sample per layer - pick which layer's row to use below so each sample's "
                     "result isn't duplicated against unrelated layers' parameters. No dropdown "
                     "means that source already has one row per sample. Also choose how repeated "
-                    "measurements of the same result (e.g. several JV pixels) are combined into "
-                    "one value per sample. Click Recalculate to apply either.</p>"
+                    "measurements of the same result (e.g. several JV pixels) are combined: Mean/"
+                    "Median/Max reduce them to one value per sample, or pick 'All Points' to keep "
+                    "every measurement as its own row - more data, but rows from the same sample "
+                    "then share identical process values, so treat any resulting sample count as "
+                    "measurements, not independent samples. Click Recalculate to apply either.</p>"
                 ),
                 self.layer_selector_box,
                 self.results_aggregation_selector,

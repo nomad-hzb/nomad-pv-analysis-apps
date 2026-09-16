@@ -109,7 +109,15 @@ def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.D
     columns. 'datetime' (if present) is always carried through as the first
     non-null value regardless of method, since averaging/maxing a timestamp
     isn't meaningful.
+
+    method="All Points" passes df through unchanged instead of collapsing -
+    every real measurement (e.g. every JV pixel) keeps its own row, at the
+    cost of pseudo-replication: those rows share the same process metadata
+    once merged, so they're not independent observations of the process
+    itself, only of pixel-to-pixel device variation under it.
     """
+    if method == "All Points":
+        return df
     agg_func = RESULTS_AGGREGATION_METHODS.get(method, "mean")
     grouped = getattr(df.groupby("sample_id", as_index=False), agg_func)(numeric_only=True)
     if "datetime" in df.columns:

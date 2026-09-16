@@ -649,6 +649,15 @@ def test_aggregate_results_per_sample_max():
     assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.8)
 
 
+def test_aggregate_results_per_sample_all_points_passes_through_unchanged():
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S2"], "fill_factor": [0.2, 0.8, 0.5]})
+
+    result = aggregate_results_per_sample(df, method="All Points")
+
+    assert len(result) == 3
+    assert list(result["fill_factor"]) == [0.2, 0.8, 0.5]
+
+
 def test_aggregate_results_per_sample_keeps_first_datetime():
     df = pd.DataFrame(
         {
