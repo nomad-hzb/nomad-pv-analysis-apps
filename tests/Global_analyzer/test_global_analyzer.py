@@ -8,6 +8,7 @@ from data_manager import (
     MeasurementRow,
     aggregate_results_per_sample,
     apply_row_filters,
+    get_categorical_columns,
     get_layer_type_options,
     select_layer_row_per_sample,
     variation_warning,
@@ -656,6 +657,48 @@ def test_aggregate_results_per_sample_all_points_passes_through_unchanged():
 
     assert len(result) == 3
     assert list(result["fill_factor"]) == [0.2, 0.8, 0.5]
+
+
+def test_get_categorical_columns_identifies_real_grouping_variables():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3", "S4"],
+            "material": ["A", "A", "B", "B"],
+            "constant": ["X", "X", "X", "X"],
+            "all_unique": ["a", "b", "c", "d"],
+        }
+    )
+
+    assert get_categorical_columns(df) == ["material"]
+
+
+def test_get_categorical_columns_skips_unhashable_values_without_raising():
+    """Regression test: raw JV voltage/current_density curve arrays pass
+    through as their own object-dtype columns unaggregated when "All Points"
+    is the chosen results-aggregation method. nunique() on a list-valued
+    column raises TypeError (lists aren't hashable) - this must be skipped,
+    not propagate and abort the whole Recalculate/ANOVA-selector refresh."""
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3"],
+            "material": ["A", "A", "B"],
+            "voltage": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        }
+    )
+
+    assert get_categorical_columns(df) == ["material"]
+
+
+def test_get_categorical_columns_excludes_custom_columns():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3"],
+            "batch": ["b1", "b2", "b3"],
+            "material": ["A", "A", "B"],
+        }
+    )
+
+    assert get_categorical_columns(df, exclude=["sample_id", "batch"]) == ["material"]
 
 
 def test_aggregate_results_per_sample_keeps_first_datetime():

@@ -36,6 +36,7 @@ from data_manager import (
     DataManager,
     aggregate_results_per_sample,
     apply_row_filters,
+    get_categorical_columns,
     get_layer_type_options,
     select_layer_row_per_sample,
     variation_warning,
@@ -1626,16 +1627,9 @@ class SampleDataExplorer:
         if metadata_cols:
             selector.value = prev if prev in metadata_cols else metadata_cols[0]
 
-        categorical_cols = []
-        if self.analysis_df is not None:
-            # Exclude sample_id and anything else that's unique per row - not a
-            # real grouping variable, just an identifier.
-            n_rows = len(self.analysis_df)
-            categorical_cols = sorted(
-                col
-                for col in self.analysis_df.select_dtypes(include="object").columns
-                if col != "sample_id" and 2 <= self.analysis_df[col].nunique() < n_rows
-            )
+        categorical_cols = (
+            get_categorical_columns(self.analysis_df) if self.analysis_df is not None else []
+        )
         selector = self.gui.experimental_anova_group_selector
         prev = selector.value
         selector.options = categorical_cols

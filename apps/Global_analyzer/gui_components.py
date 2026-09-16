@@ -257,7 +257,7 @@ class GUIManager:
 
         self.results_aggregation_selector = widgets.Dropdown(
             options=["All Points", "Mean", "Median", "Max"],
-            value="Mean",
+            value="All Points",
             description="Aggregate pixels via:",
             style={"description_width": "140px"},
             layout={"width": "300px"},

@@ -102,6 +102,32 @@ def select_layer_row_per_sample(df: pd.DataFrame, layer_type: Optional[str]) -> 
     return df[df["layer_type"] == layer_type]
 
 
+def get_categorical_columns(df: pd.DataFrame, exclude: Optional[List[str]] = None) -> List[str]:
+    """Object-dtype columns of df with more than one but fewer than len(df)
+    distinct values - real grouping variables, not identifiers (all-unique)
+    or constants (all-same). Used to populate ANOVA's grouping selector from
+    whatever's actually in the merged Analysis Data table.
+
+    A column holding unhashable values (e.g. raw JV voltage/current_density
+    curve arrays, which pass through as their own columns unaggregated when
+    "All Points" is the chosen results-aggregation method) is skipped rather
+    than raising - it can't be a grouping variable regardless.
+    """
+    exclude = set(exclude) if exclude else {"sample_id"}
+    n_rows = len(df)
+    categorical_cols = []
+    for col in df.select_dtypes(include="object").columns:
+        if col in exclude:
+            continue
+        try:
+            n_unique = df[col].nunique()
+        except TypeError:
+            continue
+        if 2 <= n_unique < n_rows:
+            categorical_cols.append(col)
+    return sorted(categorical_cols)
+
+
 def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.DataFrame:
     """Collapse a results dataframe with possibly multiple rows per sample_id
     (e.g. one row per measured JV pixel) down to one row per sample_id, using
