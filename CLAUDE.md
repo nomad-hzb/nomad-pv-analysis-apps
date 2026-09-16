@@ -293,6 +293,37 @@ install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
 - `XPS-Automated` isn't a real app yet (one raw personal notebook, no
   `data_manager`/`plot_manager`/`gui_components`/`app.py` split, no sample
   data in-repo to validate a rewrite against). Needs a dedicated future pass.
+- None of the nine `Electrochemical_analysis` notebooks has a `bootstrap.py`
+  cell, so they get no deployment environment: bootstrap exports
+  `HYSPRINT_URL_BASE` and the proxy into its own process, and a separate kernel
+  never sees them. `hysprint_utils` itself usually still imports (it is
+  pip-installed into the container once any other app has run), but
+  `config.py` then falls back to its own HZB default and no proxy is applied,
+  so on a non-HZB or proxied Oasis these notebooks reach nothing. Adding cell 0
+  to each (the two-line `runpy.run_path` form) is the small fix and is worth
+  doing on its own; the full unification pass is a separate, much bigger job
+  (nine notebooks including `Untitled.ipynb` and a pyDRTtools tutorial,
+  `!pip install impedance` in cell 0 of three, star imports from
+  `Manuel_echem_function` and `nomad_api_calls`). Don't conflate the two.
+- `apps/Excel_creator/sheet_data_entry_guide.py:213` writes an SE Oasis link,
+  and `:224` an HZB-specific `scribehow.com` how-to link, into every generated
+  workbook. Not simply derivable like the other apps: the link leaves in a file
+  that gets mailed around and targets a Voila GUI page, so what it should point
+  at is a decision first. The citation sheet's GitHub links
+  (`sheet_how_to_cite.py:7,16,22,28`) point at the `nomad-hzb/nomad-hysprint`
+  schema repo and may want revisiting in the same pass. Needs a version bump.
+- Open question, no decision yet: how should content tied to one Oasis be
+  handled in general? Three ad-hoc answers already exist — per-item env
+  override with an opt-out (`App_dashboard/data_manager.py:301`, where an empty
+  string drops a Projects card and all six drop the section), deliberate
+  hardcoding (`PeroDatabase_downloader/config.py` pins the SE Oasis as a fixed
+  data source to download *from*, like the public central server), and plain
+  derivation from `hysprint_utils.config` (everything else). Unsettled: whether
+  "Oasis-specific" is a property of a whole app or only of links inside
+  portable apps; whether a non-portable item should be hidden, labelled, or
+  left pointing at its home Oasis; and whether NORTH tool configuration is the
+  right home for this once the plugin packaging below happens. Don't invent a
+  fourth mechanism without settling it.
 
 ## Ultimate goal: NOMAD plugin
 

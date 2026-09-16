@@ -121,7 +121,7 @@ simply the normal workflow:
 ```bash
 # option 1: every new shell in this container
 cat >> ~/.bashrc <<'EOF'
-export HTTP_PROXY=http://proxy.example.org:3128
+  export HTTP_PROXY=http://proxy.example.org:3128
 export HTTPS_PROXY=http://proxy.example.org:3128
 export NO_PROXY=localhost,127.0.0.1
 export http_proxy=$HTTP_PROXY
@@ -238,10 +238,10 @@ not exist elsewhere. Each card's upload ID is overridable via a
 drops that card - setting all six drops the section entirely. Deliberately not
 configured for CE-AME yet; see `apps/App_dashboard/data_manager.py`.
 
-**The six `Electrochemical_analysis` notebooks have no bootstrap cell.** They
-fall back to the hardcoded HZB URL and get no proxy, so they will not work on a
-second Oasis. They are pre-existing raw notebooks (`!pip install impedance` in
-cell 0, star imports) that have not been through the unification pass.
+**The nine `Electrochemical_analysis` notebooks have no bootstrap cell.** They
+fall back to the HZB URL and get no proxy, so they will not work on a second
+Oasis. They are pre-existing raw notebooks (`!pip install impedance` in cell 0,
+star imports) that have not been through the unification pass.
 
 **`ISA_Previewer` needs outbound git access.** It pins `insitu_analyser` from
 `codebase.helmholtz.cloud`, installed by `bootstrap.py` with the rest of that
@@ -262,11 +262,6 @@ NORTH-path templates in `auth_manager.py`, `App_dashboard/data_manager.py`,
 `Global_analyzer/utils.py`, `ISA_Previewer/config.py` and `JV-Analysis/app.py`
 build their own prefixes. Harmless wherever the base path is `/nomad-oasis`
 (HZB and CE-AME both), broken on an Oasis served under a different prefix.
-
-**A few user-visible strings still name the HZB Oasis** - the server dropdown
-label in `PeroDatabase_downloader/config.py`, help text in
-`JV-Analysis/gui_components.py`, and hyperlinks written into the files
-`Excel_creator` generates. Cosmetic.
 
 ## 6. Local development
 
