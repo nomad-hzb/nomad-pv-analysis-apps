@@ -5,33 +5,27 @@ is shared by every module. The selectable field menu lives in the separate
 fields_catalog.json, which you can edit freely.
 """
 
-import logging
 import os
 from dataclasses import asdict, dataclass
 from typing import Optional
 
-logger = logging.getLogger(__name__)
-
-try:
-    from hysprint_utils.config import API_ENDPOINT, URL_BASE
-except ImportError:
-    URL_BASE = "https://nomad-hzb-se.de"
-    API_ENDPOINT = "/nomad-oasis/api/v1"
-    logger.warning("hysprint_utils.config not found; using hardcoded URL fallback")
-
 # NOMAD servers. Each has a default entry type, the population to scope to
-# on that server. Central defaults to the perovskite database; the HZB
+# on that server. Central defaults to the perovskite database; the HZB SE
 # Oasis defaults to everything. The same token authenticates across Oasis
 # instances (central public data needs no token). Add your own servers here.
-# The HZB Oasis entry reuses the shared hysprint_utils config so the URL is
-# defined in one place; the public-central server has no equivalent there.
+#
+# Both URLs are deliberately hardcoded and are NOT a deployment leak: this is
+# a menu of data sources to download FROM, in the same sense as the public
+# central server, not the address of the Oasis this app happens to run on. It
+# stays pointed at the HZB SE Oasis on every deployment, so it must not be
+# derived from hysprint_utils.config / URL_BASE. Do not "unify" it.
 SERVERS = {
     "NOMAD central public (nomad-lab.eu)": {
         "url": "https://nomad-lab.eu/prod/v1/api/v1",
         "default_entry_type": "PerovskiteSolarCell",
     },
-    "HZB Oasis (nomad-hzb-se.de)": {
-        "url": f"{URL_BASE}{API_ENDPOINT}",
+    "HZB SE Oasis (nomad-hzb-se.de)": {
+        "url": "https://nomad-hzb-se.de/nomad-oasis/api/v1",
         "default_entry_type": "",
     },
 }
