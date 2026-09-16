@@ -32,7 +32,14 @@ import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, apply_row_filters, variation_warning
+from data_manager import (
+    DataManager,
+    aggregate_results_per_sample,
+    apply_row_filters,
+    get_layer_type_options,
+    select_layer_row_per_sample,
+    variation_warning,
+)
 from gui_components import GUIManager
 from IPython.display import Markdown, clear_output
 from IPython.display import display as ipy_display
@@ -194,6 +201,13 @@ class SampleDataExplorer:
         """Outer-merge every process/preparation metadata type currently loaded
         (data_manager.current_metadata) into one row-per-sample_id dataframe.
 
+        A source that logs one row per fabrication layer per sample (Spin
+        Coating: ETL, Active Layer, HTL, ...) is first cut down to the single
+        layer_type the user picked in the Analysis Data tab's Layer Selection
+        controls - otherwise a sample's one result would get joined against
+        every one of its layers' rows, duplicating it under unrelated layers'
+        parameters (issue #34 follow-up).
+
         Deliberately independent of data_manager.merged_data / the Plotting tab's
         X/Y/Color selections - a common plotting workflow (e.g. Voc vs efficiency,
         both "Results") never selects a metadata data source for any axis, which
@@ -205,9 +219,15 @@ class SampleDataExplorer:
         if not self.data_manager.current_metadata:
             return None
 
+        layer_selections = self.gui.get_layer_selections()
         process_df = None
         for metadata_type, metadata_df in self.data_manager.current_metadata.items():
             if metadata_df is None or metadata_df.empty or "sample_id" not in metadata_df.columns:
+                continue
+            metadata_df = select_layer_row_per_sample(
+                metadata_df, layer_selections.get(metadata_type)
+            )
+            if metadata_df.empty:
                 continue
             if process_df is None:
                 process_df = metadata_df.copy()
@@ -230,18 +250,23 @@ class SampleDataExplorer:
         """Outer-merge every measurement result type currently loaded
         (data_manager.current_results) into one row-per-sample_id dataframe,
         analogous to _build_process_dataframe but for results. Multiple rows per
-        sample_id within a single result type (e.g. multiple pixels) are averaged
-        first, matching _get_target_series's per-target averaging.
+        sample_id within a single result type (e.g. multiple JV pixels) are
+        collapsed to one via the Analysis Data tab's chosen aggregation method
+        (Mean/Median/Max) - unlike the process-metadata side, these really are
+        repeated measurements of the same thing, so aggregating (not selecting
+        one) is the right operation.
 
         Also carries the first non-null 'datetime' per sample_id through
-        (dropped by the numeric-only mean otherwise) - measurement results
-        commonly have a timestamp (see the "top_level_fields" list results are
-        loaded with), and it's the Experimental tab's Process Drift tool's only
-        source for one, since not every process-metadata loader captures it.
+        (dropped by the numeric-only aggregation otherwise) - measurement
+        results commonly have a timestamp (see the "top_level_fields" list
+        results are loaded with), and it's the Experimental tab's Process
+        Drift tool's only source for one, since not every process-metadata
+        loader captures it.
         """
         if not self.data_manager.current_results:
             return None
 
+        aggregation_method = self.gui.results_aggregation_selector.value
         results_df = None
         for result_type, result_type_df in self.data_manager.current_results.items():
             if (
@@ -250,12 +275,7 @@ class SampleDataExplorer:
                 or "sample_id" not in result_type_df.columns
             ):
                 continue
-            grouped = result_type_df.groupby("sample_id", as_index=False).mean(numeric_only=True)
-            if "datetime" in result_type_df.columns:
-                first_datetime = result_type_df.groupby("sample_id", as_index=False)[
-                    "datetime"
-                ].first()
-                grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
+            grouped = aggregate_results_per_sample(result_type_df, aggregation_method)
             if results_df is None:
                 results_df = grouped
             else:
@@ -276,6 +296,8 @@ class SampleDataExplorer:
         checked-by-default Results/Process Metadata column lists shown in the
         Analysis Data tab's checkboxes, and refreshes the variation-count warning.
         """
+        self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
+
         process_df = self._build_process_dataframe()
         results_df = self._build_results_dataframe()
 

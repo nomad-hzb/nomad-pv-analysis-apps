@@ -3,7 +3,15 @@ import pandas as pd
 import plotly.graph_objects as go
 import pytest
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, MeasurementRow, apply_row_filters, variation_warning
+from data_manager import (
+    DataManager,
+    MeasurementRow,
+    aggregate_results_per_sample,
+    apply_row_filters,
+    get_layer_type_options,
+    select_layer_row_per_sample,
+    variation_warning,
+)
 from experimental_analysis import (
     compute_process_drift,
     detect_outliers,
@@ -282,6 +290,45 @@ def test_set_analysis_columns_defaults_new_columns_to_checked():
     assert gui.get_checked_metadata_columns() == ["m1", "m2"]
 
 
+def test_set_layer_selectors_creates_one_dropdown_per_source():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"], "slot_die_coating": ["HTL"]})
+
+    assert len(gui.layer_selector_box.children) == 2
+    assert gui.get_layer_selections() == {"spin_coating": "Active Layer", "slot_die_coating": "HTL"}
+
+
+def test_set_layer_selectors_empty_input_clears_dropdowns():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+
+    gui.set_layer_selectors({})
+
+    assert gui.layer_selector_box.children == ()
+    assert gui.get_layer_selections() == {}
+
+
+def test_set_layer_selectors_preserves_choice_across_rebuild():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+    gui.layer_selector_box.children[0].value = "ETL"
+
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+
+    assert gui.get_layer_selections() == {"spin_coating": "ETL"}
+
+
+def test_set_layer_selectors_resets_to_first_option_when_choice_no_longer_valid():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+    gui.layer_selector_box.children[0].value = "ETL"
+
+    # ETL no longer present after a batch reload - falls back to first option.
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "HTL"]})
+
+    assert gui.get_layer_selections() == {"spin_coating": "Active Layer"}
+
+
 def test_set_analysis_columns_populates_filter_column_dropdown():
     gui = GUIManager()
     gui.set_analysis_columns(["r1", "r2"], ["m1"])
@@ -531,6 +578,89 @@ def test_apply_row_filters_resets_index():
     result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
 
     assert list(result.index) == [0, 1]
+
+
+def test_get_layer_type_options_flags_multi_layer_sources_only():
+    metadata = {
+        "spin_coating": pd.DataFrame(
+            {"sample_id": ["S1", "S1"], "layer_type": ["ETL", "Active Layer"]}
+        ),
+        "cleaning": pd.DataFrame({"sample_id": ["S1"], "layer_type": ["Substrate"]}),
+        "evaporation": pd.DataFrame({"sample_id": ["S1"]}),  # no layer_type column
+    }
+
+    options = get_layer_type_options(metadata)
+
+    assert options == {"spin_coating": ["Active Layer", "ETL"]}
+
+
+def test_select_layer_row_per_sample_keeps_only_matching_layer():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2"],
+            "layer_type": ["ETL", "Active Layer", "Active Layer"],
+            "annealing_temperature": [None, 50, 60],
+        }
+    )
+
+    result = select_layer_row_per_sample(df, "Active Layer")
+
+    assert list(result["sample_id"]) == ["S1", "S2"]
+    assert list(result["annealing_temperature"]) == [50, 60]
+
+
+def test_select_layer_row_per_sample_passes_through_single_layer_source():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "layer_type": ["Substrate", "Substrate"]})
+
+    result = select_layer_row_per_sample(df, "irrelevant")
+
+    assert len(result) == 2
+
+
+def test_select_layer_row_per_sample_passes_through_no_layer_type_column():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "fill_factor": [0.5, 0.8]})
+
+    result = select_layer_row_per_sample(df, "Active Layer")
+
+    assert len(result) == 2
+
+
+def test_aggregate_results_per_sample_mean_is_default():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "fill_factor": [0.2, 0.8]})
+
+    result = aggregate_results_per_sample(df)
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.5)
+
+
+def test_aggregate_results_per_sample_median():
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S1"], "fill_factor": [0.1, 0.5, 0.9]})
+
+    result = aggregate_results_per_sample(df, method="Median")
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.5)
+
+
+def test_aggregate_results_per_sample_max():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "fill_factor": [0.2, 0.8]})
+
+    result = aggregate_results_per_sample(df, method="Max")
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.8)
+
+
+def test_aggregate_results_per_sample_keeps_first_datetime():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1"],
+            "fill_factor": [0.2, 0.8],
+            "datetime": ["2024-01-01", "2024-01-02"],
+        }
+    )
+
+    result = aggregate_results_per_sample(df)
+
+    assert result.loc[result["sample_id"] == "S1", "datetime"].iloc[0] == "2024-01-01"
 
 
 def test_variation_warning_empty_when_all_vary_enough():

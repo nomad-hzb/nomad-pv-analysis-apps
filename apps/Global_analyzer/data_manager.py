@@ -41,6 +41,8 @@ _ROW_FILTER_OPS = {
     "!=": operator.ne,
 }
 
+RESULTS_AGGREGATION_METHODS = {"Mean": "mean", "Median": "median", "Max": "max"}
+
 
 def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
     """Return the subset of `columns` with fewer than min_unique distinct non-null
@@ -65,6 +67,55 @@ def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame
         compare = _ROW_FILTER_OPS[row_filter["op"]]
         filtered = filtered[compare(filtered[column], row_filter["value"])]
     return filtered.reset_index(drop=True)
+
+
+def get_layer_type_options(metadata_dict: Dict[str, pd.DataFrame]) -> Dict[str, List[str]]:
+    """For each metadata source with a 'layer_type' column and more than one
+    distinct value (e.g. Spin Coating logging one row per fabrication layer -
+    ETL, Active Layer, HTL, Interlayer, ...), return its sorted list of
+    distinct layer_type values. A source with a single (or no) layer_type
+    needs no selection and is omitted - most process steps never produce more
+    than one row per sample_id in the first place."""
+    options: Dict[str, List[str]] = {}
+    for metadata_type, df in metadata_dict.items():
+        if df is None or df.empty or "layer_type" not in df.columns:
+            continue
+        values = sorted(v for v in df["layer_type"].dropna().unique())
+        if len(values) > 1:
+            options[metadata_type] = values
+    return options
+
+
+def select_layer_row_per_sample(df: pd.DataFrame, layer_type: Optional[str]) -> pd.DataFrame:
+    """Restrict a metadata dataframe to the rows for one layer_type, so a
+    source that logs multiple layers per sample_id (Spin Coating: ETL,
+    Active Layer, HTL, ...) contributes at most one row per sample to the
+    merged Analysis Data table - without this, a sample's single averaged
+    result gets joined against every one of its layers' metadata rows,
+    duplicating it under unrelated layers' parameters.
+
+    A dataframe with no 'layer_type' column, or already at most one distinct
+    layer_type, passes through unchanged (nothing to select between).
+    """
+    if "layer_type" not in df.columns or df["layer_type"].nunique(dropna=True) <= 1:
+        return df
+    return df[df["layer_type"] == layer_type]
+
+
+def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.DataFrame:
+    """Collapse a results dataframe with possibly multiple rows per sample_id
+    (e.g. one row per measured JV pixel) down to one row per sample_id, using
+    the chosen method (see RESULTS_AGGREGATION_METHODS) across numeric
+    columns. 'datetime' (if present) is always carried through as the first
+    non-null value regardless of method, since averaging/maxing a timestamp
+    isn't meaningful.
+    """
+    agg_func = RESULTS_AGGREGATION_METHODS.get(method, "mean")
+    grouped = getattr(df.groupby("sample_id", as_index=False), agg_func)(numeric_only=True)
+    if "datetime" in df.columns:
+        first_datetime = df.groupby("sample_id", as_index=False)["datetime"].first()
+        grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
+    return grouped
 
 
 # ---------------------------------------------------------------------------

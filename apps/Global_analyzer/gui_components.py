@@ -248,6 +248,21 @@ class GUIManager:
         # ====================================================================
         # ANALYSIS DATA (shared by Correlations / Random Forest / Bayesian Optimization)
         # ====================================================================
+        # One Dropdown per multi-layer metadata source (e.g. Spin Coating logs
+        # one row per fabrication layer - ETL, Active Layer, HTL, ...) so the
+        # merged Analysis Data table uses only the picked layer's row per
+        # sample. Rebuilt by set_layer_selectors(); empty when no loaded
+        # source has more than one layer_type.
+        self.layer_selector_box = widgets.VBox()
+
+        self.results_aggregation_selector = widgets.Dropdown(
+            options=["Mean", "Median", "Max"],
+            value="Mean",
+            description="Aggregate pixels via:",
+            style={"description_width": "140px"},
+            layout={"width": "300px"},
+        )
+
         self.results_checklist_box = widgets.VBox(
             layout={
                 "max_height": "220px",
@@ -701,6 +716,33 @@ class GUIManager:
         if "run_anova" in callbacks:
             self.experimental_anova_run_button.on_click(callbacks["run_anova"])
 
+    def set_layer_selectors(self, layer_options: dict) -> None:
+        """(Re)build the Layer Selection dropdowns, one per metadata source
+        that logs more than one row per sample (keyed by layer_type, e.g.
+        Spin Coating's ETL/Active Layer/HTL/...). A source already reduced to
+        the previous choice keeps it if still valid; a new source defaults to
+        its first (alphabetical) layer_type. Empty input renders no dropdowns
+        - nothing needs picking when no loaded source has multiple layers.
+        """
+        previous = {dd.description: dd.value for dd in self.layer_selector_box.children}
+        self.layer_selector_box.children = [
+            widgets.Dropdown(
+                description=metadata_type,
+                options=values,
+                value=previous.get(metadata_type)
+                if previous.get(metadata_type) in values
+                else values[0],
+                style={"description_width": "160px"},
+                layout={"width": "400px"},
+            )
+            for metadata_type, values in layer_options.items()
+        ]
+
+    def get_layer_selections(self) -> dict:
+        """{metadata_type: chosen layer_type} for every source with more than
+        one layer_type loaded - see set_layer_selectors."""
+        return {dd.description: dd.value for dd in self.layer_selector_box.children}
+
     def set_analysis_columns(self, results_cols: list, metadata_cols: list):
         """(Re)build the Results / Process Metadata checkbox lists on the Analysis
         Data tab. Called whenever the shared analysis dataframe is rebuilt (batch
@@ -923,6 +965,18 @@ class GUIManager:
                     "always process metadata.</b> Uncheck any column you want excluded from "
                     "all three, then click Recalculate.</p>"
                 ),
+                widgets.HTML(
+                    "<h4 style='color:#666;'>Layer selection</h4>"
+                    "<p style='color:#666;'>A process step logged once per fabrication layer "
+                    "(e.g. Spin Coating: ETL, Active Layer, HTL, ...) contributes one row per "
+                    "sample per layer - pick which layer's row to use below so each sample's "
+                    "result isn't duplicated against unrelated layers' parameters. No dropdown "
+                    "means that source already has one row per sample. Also choose how repeated "
+                    "measurements of the same result (e.g. several JV pixels) are combined into "
+                    "one value per sample. Click Recalculate to apply either.</p>"
+                ),
+                self.layer_selector_box,
+                self.results_aggregation_selector,
                 widgets.Accordion(
                     children=[
                         widgets.VBox(
