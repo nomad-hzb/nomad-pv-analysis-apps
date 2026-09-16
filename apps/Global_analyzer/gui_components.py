@@ -274,6 +274,51 @@ class GUIManager:
         self.analysis_data_status_output = widgets.Output()
 
         # ====================================================================
+        # ANALYSIS DATA - ROW FILTERS (e.g. "Fill Factor (JV) >= 0.3")
+        # ====================================================================
+        self.filter_column_selector = widgets.Dropdown(
+            description="Column:",
+            style={"description_width": "60px"},
+            layout={"width": "300px"},
+        )
+        self.filter_operator_selector = widgets.Dropdown(
+            options=[">=", ">", "<=", "<", "==", "!="],
+            value=">=",
+            description="Op:",
+            style={"description_width": "40px"},
+            layout={"width": "110px"},
+        )
+        self.filter_value_input = widgets.FloatText(
+            description="Value:",
+            style={"description_width": "50px"},
+            layout={"width": "160px"},
+        )
+        self.add_filter_button = widgets.Button(
+            description="Add Filter",
+            button_style="warning",
+            icon="filter",
+            layout={"width": "140px"},
+        )
+        self.active_filters_box = widgets.VBox(
+            layout={
+                "border": "1px solid #ddd",
+                "padding": "6px",
+                "min_height": "34px",
+                "margin_top": "6px",
+            }
+        )
+
+        # ====================================================================
+        # ANALYSIS DATA - DEBUG PREVIEW TABLE
+        # ====================================================================
+        self.analysis_data_preview_output = widgets.Output()
+        self.analysis_data_preview_accordion = widgets.Accordion(
+            children=[self.analysis_data_preview_output],
+            titles=("Show data used for analysis",),
+        )
+        self.analysis_data_preview_accordion.selected_index = None
+
+        # ====================================================================
         # CORRELATION MATRIX
         # ====================================================================
         self.correlation_min_unique = widgets.IntText(
@@ -635,6 +680,8 @@ class GUIManager:
             self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
         if "recalculate_analysis_data" in callbacks:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
+        if "add_row_filter" in callbacks:
+            self.add_filter_button.on_click(callbacks["add_row_filter"])
         if "download_correlations" in callbacks:
             self.correlation_download_button.on_click(callbacks["download_correlations"])
         if "download_rf_results" in callbacks:
@@ -678,6 +725,14 @@ class GUIManager:
             for col in metadata_cols
         ]
 
+        previous_filter_column = self.filter_column_selector.value
+        filter_options = sorted(set(results_cols) | set(metadata_cols))
+        self.filter_column_selector.options = filter_options
+        if previous_filter_column in filter_options:
+            self.filter_column_selector.value = previous_filter_column
+        elif filter_options:
+            self.filter_column_selector.value = filter_options[0]
+
     def get_checked_results_columns(self) -> list:
         """Column names currently checked in the Results checklist."""
         return [cb.description for cb in self.results_checklist_box.children if cb.value]
@@ -685,6 +740,35 @@ class GUIManager:
     def get_checked_metadata_columns(self) -> list:
         """Column names currently checked in the Process Metadata checklist."""
         return [cb.description for cb in self.metadata_checklist_box.children if cb.value]
+
+    def render_active_filters(self, row_filters: list, on_remove) -> None:
+        """(Re)build the Analysis Data tab's active-filters list, one row per
+        filter (e.g. "Fill Factor (JV) >= 0.3") with its own Remove button.
+
+        Args:
+            row_filters: list of {"id", "column", "op", "value"} dicts.
+            on_remove: callable(filter_id) invoked when a filter's Remove button
+                is clicked - owns actually dropping it and recalculating.
+        """
+        if not row_filters:
+            self.active_filters_box.children = [
+                widgets.HTML(
+                    "<span style='color:#888;'>No filters active - all rows are used.</span>"
+                )
+            ]
+            return
+
+        rows = []
+        for row_filter in row_filters:
+            label = widgets.HTML(
+                f"<code>{row_filter['column']} {row_filter['op']} {row_filter['value']:g}</code>"
+            )
+            remove_button = widgets.Button(
+                description="Remove", icon="times", button_style="danger", layout={"width": "90px"}
+            )
+            remove_button.on_click(lambda _b, fid=row_filter["id"]: on_remove(fid))
+            rows.append(widgets.HBox([label, remove_button]))
+        self.active_filters_box.children = rows
 
     def setup_batch_selection(self, url, token, load_data_function):
         """
@@ -858,6 +942,25 @@ class GUIManager:
                 self.variation_warning_output,
                 self.recalculate_button,
                 self.analysis_data_status_output,
+                widgets.HTML(
+                    "<h4 style='color:#666; margin-top:16px;'>Filter rows</h4>"
+                    "<p style='color:#666;'>Exclude rows from every analysis below "
+                    "(Correlations, Random Forest, Bayesian Optimization, Plotting, "
+                    "Experimental) by thresholding any checked column - e.g. pick "
+                    "'Fill Factor (JV)', '>=', 0.3 to drop shorted/failed cells. "
+                    "Values are compared in the column's own units (Fill Factor is "
+                    "0-1, not 0-100).</p>"
+                ),
+                widgets.HBox(
+                    [
+                        self.filter_column_selector,
+                        self.filter_operator_selector,
+                        self.filter_value_input,
+                        self.add_filter_button,
+                    ]
+                ),
+                self.active_filters_box,
+                self.analysis_data_preview_accordion,
             ],
             layout={"padding": "20px"},
         )

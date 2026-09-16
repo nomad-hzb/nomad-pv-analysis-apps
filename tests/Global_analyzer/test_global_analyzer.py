@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import pytest
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, MeasurementRow, variation_warning
+from data_manager import DataManager, MeasurementRow, apply_row_filters, variation_warning
 from experimental_analysis import (
     compute_process_drift,
     detect_outliers,
@@ -282,6 +282,44 @@ def test_set_analysis_columns_defaults_new_columns_to_checked():
     assert gui.get_checked_metadata_columns() == ["m1", "m2"]
 
 
+def test_set_analysis_columns_populates_filter_column_dropdown():
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1", "r2"], ["m1"])
+    assert gui.filter_column_selector.options == ("m1", "r1", "r2")
+
+
+def test_render_active_filters_shows_placeholder_when_none_active():
+    gui = GUIManager()
+    gui.render_active_filters([], on_remove=lambda _fid: None)
+    assert len(gui.active_filters_box.children) == 1
+    assert "No filters active" in gui.active_filters_box.children[0].value
+
+
+def test_render_active_filters_renders_one_row_per_filter():
+    gui = GUIManager()
+    row_filters = [
+        {"id": 1, "column": "fill_factor", "op": ">=", "value": 0.3},
+        {"id": 2, "column": "voc", "op": "<", "value": 1.2},
+    ]
+    gui.render_active_filters(row_filters, on_remove=lambda _fid: None)
+    assert len(gui.active_filters_box.children) == 2
+
+
+def test_render_active_filters_remove_button_calls_on_remove_with_correct_id():
+    gui = GUIManager()
+    removed_ids = []
+    row_filters = [
+        {"id": 1, "column": "fill_factor", "op": ">=", "value": 0.3},
+        {"id": 2, "column": "voc", "op": "<", "value": 1.2},
+    ]
+    gui.render_active_filters(row_filters, on_remove=removed_ids.append)
+
+    remove_button = gui.active_filters_box.children[1].children[1]
+    remove_button.click()
+
+    assert removed_ids == [2]
+
+
 def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     dm = DataManager(data_loader=None, param_manager=ParameterManager())
 
@@ -447,6 +485,52 @@ def test_variation_warning_ignores_columns_not_in_df():
     flagged = variation_warning(df, ["a", "missing_col"], min_unique=6)
 
     assert flagged == []
+
+
+def test_apply_row_filters_no_filters_returns_all_rows():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [])
+
+    assert len(result) == 3
+
+
+def test_apply_row_filters_drops_rows_below_threshold():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
+
+    assert list(result["fill_factor"]) == [0.5, 0.9]
+
+
+def test_apply_row_filters_combines_multiple_filters_with_and():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9], "voc": [0.0, 1.0, 1.3]})
+
+    result = apply_row_filters(
+        df,
+        [
+            {"column": "fill_factor", "op": ">=", "value": 0.3},
+            {"column": "voc", "op": "<", "value": 1.2},
+        ],
+    )
+
+    assert list(result["fill_factor"]) == [0.5]
+
+
+def test_apply_row_filters_skips_filter_on_missing_column():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "not_a_column", "op": ">=", "value": 0.3}])
+
+    assert len(result) == 3
+
+
+def test_apply_row_filters_resets_index():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
+
+    assert list(result.index) == [0, 1]
 
 
 def test_variation_warning_empty_when_all_vary_enough():

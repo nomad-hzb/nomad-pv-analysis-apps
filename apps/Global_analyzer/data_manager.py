@@ -19,6 +19,7 @@ Author: HySprint Team
 """
 
 import logging
+import operator
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -31,12 +32,39 @@ from hysprint_utils.api_calls import get_all_eqe
 
 logger = logging.getLogger(__name__)
 
+_ROW_FILTER_OPS = {
+    ">=": operator.ge,
+    ">": operator.gt,
+    "<=": operator.le,
+    "<": operator.lt,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+
 
 def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
     """Return the subset of `columns` with fewer than min_unique distinct non-null
     values in df. Advisory only - never blocks a correlation/RF/BO computation,
     just flags columns unlikely to carry a useful signal."""
     return [col for col in columns if col in df.columns and df[col].dropna().nunique() < min_unique]
+
+
+def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame:
+    """Apply a list of {"column", "op", "value"} row filters (AND-combined, in
+    order) to df, e.g. to drop shorted/failed cells before Correlation/RF/BO
+    ever sees them. `op` is one of >=, >, <=, <, ==, !=; comparisons use the
+    column's own units/scale (Fill Factor is 0-1, not 0-100). A filter whose
+    column isn't present (e.g. the column was since unchecked or renamed) is
+    skipped rather than raising, so a stale filter can't break the analysis.
+    """
+    filtered = df
+    for row_filter in row_filters:
+        column = row_filter["column"]
+        if column not in filtered.columns:
+            continue
+        compare = _ROW_FILTER_OPS[row_filter["op"]]
+        filtered = filtered[compare(filtered[column], row_filter["value"])]
+    return filtered.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

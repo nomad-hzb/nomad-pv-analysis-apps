@@ -32,7 +32,7 @@ import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, variation_warning
+from data_manager import DataManager, apply_row_filters, variation_warning
 from gui_components import GUIManager
 from IPython.display import Markdown, clear_output
 from IPython.display import display as ipy_display
@@ -97,10 +97,17 @@ class SampleDataExplorer:
         self.processing_steps = []
         self.process_display_to_id = {}
 
-        # Shared analysis dataset (Analysis Data / Correlations / RF / BO tabs)
+        # Shared analysis dataset (Analysis Data / Correlations / RF / BO tabs).
+        # full_analysis_df is the complete merged dataset; analysis_df is the
+        # view every downstream tab actually reads, after row_filters are
+        # applied - keeping both means a filter can be removed without
+        # re-fetching or re-merging anything.
+        self.full_analysis_df = None
         self.analysis_df = None
         self.analysis_metadata_cols = []
         self.analysis_results_cols = []
+        self.row_filters: list = []  # [{"id", "column", "op", "value"}, ...]
+        self._next_filter_id = 1
         self._last_correlation_result = None
         self._last_rf_result = None
         self._last_bo_result = None
@@ -125,6 +132,7 @@ class SampleDataExplorer:
                 "run_random_forest": self._on_run_random_forest,
                 "suggest_experiments": self._on_suggest_experiments,
                 "recalculate_analysis_data": self._on_recalculate_analysis_data,
+                "add_row_filter": self._on_add_row_filter,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
                 "download_bo_suggestions": self._on_download_bo_suggestions,
@@ -272,7 +280,7 @@ class SampleDataExplorer:
         results_df = self._build_results_dataframe()
 
         if process_df is None or results_df is None:
-            self.analysis_df = None
+            self.full_analysis_df = None
             self.analysis_metadata_cols = []
             self.analysis_results_cols = []
         else:
@@ -282,7 +290,7 @@ class SampleDataExplorer:
             metadata_numeric = set(process_df.select_dtypes(include="number").columns)
             results_numeric = set(results_df.select_dtypes(include="number").columns)
 
-            self.analysis_df = combined
+            self.full_analysis_df = combined
             self.analysis_metadata_cols = [
                 col
                 for col in combined.select_dtypes(include="number").columns
@@ -295,7 +303,75 @@ class SampleDataExplorer:
             ]
 
         self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        self._apply_row_filters()
         self._refresh_variation_warning()
+
+    def _apply_row_filters(self):
+        """Apply the active Analysis Data row filters on top of the full merged
+        dataset, so self.analysis_df - what every downstream tab (Correlations,
+        Random Forest, Bayesian Optimization, Plotting, Experimental) actually
+        reads - only ever contains rows the user has chosen to keep. Filters
+        combine with AND; a filter referencing a column no longer present
+        (e.g. after unchecking it) is skipped rather than erroring."""
+        if self.full_analysis_df is None:
+            self.analysis_df = None
+        else:
+            self.analysis_df = apply_row_filters(self.full_analysis_df, self.row_filters)
+
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._render_analysis_data_preview()
+
+    def _render_analysis_data_preview(self):
+        """Render the exact rows/columns currently feeding Correlations/Random
+        Forest/Bayesian Optimization/Plotting/Experimental into the Analysis
+        Data tab's collapsible preview - so what an analysis actually used is
+        visible, not just trusted."""
+        with self.gui.analysis_data_preview_output:
+            clear_output(wait=True)
+            if self.analysis_df is None or self.analysis_df.empty:
+                print("No data available yet.")
+                return
+
+            checked_results_set = set(self.gui.get_checked_results_columns())
+            checked_metadata_set = set(self.gui.get_checked_metadata_columns())
+            preview_cols = (
+                ["sample_id"]
+                + [c for c in self.analysis_metadata_cols if c in checked_metadata_set]
+                + [c for c in self.analysis_results_cols if c in checked_results_set]
+            )
+            preview_cols = [c for c in preview_cols if c in self.analysis_df.columns]
+            preview_df = self.analysis_df[preview_cols]
+
+            n_total = len(self.full_analysis_df) if self.full_analysis_df is not None else 0
+            print(
+                f"{len(preview_df)} of {n_total} row(s) x {len(preview_cols)} column(s) "
+                "currently feeding the analysis:"
+            )
+            ipy_display(preview_df)
+
+    def _on_add_row_filter(self, button):
+        """Add one row filter (column/op/value from the Analysis Data tab's
+        filter controls) and immediately re-apply all filters."""
+        column = self.gui.filter_column_selector.value
+        if not column:
+            return
+        self.row_filters.append(
+            {
+                "id": self._next_filter_id,
+                "column": column,
+                "op": self.gui.filter_operator_selector.value,
+                "value": self.gui.filter_value_input.value,
+            }
+        )
+        self._next_filter_id += 1
+        self._apply_row_filters()
+        self._rerun_active_analyses()
+
+    def _on_remove_row_filter(self, filter_id):
+        """Drop one active row filter (by id) and re-apply the rest."""
+        self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
+        self._apply_row_filters()
+        self._rerun_active_analyses()
 
     def _refresh_variation_warning(self):
         """Show an advisory (never blocking) warning for checked metadata columns
@@ -339,6 +415,12 @@ class SampleDataExplorer:
                 f"{', '.join(checked_metadata) if checked_metadata else '(none checked)'}"
             )
 
+        self._rerun_active_analyses()
+
+    def _rerun_active_analyses(self):
+        """Re-run whichever of Correlations/RF/BO already produced a result, so
+        Recalculate and row-filter changes visibly update whatever the user
+        has open without requiring a trip back through each tab's own button."""
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)
         if self._last_rf_result is not None:
