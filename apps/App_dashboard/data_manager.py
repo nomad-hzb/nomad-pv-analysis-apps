@@ -168,13 +168,14 @@ CATEGORIES: dict[str, list[AppEntry]] = {
     ],
     # In-situ apps read the HDF5 files insitu_analyser writes to NOMAD. The previewer is the
     # usual way in and hands its selection to the others, but each of them also works on its
-    # own: opened from here they start on their own upload/sample/run selectors.
-    "µSlot-die coater": [
+    # own: opened from here they start on their own upload/sample/run selectors, and each one
+    # links back to the previewer's heatmaps.
+    "In-situ and GIWAXS Data Analysis": [
         AppEntry(
             "ISA_Previewer",
             "isa_previewer.ipynb",
             "ISA Previewer",
-            "Pick a NOMAD upload, sample and in-situ run, then step through its heatmaps, "
+            "Pick a NOMAD upload, sample and measurement, then step through its heatmaps, "
             "diffractograms and logging.",
             "fa-map",
         ),
@@ -182,7 +183,7 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "ISA_Previewer",
             "giwaxs_analysis.ipynb",
             "GIWAXS Analysis",
-            "Cuts and run-to-run comparison for the detector images of an in-situ run.",
+            "Cuts and run-to-run comparison for the GIWAXS detector images.",
             "fa-sun",
         ),
         AppEntry(
