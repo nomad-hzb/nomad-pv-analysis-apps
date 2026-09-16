@@ -41,7 +41,7 @@ from data_manager import (
     variation_warning,
 )
 from gui_components import GUIManager
-from IPython.display import Markdown, clear_output
+from IPython.display import HTML, Markdown, clear_output
 from IPython.display import display as ipy_display
 from natsort import natsorted
 from plot_manager import PlotManager
@@ -140,6 +140,7 @@ class SampleDataExplorer:
                 "suggest_experiments": self._on_suggest_experiments,
                 "recalculate_analysis_data": self._on_recalculate_analysis_data,
                 "add_row_filter": self._on_add_row_filter,
+                "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
                 "download_bo_suggestions": self._on_download_bo_suggestions,
@@ -343,33 +344,62 @@ class SampleDataExplorer:
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
 
+    def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
+        """The exact rows/columns currently feeding Correlations/Random Forest/
+        Bayesian Optimization/Plotting/Experimental - shared by the preview
+        table and its Download CSV button so both always show exactly the
+        same data. None if there's nothing loaded yet."""
+        if self.analysis_df is None or self.analysis_df.empty:
+            return None
+
+        checked_results_set = set(self.gui.get_checked_results_columns())
+        checked_metadata_set = set(self.gui.get_checked_metadata_columns())
+        preview_cols = (
+            ["sample_id"]
+            + [c for c in self.analysis_metadata_cols if c in checked_metadata_set]
+            + [c for c in self.analysis_results_cols if c in checked_results_set]
+        )
+        preview_cols = [c for c in preview_cols if c in self.analysis_df.columns]
+        return self.analysis_df[preview_cols]
+
     def _render_analysis_data_preview(self):
         """Render the exact rows/columns currently feeding Correlations/Random
         Forest/Bayesian Optimization/Plotting/Experimental into the Analysis
         Data tab's collapsible preview - so what an analysis actually used is
-        visible, not just trusted."""
+        visible, not just trusted. Rendered as a fixed-height div with
+        overflow:auto (not a bare display(df)) so a wide/tall table scrolls
+        in both directions inside its own box instead of stretching the
+        whole page, and to_html(max_rows=None) so every row shows regardless
+        of pandas' own default display.max_rows truncation."""
         with self.gui.analysis_data_preview_output:
             clear_output(wait=True)
-            if self.analysis_df is None or self.analysis_df.empty:
+            preview_df = self._get_analysis_data_preview_df()
+            if preview_df is None:
                 print("No data available yet.")
                 return
 
-            checked_results_set = set(self.gui.get_checked_results_columns())
-            checked_metadata_set = set(self.gui.get_checked_metadata_columns())
-            preview_cols = (
-                ["sample_id"]
-                + [c for c in self.analysis_metadata_cols if c in checked_metadata_set]
-                + [c for c in self.analysis_results_cols if c in checked_results_set]
-            )
-            preview_cols = [c for c in preview_cols if c in self.analysis_df.columns]
-            preview_df = self.analysis_df[preview_cols]
-
             n_total = len(self.full_analysis_df) if self.full_analysis_df is not None else 0
             print(
-                f"{len(preview_df)} of {n_total} row(s) x {len(preview_cols)} column(s) "
+                f"{len(preview_df)} of {n_total} row(s) x {len(preview_df.columns)} column(s) "
                 "currently feeding the analysis:"
             )
-            ipy_display(preview_df)
+            table_html = preview_df.to_html(index=False, max_rows=None, max_cols=None)
+            ipy_display(
+                HTML(
+                    f"<div style='max-height:500px; width:100%; overflow:auto;'>{table_html}</div>"
+                )
+            )
+
+    def _on_download_analysis_data_preview(self, button):
+        """Download exactly what the preview table above is showing, as CSV."""
+        with self.gui.analysis_data_preview_download_output:
+            clear_output()
+            preview_df = self._get_analysis_data_preview_df()
+            if preview_df is None:
+                print("No data available yet.")
+                return
+            filename = trigger_csv_download(preview_df, "analysis_data")
+            print(f"✓ Downloaded {filename}")
 
     def _on_add_row_filter(self, button):
         """Add one row filter (column/op/value from the Analysis Data tab's

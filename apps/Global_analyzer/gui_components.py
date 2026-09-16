@@ -326,9 +326,24 @@ class GUIManager:
         # ====================================================================
         # ANALYSIS DATA - DEBUG PREVIEW TABLE
         # ====================================================================
+        self.analysis_data_preview_download_button = widgets.Button(
+            description="Download CSV",
+            button_style="info",
+            icon="download",
+            layout={"width": "150px"},
+        )
+        self.analysis_data_preview_download_output = widgets.Output()
         self.analysis_data_preview_output = widgets.Output()
         self.analysis_data_preview_accordion = widgets.Accordion(
-            children=[self.analysis_data_preview_output],
+            children=[
+                widgets.VBox(
+                    [
+                        self.analysis_data_preview_download_button,
+                        self.analysis_data_preview_download_output,
+                        self.analysis_data_preview_output,
+                    ]
+                )
+            ],
             titles=("Show data used for analysis",),
         )
         self.analysis_data_preview_accordion.selected_index = None
@@ -697,6 +712,10 @@ class GUIManager:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
         if "add_row_filter" in callbacks:
             self.add_filter_button.on_click(callbacks["add_row_filter"])
+        if "download_analysis_data_preview" in callbacks:
+            self.analysis_data_preview_download_button.on_click(
+                callbacks["download_analysis_data_preview"]
+            )
         if "download_correlations" in callbacks:
             self.correlation_download_button.on_click(callbacks["download_correlations"])
         if "download_rf_results" in callbacks:
