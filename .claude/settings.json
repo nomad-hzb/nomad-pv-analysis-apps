@@ -83,10 +83,7 @@
       "Bash(python -m ruff format apps/Global_analyzer/app.py apps/Global_analyzer/gui_components.py apps/Global_analyzer/plot_manager.py apps/Global_analyzer/ml_analysis.py)",
       "Bash(python -m ruff check apps/Global_analyzer/app.py apps/Global_analyzer/gui_components.py apps/Global_analyzer/plot_manager.py apps/Global_analyzer/ml_analysis.py)",
       "Bash(python -m pytest tests/Global_analyzer/ -q)",
-      "Bash(python -m ruff check apps/Global_analyzer/ tests/Global_analyzer/)",
-      "Bash(gh pr *)",
-      "Bash(gh issue *)",
-      "Bash(gh release *)"
+      "Bash(python -m ruff check apps/Global_analyzer/ tests/Global_analyzer/)"
     ],
     "additionalDirectories": [
       "\\tmp"
