@@ -200,8 +200,10 @@ class DataManager:
             if data is not None and isinstance(data, dict) and data:
                 rows = []
                 for sample_id, measurements in data.items():
-                    if measurements and len(measurements) > 0:
-                        measurement_data = measurements[0][0]
+                    # A sample can have more than one entry of this measurement
+                    # type - keep all of them (issue #34), not just the first.
+                    for measurement_entry in measurements:
+                        measurement_data = measurement_entry[0].copy()
                         measurement_data["sample_id"] = sample_id
                         rows.append(measurement_data)
 
@@ -319,45 +321,54 @@ class DataManager:
                         for sample_id, measurements in data.items():
                             if not measurements or len(measurements) == 0:
                                 continue
-                            measurement_data = measurements[0][0]
+                            # A sample can have more than one entry of the same
+                            # measurement type (e.g. JV re-measured on a later
+                            # date, repeated MPPT tracking runs) - process every
+                            # entry, not just the first, so none are silently
+                            # dropped from the analysis (issue #34).
+                            for measurement_entry in measurements:
+                                measurement_data = measurement_entry[0]
 
-                            if data_key and data_key in measurement_data:
-                                extracted = measurement_data[data_key]
-                                # extracted may be a list of dicts (e.g. jv_curve) or a dict
-                                if isinstance(extracted, list) and extracted:
-                                    if isinstance(extracted[0], dict):
-                                        # Multiple sub-measurements (e.g. forward/reverse scan)
-                                        for sub in extracted:
-                                            row = sub.copy()
+                                if data_key and data_key in measurement_data:
+                                    extracted = measurement_data[data_key]
+                                    # extracted may be a list of dicts (e.g. jv_curve) or a dict
+                                    if isinstance(extracted, list) and extracted:
+                                        if isinstance(extracted[0], dict):
+                                            # Multiple sub-measurements (e.g. forward/reverse scan)
+                                            for sub in extracted:
+                                                row = sub.copy()
+                                                for field in top_level_fields:
+                                                    if (
+                                                        field in measurement_data
+                                                        and field not in row
+                                                    ):
+                                                        row[field] = measurement_data[field]
+                                                row["sample_id"] = sample_id
+                                                rows.append(row)
+                                        else:
+                                            row = {data_key: extracted}
                                             for field in top_level_fields:
-                                                if field in measurement_data and field not in row:
+                                                if field in measurement_data:
                                                     row[field] = measurement_data[field]
                                             row["sample_id"] = sample_id
                                             rows.append(row)
-                                    else:
-                                        row = {data_key: extracted}
+                                    elif isinstance(extracted, dict):
+                                        row = extracted.copy()
                                         for field in top_level_fields:
-                                            if field in measurement_data:
+                                            if field in measurement_data and field not in row:
                                                 row[field] = measurement_data[field]
                                         row["sample_id"] = sample_id
                                         rows.append(row)
-                                elif isinstance(extracted, dict):
-                                    row = extracted.copy()
-                                    for field in top_level_fields:
-                                        if field in measurement_data and field not in row:
-                                            row[field] = measurement_data[field]
-                                    row["sample_id"] = sample_id
-                                    rows.append(row)
+                                    else:
+                                        # Scalar or unexpected — fall back to top-level
+                                        row = measurement_data.copy()
+                                        row["sample_id"] = sample_id
+                                        rows.append(row)
                                 else:
-                                    # Scalar or unexpected — fall back to top-level
+                                    # No data_key — use top-level dict directly
                                     row = measurement_data.copy()
                                     row["sample_id"] = sample_id
                                     rows.append(row)
-                            else:
-                                # No data_key — use top-level dict directly
-                                row = measurement_data.copy()
-                                row["sample_id"] = sample_id
-                                rows.append(row)
 
                         if rows:
                             # Validate rows that match the MeasurementRow schema

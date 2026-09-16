@@ -320,6 +320,48 @@ def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     assert dm.current_metadata["spin_coating"].loc[0, "batch"] == "HZB_FiNa_1_3"
 
 
+def test_load_all_data_for_summary_keeps_every_entry_per_sample(monkeypatch):
+    """Regression test for issue #34: a sample re-measured more than once for
+    the same result type (e.g. JV measured on two different dates) must keep
+    every entry, not just the first."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.data_loader = type(
+        "FakeLoader",
+        (),
+        {
+            "url": "http://example.test",
+            "token": "token",
+            "load_inkjet_printing_data": staticmethod(lambda *a, **k: None),
+            "load_cleaning_data": staticmethod(lambda *a, **k: None),
+            "load_substrate_data": staticmethod(lambda *a, **k: None),
+            "load_evaporation_data": staticmethod(lambda *a, **k: None),
+            "load_slot_die_coating_data": staticmethod(lambda *a, **k: None),
+            "load_spin_coating_data": staticmethod(lambda *a, **k: None),
+            "load_ald_data": staticmethod(lambda *a, **k: None),
+            "load_blade_coating_data": staticmethod(lambda *a, **k: None),
+            "load_dip_coating_data": staticmethod(lambda *a, **k: None),
+            "load_laser_scribing_data": staticmethod(lambda *a, **k: None),
+            "load_annealing_data": staticmethod(lambda *a, **k: None),
+        },
+    )()
+
+    def fake_get_all_eqe(url, token, sample_ids, measurement_type):
+        if measurement_type != "HySprint_JVmeasurement":
+            return None
+        first_measurement = {"jv_curve": [{"fill_factor": 0.5}], "datetime": "2024-01-01"}
+        second_measurement = {"jv_curve": [{"fill_factor": 0.8}], "datetime": "2024-02-01"}
+        return {"S1": [(first_measurement, {}), (second_measurement, {})]}
+
+    monkeypatch.setattr("data_manager.get_all_eqe", fake_get_all_eqe, raising=False)
+
+    dm.load_all_data_for_summary(["S1"], {"S1": ""})
+
+    jv_df = dm.current_results["jv_measurement"]
+    assert len(jv_df) == 2
+    assert set(jv_df["fill_factor"]) == {0.5, 0.8}
+    assert (jv_df["sample_id"] == "S1").all()
+
+
 def test_get_uploads_path_derives_from_cwd(monkeypatch):
     monkeypatch.setattr(
         "os.getcwd",
