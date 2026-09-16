@@ -138,14 +138,18 @@ def build_notebook_url(link: config.AppLink, user: str) -> str:
     return f"{base}/{path}/{f'{folder}/' if folder else ''}{link.notebook}"
 
 
-def available_links(h5_path: str, user: str) -> list[tuple[str, str]]:
+def available_links(h5_path: str, user: str, exclude: str | None = None) -> list[tuple[str, str]]:
     """The (label, url) links worth offering for one h5, in config.LINK_ORDER.
 
-    Every variant offers every link; a link whose requires_h5_dataset is missing from this
-    file is dropped, since the notebook behind it would open on nothing.
+    A variant offers every link but its own (exclude, from Variant.link_key), since a link
+    that reopens the notebook it is shown in is only a way to lose the current selection. A
+    link whose requires_h5_dataset is missing from this file is dropped as well, since the
+    notebook behind it would open on nothing.
     """
     links = []
     for key in config.LINK_ORDER:
+        if key == exclude:
+            continue
         link = config.APP_LINKS[key]
         if link.requires_h5_dataset and not h5_has_dataset(h5_path, link.requires_h5_dataset):
             logger.debug("Link %s hidden: %s has no %s", key, h5_path, link.requires_h5_dataset)

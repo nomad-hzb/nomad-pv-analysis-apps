@@ -203,6 +203,7 @@ def test_available_links_drops_links_whose_dataset_is_missing(dm, cfg, monkeypat
     labels = [label for label, _url in dm.available_links("run.h5", "someone")]
 
     assert labels == [
+        cfg.APP_LINKS["heatmap_analysis"].label,
         cfg.APP_LINKS["thickness"].label,
         cfg.APP_LINKS["peak_analyzer"].label,
         cfg.APP_LINKS["timely_teller"].label,
@@ -216,6 +217,23 @@ def test_available_links_keeps_config_order(dm, cfg, monkeypatch):
     labels = [label for label, _url in dm.available_links("run.h5", "someone")]
 
     assert labels == [cfg.APP_LINKS[key].label for key in cfg.LINK_ORDER]
+
+
+def test_available_links_leaves_out_the_calling_notebooks_own_link(dm, cfg, monkeypatch):
+    """A link that reopens the notebook it is shown in only loses the current selection."""
+    monkeypatch.setattr(dm, "h5_has_dataset", lambda _path, _dataset: True)
+    monkeypatch.setattr(dm, "build_notebook_url", lambda link, _user: f"/url/{link.notebook}")
+
+    labels = [label for label, _url in dm.available_links("run.h5", "someone", "heatmap_analysis")]
+
+    assert cfg.APP_LINKS["heatmap_analysis"].label not in labels
+    assert cfg.APP_LINKS["optical_analysis"].label in labels
+
+
+def test_every_variant_names_a_real_link_key(cfg):
+    """A typo in Variant.link_key would silently stop excluding anything."""
+    for name, variant in cfg.VARIANTS.items():
+        assert variant.link_key in cfg.APP_LINKS, name
 
 
 # ---------------------------------------------------------------------------
@@ -349,11 +367,13 @@ def test_an_upload_variant_hands_no_file_on(gui, cfg, monkeypatch):
 def test_a_measurement_variant_stores_its_file_and_returns_the_links(gui, cfg, monkeypatch):
     stored = []
     monkeypatch.setattr(gui.data_manager, "store_for_linked_notebooks", lambda *a: stored.append(a))
-    monkeypatch.setattr(gui, "build_link_row", lambda path, user: f"links for {path}")
+    monkeypatch.setattr(
+        gui, "build_link_row", lambda path, user, exclude: f"links for {path} without {exclude}"
+    )
 
     row = gui.handover_row("/uploads/run/file.h5", "someone", 1200, cfg.VARIANTS["main"])
 
-    assert row == "links for /uploads/run/file.h5"
+    assert row == "links for /uploads/run/file.h5 without heatmap_analysis"
     assert stored == [("/uploads/run/file.h5", 1200)]
 
 

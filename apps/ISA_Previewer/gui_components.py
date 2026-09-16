@@ -251,7 +251,7 @@ def handover_row(
     if variant.selection == config.SELECTION_UPLOAD:
         return None
     data_manager.store_for_linked_notebooks(target, screenwidth)
-    return build_link_row(target, user)
+    return build_link_row(target, user, variant.link_key)
 
 
 def section_builders(source, variant: config.Variant) -> dict:
@@ -304,9 +304,12 @@ def overview_widgets(previewer: PERFECTPREVIEWER, variant: config.Variant) -> li
     return [built["giwaxs_content"], built["ui"], built["optical_content"]]
 
 
-def build_link_row(h5_path: str, user: str) -> widgets.Widget | None:
-    """The row of "open that other notebook" links this h5 qualifies for."""
-    links = data_manager.available_links(h5_path, user)
+def build_link_row(h5_path: str, user: str, exclude: str | None = None) -> widgets.Widget | None:
+    """The row of "open that other notebook" links this h5 qualifies for.
+
+    exclude is the calling variant's own link key, so a notebook does not link to itself.
+    """
+    links = data_manager.available_links(h5_path, user, exclude)
     if not links:
         return None
     html = " ".join(
