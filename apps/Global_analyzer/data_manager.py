@@ -19,6 +19,7 @@ Author: HySprint Team
 """
 
 import logging
+import operator
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -31,12 +32,139 @@ from hysprint_utils.api_calls import get_all_eqe
 
 logger = logging.getLogger(__name__)
 
+_ROW_FILTER_OPS = {
+    ">=": operator.ge,
+    ">": operator.gt,
+    "<=": operator.le,
+    "<": operator.lt,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+
+RESULTS_AGGREGATION_METHODS = {"Mean": "mean", "Median": "median", "Max": "max"}
+
 
 def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
     """Return the subset of `columns` with fewer than min_unique distinct non-null
     values in df. Advisory only - never blocks a correlation/RF/BO computation,
     just flags columns unlikely to carry a useful signal."""
     return [col for col in columns if col in df.columns and df[col].dropna().nunique() < min_unique]
+
+
+def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame:
+    """Apply a list of {"column", "op", "value"} row filters (AND-combined, in
+    order) to df, e.g. to drop shorted/failed cells before Correlation/RF/BO
+    ever sees them. `op` is one of >=, >, <=, <, ==, !=; comparisons use the
+    column's own units/scale (Fill Factor is 0-1, not 0-100). A filter whose
+    column isn't present (e.g. the column was since unchecked or renamed) is
+    skipped rather than raising, so a stale filter can't break the analysis.
+    """
+    filtered = df
+    for row_filter in row_filters:
+        column = row_filter["column"]
+        if column not in filtered.columns:
+            continue
+        compare = _ROW_FILTER_OPS[row_filter["op"]]
+        filtered = filtered[compare(filtered[column], row_filter["value"])]
+    return filtered.reset_index(drop=True)
+
+
+def exclude_samples(df: pd.DataFrame, excluded_sample_ids) -> pd.DataFrame:
+    """Drop every row belonging to any sample_id in excluded_sample_ids.
+
+    Unlike apply_row_filters (which excludes rows by a value threshold on
+    some column, e.g. "Fill Factor >= 0.3"), this excludes by sample
+    identity regardless of measured values - for a sample known to be bad
+    (contaminated, mislabeled, broke during handling) that should be out of
+    every calculation entirely, not just when its numbers happen to look
+    off.
+    """
+    if not excluded_sample_ids:
+        return df
+    return df[~df["sample_id"].isin(excluded_sample_ids)].reset_index(drop=True)
+
+
+def get_layer_type_options(metadata_dict: Dict[str, pd.DataFrame]) -> Dict[str, List[str]]:
+    """For each metadata source with a 'layer_type' column and more than one
+    distinct value (e.g. Spin Coating logging one row per fabrication layer -
+    ETL, Active Layer, HTL, Interlayer, ...), return its sorted list of
+    distinct layer_type values. A source with a single (or no) layer_type
+    needs no selection and is omitted - most process steps never produce more
+    than one row per sample_id in the first place."""
+    options: Dict[str, List[str]] = {}
+    for metadata_type, df in metadata_dict.items():
+        if df is None or df.empty or "layer_type" not in df.columns:
+            continue
+        values = sorted(v for v in df["layer_type"].dropna().unique())
+        if len(values) > 1:
+            options[metadata_type] = values
+    return options
+
+
+def select_layer_row_per_sample(df: pd.DataFrame, layer_type: Optional[str]) -> pd.DataFrame:
+    """Restrict a metadata dataframe to the rows for one layer_type, so a
+    source that logs multiple layers per sample_id (Spin Coating: ETL,
+    Active Layer, HTL, ...) contributes at most one row per sample to the
+    merged Analysis Data table - without this, a sample's single averaged
+    result gets joined against every one of its layers' metadata rows,
+    duplicating it under unrelated layers' parameters.
+
+    A dataframe with no 'layer_type' column, or already at most one distinct
+    layer_type, passes through unchanged (nothing to select between).
+    """
+    if "layer_type" not in df.columns or df["layer_type"].nunique(dropna=True) <= 1:
+        return df
+    return df[df["layer_type"] == layer_type]
+
+
+def get_categorical_columns(df: pd.DataFrame, exclude: Optional[List[str]] = None) -> List[str]:
+    """Object-dtype columns of df with more than one but fewer than len(df)
+    distinct values - real grouping variables, not identifiers (all-unique)
+    or constants (all-same). Used to populate ANOVA's grouping selector from
+    whatever's actually in the merged Analysis Data table.
+
+    A column holding unhashable values (e.g. raw JV voltage/current_density
+    curve arrays, which pass through as their own columns unaggregated when
+    "All Points" is the chosen results-aggregation method) is skipped rather
+    than raising - it can't be a grouping variable regardless.
+    """
+    exclude = set(exclude) if exclude else {"sample_id"}
+    n_rows = len(df)
+    categorical_cols = []
+    for col in df.select_dtypes(include="object").columns:
+        if col in exclude:
+            continue
+        try:
+            n_unique = df[col].nunique()
+        except TypeError:
+            continue
+        if 2 <= n_unique < n_rows:
+            categorical_cols.append(col)
+    return sorted(categorical_cols)
+
+
+def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.DataFrame:
+    """Collapse a results dataframe with possibly multiple rows per sample_id
+    (e.g. one row per measured JV pixel) down to one row per sample_id, using
+    the chosen method (see RESULTS_AGGREGATION_METHODS) across numeric
+    columns. 'datetime' (if present) is always carried through as the first
+    non-null value regardless of method, since averaging/maxing a timestamp
+    isn't meaningful.
+
+    method="All Points" passes df through unchanged instead of collapsing -
+    every real measurement (e.g. every JV pixel) keeps its own row, at the
+    cost of pseudo-replication: those rows share the same process metadata
+    once merged, so they're not independent observations of the process
+    itself, only of pixel-to-pixel device variation under it.
+    """
+    if method == "All Points":
+        return df
+    agg_func = RESULTS_AGGREGATION_METHODS.get(method, "mean")
+    grouped = getattr(df.groupby("sample_id", as_index=False), agg_func)(numeric_only=True)
+    if "datetime" in df.columns:
+        first_datetime = df.groupby("sample_id", as_index=False)["datetime"].first()
+        grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +328,10 @@ class DataManager:
             if data is not None and isinstance(data, dict) and data:
                 rows = []
                 for sample_id, measurements in data.items():
-                    if measurements and len(measurements) > 0:
-                        measurement_data = measurements[0][0]
+                    # A sample can have more than one entry of this measurement
+                    # type - keep all of them (issue #34), not just the first.
+                    for measurement_entry in measurements:
+                        measurement_data = measurement_entry[0].copy()
                         measurement_data["sample_id"] = sample_id
                         rows.append(measurement_data)
 
@@ -319,45 +449,54 @@ class DataManager:
                         for sample_id, measurements in data.items():
                             if not measurements or len(measurements) == 0:
                                 continue
-                            measurement_data = measurements[0][0]
+                            # A sample can have more than one entry of the same
+                            # measurement type (e.g. JV re-measured on a later
+                            # date, repeated MPPT tracking runs) - process every
+                            # entry, not just the first, so none are silently
+                            # dropped from the analysis (issue #34).
+                            for measurement_entry in measurements:
+                                measurement_data = measurement_entry[0]
 
-                            if data_key and data_key in measurement_data:
-                                extracted = measurement_data[data_key]
-                                # extracted may be a list of dicts (e.g. jv_curve) or a dict
-                                if isinstance(extracted, list) and extracted:
-                                    if isinstance(extracted[0], dict):
-                                        # Multiple sub-measurements (e.g. forward/reverse scan)
-                                        for sub in extracted:
-                                            row = sub.copy()
+                                if data_key and data_key in measurement_data:
+                                    extracted = measurement_data[data_key]
+                                    # extracted may be a list of dicts (e.g. jv_curve) or a dict
+                                    if isinstance(extracted, list) and extracted:
+                                        if isinstance(extracted[0], dict):
+                                            # Multiple sub-measurements (e.g. forward/reverse scan)
+                                            for sub in extracted:
+                                                row = sub.copy()
+                                                for field in top_level_fields:
+                                                    if (
+                                                        field in measurement_data
+                                                        and field not in row
+                                                    ):
+                                                        row[field] = measurement_data[field]
+                                                row["sample_id"] = sample_id
+                                                rows.append(row)
+                                        else:
+                                            row = {data_key: extracted}
                                             for field in top_level_fields:
-                                                if field in measurement_data and field not in row:
+                                                if field in measurement_data:
                                                     row[field] = measurement_data[field]
                                             row["sample_id"] = sample_id
                                             rows.append(row)
-                                    else:
-                                        row = {data_key: extracted}
+                                    elif isinstance(extracted, dict):
+                                        row = extracted.copy()
                                         for field in top_level_fields:
-                                            if field in measurement_data:
+                                            if field in measurement_data and field not in row:
                                                 row[field] = measurement_data[field]
                                         row["sample_id"] = sample_id
                                         rows.append(row)
-                                elif isinstance(extracted, dict):
-                                    row = extracted.copy()
-                                    for field in top_level_fields:
-                                        if field in measurement_data and field not in row:
-                                            row[field] = measurement_data[field]
-                                    row["sample_id"] = sample_id
-                                    rows.append(row)
+                                    else:
+                                        # Scalar or unexpected — fall back to top-level
+                                        row = measurement_data.copy()
+                                        row["sample_id"] = sample_id
+                                        rows.append(row)
                                 else:
-                                    # Scalar or unexpected — fall back to top-level
+                                    # No data_key — use top-level dict directly
                                     row = measurement_data.copy()
                                     row["sample_id"] = sample_id
                                     rows.append(row)
-                            else:
-                                # No data_key — use top-level dict directly
-                                row = measurement_data.copy()
-                                row["sample_id"] = sample_id
-                                rows.append(row)
 
                         if rows:
                             # Validate rows that match the MeasurementRow schema
@@ -888,7 +1027,12 @@ class DataManager:
             "",
         ]
 
-        exclude_cols = self.COMMON_COLUMNS[:8]
+        # "batch" (added in load_all_data_for_summary via extract_subbatch) is a
+        # derived subbatch label, not a real process parameter - it's a string
+        # column, so it never feeds Correlation/RF/BO anyway (those only look at
+        # numeric columns), and listing it here just adds noise when a load
+        # spans more than one subbatch.
+        exclude_cols = [*self.COMMON_COLUMNS[:8], "batch"]
 
         # Process each metadata source
         for measurement_type, metadata_df in self.current_metadata.items():

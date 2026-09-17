@@ -32,9 +32,18 @@ import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, variation_warning
+from data_manager import (
+    DataManager,
+    aggregate_results_per_sample,
+    apply_row_filters,
+    exclude_samples,
+    get_categorical_columns,
+    get_layer_type_options,
+    select_layer_row_per_sample,
+    variation_warning,
+)
 from gui_components import GUIManager
-from IPython.display import Markdown, clear_output
+from IPython.display import HTML, Markdown, clear_output
 from IPython.display import display as ipy_display
 from natsort import natsorted
 from plot_manager import PlotManager
@@ -97,10 +106,17 @@ class SampleDataExplorer:
         self.processing_steps = []
         self.process_display_to_id = {}
 
-        # Shared analysis dataset (Analysis Data / Correlations / RF / BO tabs)
+        # Shared analysis dataset (Analysis Data / Correlations / RF / BO tabs).
+        # full_analysis_df is the complete merged dataset; analysis_df is the
+        # view every downstream tab actually reads, after row_filters are
+        # applied - keeping both means a filter can be removed without
+        # re-fetching or re-merging anything.
+        self.full_analysis_df = None
         self.analysis_df = None
         self.analysis_metadata_cols = []
         self.analysis_results_cols = []
+        self.row_filters: list = []  # [{"id", "column", "op", "value"}, ...]
+        self._next_filter_id = 1
         self._last_correlation_result = None
         self._last_rf_result = None
         self._last_bo_result = None
@@ -125,6 +141,8 @@ class SampleDataExplorer:
                 "run_random_forest": self._on_run_random_forest,
                 "suggest_experiments": self._on_suggest_experiments,
                 "recalculate_analysis_data": self._on_recalculate_analysis_data,
+                "add_row_filter": self._on_add_row_filter,
+                "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
                 "download_bo_suggestions": self._on_download_bo_suggestions,
@@ -186,6 +204,13 @@ class SampleDataExplorer:
         """Outer-merge every process/preparation metadata type currently loaded
         (data_manager.current_metadata) into one row-per-sample_id dataframe.
 
+        A source that logs one row per fabrication layer per sample (Spin
+        Coating: ETL, Active Layer, HTL, ...) is first cut down to the single
+        layer_type the user picked in the Analysis Data tab's Layer Selection
+        controls - otherwise a sample's one result would get joined against
+        every one of its layers' rows, duplicating it under unrelated layers'
+        parameters (issue #34 follow-up).
+
         Deliberately independent of data_manager.merged_data / the Plotting tab's
         X/Y/Color selections - a common plotting workflow (e.g. Voc vs efficiency,
         both "Results") never selects a metadata data source for any axis, which
@@ -197,9 +222,15 @@ class SampleDataExplorer:
         if not self.data_manager.current_metadata:
             return None
 
+        layer_selections = self.gui.get_layer_selections()
         process_df = None
         for metadata_type, metadata_df in self.data_manager.current_metadata.items():
             if metadata_df is None or metadata_df.empty or "sample_id" not in metadata_df.columns:
+                continue
+            metadata_df = select_layer_row_per_sample(
+                metadata_df, layer_selections.get(metadata_type)
+            )
+            if metadata_df.empty:
                 continue
             if process_df is None:
                 process_df = metadata_df.copy()
@@ -222,18 +253,23 @@ class SampleDataExplorer:
         """Outer-merge every measurement result type currently loaded
         (data_manager.current_results) into one row-per-sample_id dataframe,
         analogous to _build_process_dataframe but for results. Multiple rows per
-        sample_id within a single result type (e.g. multiple pixels) are averaged
-        first, matching _get_target_series's per-target averaging.
+        sample_id within a single result type (e.g. multiple JV pixels) are
+        collapsed to one via the Analysis Data tab's chosen aggregation method
+        (Mean/Median/Max) - unlike the process-metadata side, these really are
+        repeated measurements of the same thing, so aggregating (not selecting
+        one) is the right operation.
 
         Also carries the first non-null 'datetime' per sample_id through
-        (dropped by the numeric-only mean otherwise) - measurement results
-        commonly have a timestamp (see the "top_level_fields" list results are
-        loaded with), and it's the Experimental tab's Process Drift tool's only
-        source for one, since not every process-metadata loader captures it.
+        (dropped by the numeric-only aggregation otherwise) - measurement
+        results commonly have a timestamp (see the "top_level_fields" list
+        results are loaded with), and it's the Experimental tab's Process
+        Drift tool's only source for one, since not every process-metadata
+        loader captures it.
         """
         if not self.data_manager.current_results:
             return None
 
+        aggregation_method = self.gui.results_aggregation_selector.value
         results_df = None
         for result_type, result_type_df in self.data_manager.current_results.items():
             if (
@@ -242,12 +278,7 @@ class SampleDataExplorer:
                 or "sample_id" not in result_type_df.columns
             ):
                 continue
-            grouped = result_type_df.groupby("sample_id", as_index=False).mean(numeric_only=True)
-            if "datetime" in result_type_df.columns:
-                first_datetime = result_type_df.groupby("sample_id", as_index=False)[
-                    "datetime"
-                ].first()
-                grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
+            grouped = aggregate_results_per_sample(result_type_df, aggregation_method)
             if results_df is None:
                 results_df = grouped
             else:
@@ -268,11 +299,13 @@ class SampleDataExplorer:
         checked-by-default Results/Process Metadata column lists shown in the
         Analysis Data tab's checkboxes, and refreshes the variation-count warning.
         """
+        self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
+
         process_df = self._build_process_dataframe()
         results_df = self._build_results_dataframe()
 
         if process_df is None or results_df is None:
-            self.analysis_df = None
+            self.full_analysis_df = None
             self.analysis_metadata_cols = []
             self.analysis_results_cols = []
         else:
@@ -282,7 +315,7 @@ class SampleDataExplorer:
             metadata_numeric = set(process_df.select_dtypes(include="number").columns)
             results_numeric = set(results_df.select_dtypes(include="number").columns)
 
-            self.analysis_df = combined
+            self.full_analysis_df = combined
             self.analysis_metadata_cols = [
                 col
                 for col in combined.select_dtypes(include="number").columns
@@ -295,7 +328,120 @@ class SampleDataExplorer:
             ]
 
         self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        sample_ids = (
+            sorted(self.full_analysis_df["sample_id"].unique())
+            if self.full_analysis_df is not None
+            else []
+        )
+        self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._apply_filters()
         self._refresh_variation_warning()
+
+    def _apply_filters(self):
+        """Apply the active Analysis Data row filters and sample exclusions on
+        top of the full merged dataset, so self.analysis_df - what every
+        downstream tab (Correlations, Random Forest, Bayesian Optimization,
+        Experimental) actually reads - only ever contains rows the user has
+        chosen to keep. Row filters combine with AND; a filter referencing a
+        column no longer present (e.g. after unchecking it) is skipped rather
+        than erroring."""
+        if self.full_analysis_df is None:
+            self.analysis_df = None
+        else:
+            filtered = apply_row_filters(self.full_analysis_df, self.row_filters)
+            filtered = exclude_samples(filtered, self.gui.get_excluded_sample_ids())
+            self.analysis_df = filtered
+
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._render_analysis_data_preview()
+
+    def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
+        """The exact rows/columns currently feeding Correlations/Random Forest/
+        Bayesian Optimization/Experimental - shared by the preview table and
+        its Download CSV button so both always show exactly the same data.
+        None if there's nothing loaded yet."""
+        if self.analysis_df is None or self.analysis_df.empty:
+            return None
+
+        checked_results_set = set(self.gui.get_checked_results_columns())
+        checked_metadata_set = set(self.gui.get_checked_metadata_columns())
+        preview_cols = (
+            ["sample_id"]
+            + [c for c in self.analysis_metadata_cols if c in checked_metadata_set]
+            + [c for c in self.analysis_results_cols if c in checked_results_set]
+        )
+        preview_cols = [c for c in preview_cols if c in self.analysis_df.columns]
+        return self.analysis_df[preview_cols]
+
+    def _render_analysis_data_preview(self):
+        """Render the exact rows/columns currently feeding Correlations/Random
+        Forest/Bayesian Optimization/Plotting/Experimental into the Analysis
+        Data tab's collapsible preview - so what an analysis actually used is
+        visible, not just trusted. Rendered as a fixed-height div with
+        overflow:auto (not a bare display(df)) so a wide/tall table scrolls
+        in both directions inside its own box instead of stretching the
+        whole page, and to_html(max_rows=None) so every row shows regardless
+        of pandas' own default display.max_rows truncation."""
+        with self.gui.analysis_data_preview_output:
+            clear_output(wait=True)
+            preview_df = self._get_analysis_data_preview_df()
+            if preview_df is None:
+                print("No data available yet.")
+                return
+
+            n_total = len(self.full_analysis_df) if self.full_analysis_df is not None else 0
+            print(
+                f"{len(preview_df)} of {n_total} row(s) x {len(preview_df.columns)} column(s) "
+                "currently feeding the analysis:"
+            )
+            table_html = preview_df.to_html(index=False, max_rows=None, max_cols=None)
+            ipy_display(
+                HTML(
+                    f"<div style='max-height:500px; width:100%; overflow:auto;'>{table_html}</div>"
+                )
+            )
+
+    def _on_download_analysis_data_preview(self, button):
+        """Download exactly what the preview table above is showing, as CSV."""
+        with self.gui.analysis_data_preview_download_output:
+            clear_output()
+            preview_df = self._get_analysis_data_preview_df()
+            if preview_df is None:
+                print("No data available yet.")
+                return
+            filename = trigger_csv_download(preview_df, "analysis_data")
+            print(f"✓ Downloaded {filename}")
+
+    def _on_add_row_filter(self, button):
+        """Add one row filter (column/op/value from the Analysis Data tab's
+        filter controls) and immediately re-apply all filters."""
+        column = self.gui.filter_column_selector.value
+        if not column:
+            return
+        self.row_filters.append(
+            {
+                "id": self._next_filter_id,
+                "column": column,
+                "op": self.gui.filter_operator_selector.value,
+                "value": self.gui.filter_value_input.value,
+            }
+        )
+        self._next_filter_id += 1
+        self._apply_filters()
+        self._rerun_active_analyses()
+
+    def _on_remove_row_filter(self, filter_id):
+        """Drop one active row filter (by id) and re-apply the rest."""
+        self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
+        self._apply_filters()
+        self._rerun_active_analyses()
+
+    def _on_sample_exclusion_toggled(self, change):
+        """A sample's checkbox in "Exclude specific samples" was checked or
+        unchecked - re-apply immediately (no separate Recalculate needed) and
+        re-run whichever of Correlations/RF/BO is already showing a result."""
+        self._apply_filters()
+        self._rerun_active_analyses()
 
     def _refresh_variation_warning(self):
         """Show an advisory (never blocking) warning for checked metadata columns
@@ -339,6 +485,12 @@ class SampleDataExplorer:
                 f"{', '.join(checked_metadata) if checked_metadata else '(none checked)'}"
             )
 
+        self._rerun_active_analyses()
+
+    def _rerun_active_analyses(self):
+        """Re-run whichever of Correlations/RF/BO already produced a result, so
+        Recalculate and row-filter changes visibly update whatever the user
+        has open without requiring a trip back through each tab's own button."""
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)
         if self._last_rf_result is not None:
@@ -1492,16 +1644,9 @@ class SampleDataExplorer:
         if metadata_cols:
             selector.value = prev if prev in metadata_cols else metadata_cols[0]
 
-        categorical_cols = []
-        if self.analysis_df is not None:
-            # Exclude sample_id and anything else that's unique per row - not a
-            # real grouping variable, just an identifier.
-            n_rows = len(self.analysis_df)
-            categorical_cols = sorted(
-                col
-                for col in self.analysis_df.select_dtypes(include="object").columns
-                if col != "sample_id" and 2 <= self.analysis_df[col].nunique() < n_rows
-            )
+        categorical_cols = (
+            get_categorical_columns(self.analysis_df) if self.analysis_df is not None else []
+        )
         selector = self.gui.experimental_anova_group_selector
         prev = selector.value
         selector.options = categorical_cols

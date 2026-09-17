@@ -248,6 +248,21 @@ class GUIManager:
         # ====================================================================
         # ANALYSIS DATA (shared by Correlations / Random Forest / Bayesian Optimization)
         # ====================================================================
+        # One Dropdown per multi-layer metadata source (e.g. Spin Coating logs
+        # one row per fabrication layer - ETL, Active Layer, HTL, ...) so the
+        # merged Analysis Data table uses only the picked layer's row per
+        # sample. Rebuilt by set_layer_selectors(); empty when no loaded
+        # source has more than one layer_type.
+        self.layer_selector_box = widgets.VBox()
+
+        self.results_aggregation_selector = widgets.Dropdown(
+            options=["All Points", "Mean", "Median", "Max"],
+            value="All Points",
+            description="Aggregate pixels via:",
+            style={"description_width": "140px"},
+            layout={"width": "300px"},
+        )
+
         self.results_checklist_box = widgets.VBox(
             layout={
                 "max_height": "220px",
@@ -272,6 +287,83 @@ class GUIManager:
         )
         self.variation_warning_output = widgets.Output()
         self.analysis_data_status_output = widgets.Output()
+
+        # ====================================================================
+        # ANALYSIS DATA - ROW FILTERS (e.g. "Fill Factor (JV) >= 0.3")
+        # ====================================================================
+        self.filter_column_selector = widgets.Dropdown(
+            description="Column:",
+            style={"description_width": "60px"},
+            layout={"width": "300px"},
+        )
+        self.filter_operator_selector = widgets.Dropdown(
+            options=[">=", ">", "<=", "<", "==", "!="],
+            value=">=",
+            description="Op:",
+            style={"description_width": "40px"},
+            layout={"width": "110px"},
+        )
+        self.filter_value_input = widgets.FloatText(
+            description="Value:",
+            style={"description_width": "50px"},
+            layout={"width": "160px"},
+        )
+        self.add_filter_button = widgets.Button(
+            description="Add Filter",
+            button_style="warning",
+            icon="filter",
+            layout={"width": "140px"},
+        )
+        self.active_filters_box = widgets.VBox(
+            layout={
+                "border": "1px solid #ddd",
+                "padding": "6px",
+                "min_height": "34px",
+                "margin_top": "6px",
+            }
+        )
+
+        # ====================================================================
+        # ANALYSIS DATA - EXCLUDE SPECIFIC SAMPLES (by identity, not by value)
+        # ====================================================================
+        self.sample_exclusion_checklist_box = widgets.VBox(
+            layout={
+                "max_height": "220px",
+                "overflow_y": "auto",
+                "border": "1px solid #ddd",
+                "padding": "4px",
+            }
+        )
+        self.sample_exclusion_accordion = widgets.Accordion(
+            children=[self.sample_exclusion_checklist_box],
+            titles=("Exclude specific samples",),
+        )
+        self.sample_exclusion_accordion.selected_index = None
+
+        # ====================================================================
+        # ANALYSIS DATA - DEBUG PREVIEW TABLE
+        # ====================================================================
+        self.analysis_data_preview_download_button = widgets.Button(
+            description="Download CSV",
+            button_style="info",
+            icon="download",
+            layout={"width": "150px"},
+        )
+        self.analysis_data_preview_download_output = widgets.Output()
+        self.analysis_data_preview_output = widgets.Output()
+        self.analysis_data_preview_accordion = widgets.Accordion(
+            children=[
+                widgets.VBox(
+                    [
+                        self.analysis_data_preview_download_button,
+                        self.analysis_data_preview_download_output,
+                        self.analysis_data_preview_output,
+                    ]
+                )
+            ],
+            titles=("Show data used for analysis",),
+        )
+        self.analysis_data_preview_accordion.selected_index = None
 
         # ====================================================================
         # CORRELATION MATRIX
@@ -635,6 +727,12 @@ class GUIManager:
             self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
         if "recalculate_analysis_data" in callbacks:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
+        if "add_row_filter" in callbacks:
+            self.add_filter_button.on_click(callbacks["add_row_filter"])
+        if "download_analysis_data_preview" in callbacks:
+            self.analysis_data_preview_download_button.on_click(
+                callbacks["download_analysis_data_preview"]
+            )
         if "download_correlations" in callbacks:
             self.correlation_download_button.on_click(callbacks["download_correlations"])
         if "download_rf_results" in callbacks:
@@ -653,6 +751,33 @@ class GUIManager:
             self.experimental_drift_run_button.on_click(callbacks["compute_process_drift"])
         if "run_anova" in callbacks:
             self.experimental_anova_run_button.on_click(callbacks["run_anova"])
+
+    def set_layer_selectors(self, layer_options: dict) -> None:
+        """(Re)build the Layer Selection dropdowns, one per metadata source
+        that logs more than one row per sample (keyed by layer_type, e.g.
+        Spin Coating's ETL/Active Layer/HTL/...). A source already reduced to
+        the previous choice keeps it if still valid; a new source defaults to
+        its first (alphabetical) layer_type. Empty input renders no dropdowns
+        - nothing needs picking when no loaded source has multiple layers.
+        """
+        previous = {dd.description: dd.value for dd in self.layer_selector_box.children}
+        self.layer_selector_box.children = [
+            widgets.Dropdown(
+                description=metadata_type,
+                options=values,
+                value=previous.get(metadata_type)
+                if previous.get(metadata_type) in values
+                else values[0],
+                style={"description_width": "160px"},
+                layout={"width": "400px"},
+            )
+            for metadata_type, values in layer_options.items()
+        ]
+
+    def get_layer_selections(self) -> dict:
+        """{metadata_type: chosen layer_type} for every source with more than
+        one layer_type loaded - see set_layer_selectors."""
+        return {dd.description: dd.value for dd in self.layer_selector_box.children}
 
     def set_analysis_columns(self, results_cols: list, metadata_cols: list):
         """(Re)build the Results / Process Metadata checkbox lists on the Analysis
@@ -678,6 +803,14 @@ class GUIManager:
             for col in metadata_cols
         ]
 
+        previous_filter_column = self.filter_column_selector.value
+        filter_options = sorted(set(results_cols) | set(metadata_cols))
+        self.filter_column_selector.options = filter_options
+        if previous_filter_column in filter_options:
+            self.filter_column_selector.value = previous_filter_column
+        elif filter_options:
+            self.filter_column_selector.value = filter_options[0]
+
     def get_checked_results_columns(self) -> list:
         """Column names currently checked in the Results checklist."""
         return [cb.description for cb in self.results_checklist_box.children if cb.value]
@@ -685,6 +818,67 @@ class GUIManager:
     def get_checked_metadata_columns(self) -> list:
         """Column names currently checked in the Process Metadata checklist."""
         return [cb.description for cb in self.metadata_checklist_box.children if cb.value]
+
+    def render_active_filters(self, row_filters: list, on_remove) -> None:
+        """(Re)build the Analysis Data tab's active-filters list, one row per
+        filter (e.g. "Fill Factor (JV) >= 0.3") with its own Remove button.
+
+        Args:
+            row_filters: list of {"id", "column", "op", "value"} dicts.
+            on_remove: callable(filter_id) invoked when a filter's Remove button
+                is clicked - owns actually dropping it and recalculating.
+        """
+        if not row_filters:
+            self.active_filters_box.children = [
+                widgets.HTML(
+                    "<span style='color:#888;'>No filters active - all rows are used.</span>"
+                )
+            ]
+            return
+
+        rows = []
+        for row_filter in row_filters:
+            label = widgets.HTML(
+                f"<code>{row_filter['column']} {row_filter['op']} {row_filter['value']:g}</code>"
+            )
+            remove_button = widgets.Button(
+                description="Remove", icon="times", button_style="danger", layout={"width": "90px"}
+            )
+            remove_button.on_click(lambda _b, fid=row_filter["id"]: on_remove(fid))
+            rows.append(widgets.HBox([label, remove_button]))
+        self.active_filters_box.children = rows
+
+    def set_sample_exclusion_checklist(self, sample_ids: list, on_toggle) -> None:
+        """(Re)build the "Exclude specific samples" checkbox list, all checked
+        (included) by default. A sample already unchecked (excluded) keeps
+        that state across a rebuild, matching set_analysis_columns' preserve-
+        or-default pattern - so a batch reload or layer-selection change
+        doesn't silently bring an excluded sample back.
+
+        Args:
+            sample_ids: every sample_id currently in the full (unfiltered)
+                analysis dataset.
+            on_toggle: observe callback (per checkbox, on the "value" trait)
+                invoked immediately on every check/uncheck - owns re-applying
+                the exclusion and refreshing the preview/analyses, so
+                unchecking a sample takes effect without a separate
+                Recalculate click.
+        """
+        previous = {cb.description: cb.value for cb in self.sample_exclusion_checklist_box.children}
+        checkboxes = []
+        for sample_id in sample_ids:
+            checkbox = widgets.Checkbox(
+                value=previous.get(sample_id, True), description=sample_id, indent=False
+            )
+            checkbox.observe(on_toggle, names="value")
+            checkboxes.append(checkbox)
+        self.sample_exclusion_checklist_box.children = checkboxes
+
+    def get_excluded_sample_ids(self) -> set:
+        """sample_ids currently unchecked in the "Exclude specific samples" list."""
+        return {
+            cb.description for cb in self.sample_exclusion_checklist_box.children if not cb.value
+        }
 
     def setup_batch_selection(self, url, token, load_data_function):
         """
@@ -833,12 +1027,31 @@ class GUIManager:
             [
                 widgets.HTML(
                     "<p style='color:#666;'>This is the full dataset loaded on the Parameter "
-                    "Summary/Plotting tabs (independent of what's currently selected there), "
-                    "and it feeds Correlations, Random Forest, and Bayesian Optimization. "
-                    "<b>Targets are always measurement results; supporting variables are "
-                    "always process metadata.</b> Uncheck any column you want excluded from "
-                    "all three, then click Recalculate.</p>"
+                    "Summary/Plotting tabs (independent of what's currently selected there). "
+                    "<b>This tab, Correlations, Random Forest, Bayesian Optimization, and "
+                    "Experimental (marked \U0001f517 in their tab titles) all read the exact "
+                    "same filtered dataset built here</b> - a column you uncheck, a row filter "
+                    "or sample exclusion you set, or a layer/aggregation choice you make below "
+                    "affects all five at once. Plotting and Parameter Summary are separate and "
+                    "unaffected. <b>Targets are always measurement results; supporting "
+                    "variables are always process metadata.</b> Uncheck any column you want "
+                    "excluded from all five, then click Recalculate.</p>"
                 ),
+                widgets.HTML(
+                    "<h4 style='color:#666;'>Layer selection</h4>"
+                    "<p style='color:#666;'>A process step logged once per fabrication layer "
+                    "(e.g. Spin Coating: ETL, Active Layer, HTL, ...) contributes one row per "
+                    "sample per layer - pick which layer's row to use below so each sample's "
+                    "result isn't duplicated against unrelated layers' parameters. No dropdown "
+                    "means that source already has one row per sample. Also choose how repeated "
+                    "measurements of the same result (e.g. several JV pixels) are combined: Mean/"
+                    "Median/Max reduce them to one value per sample, or pick 'All Points' to keep "
+                    "every measurement as its own row - more data, but rows from the same sample "
+                    "then share identical process values, so treat any resulting sample count as "
+                    "measurements, not independent samples. Click Recalculate to apply either.</p>"
+                ),
+                self.layer_selector_box,
+                self.results_aggregation_selector,
                 widgets.Accordion(
                     children=[
                         widgets.VBox(
@@ -858,6 +1071,33 @@ class GUIManager:
                 self.variation_warning_output,
                 self.recalculate_button,
                 self.analysis_data_status_output,
+                widgets.HTML(
+                    "<h4 style='color:#666; margin-top:16px;'>Filter rows</h4>"
+                    "<p style='color:#666;'>Exclude rows from Correlations, Random Forest, "
+                    "Bayesian Optimization, and Experimental by thresholding any checked "
+                    "column - e.g. pick 'Fill Factor (JV)', '>=', 0.3 to drop shorted/failed "
+                    "cells. Values are compared in the column's own units (Fill Factor is "
+                    "0-1, not 0-100).</p>"
+                ),
+                widgets.HBox(
+                    [
+                        self.filter_column_selector,
+                        self.filter_operator_selector,
+                        self.filter_value_input,
+                        self.add_filter_button,
+                    ]
+                ),
+                self.active_filters_box,
+                widgets.HTML(
+                    "<h4 style='color:#666; margin-top:16px;'>Exclude specific samples</h4>"
+                    "<p style='color:#666;'>Remove a sample from Correlations/Random Forest/"
+                    "Bayesian Optimization/Experimental entirely - by identity, regardless of "
+                    "its values (e.g. it's known contaminated, mislabeled, or broke during "
+                    "handling). All samples are included by default; unchecking one takes "
+                    "effect immediately, no Recalculate needed.</p>"
+                ),
+                self.sample_exclusion_accordion,
+                self.analysis_data_preview_accordion,
             ],
             layout={"padding": "20px"},
         )
@@ -1126,13 +1366,16 @@ class GUIManager:
                 experimental_tab,
             ]
         )
+        # Tabs 2-6 all read the exact same filtered dataset (built on the
+        # Analysis Data tab) - the shared prefix marks them as one linked
+        # group, distinct from Parameter Summary/Plotting which don't.
         self.main_tabs.set_title(0, "Parameter Summary")
         self.main_tabs.set_title(1, "Plotting")
-        self.main_tabs.set_title(2, "Analysis Data")
-        self.main_tabs.set_title(3, "Correlations")
-        self.main_tabs.set_title(4, "Random Forest")
-        self.main_tabs.set_title(5, "Bayesian Optimization")
-        self.main_tabs.set_title(6, "Experimental")
+        self.main_tabs.set_title(2, "\U0001f517 Analysis Data")
+        self.main_tabs.set_title(3, "\U0001f517 Correlations")
+        self.main_tabs.set_title(4, "\U0001f517 Random Forest")
+        self.main_tabs.set_title(5, "\U0001f517 Bayesian Optimization")
+        self.main_tabs.set_title(6, "\U0001f517 Experimental")
 
         return widgets.VBox(
             [
