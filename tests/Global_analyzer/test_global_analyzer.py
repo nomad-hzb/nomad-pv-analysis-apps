@@ -406,6 +406,28 @@ def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     assert dm.current_metadata["spin_coating"].loc[0, "batch"] == "HZB_FiNa_1_3"
 
 
+def test_build_parameter_summary_markdown_excludes_batch_column():
+    """ "batch" is a derived subbatch label (extract_subbatch), not a real
+    process parameter - it never feeds Correlation/RF/BO (string, not
+    numeric) and should not clutter the Parameter Summary tables either,
+    even when it varies (e.g. a load spanning more than one subbatch)."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_metadata = {
+        "spin_coating": pd.DataFrame(
+            {
+                "sample_id": ["S1", "S2"],
+                "batch": ["HZB_JJ_19_", "HZB_JJ_19_ns_"],
+                "annealing_temperature": [40.0, 50.0],
+            }
+        )
+    }
+
+    markdown = dm.build_parameter_summary_markdown()
+
+    assert "annealing_temperature" in markdown
+    assert "batch" not in markdown
+
+
 def test_load_all_data_for_summary_keeps_every_entry_per_sample(monkeypatch):
     """Regression test for issue #34: a sample re-measured more than once for
     the same result type (e.g. JV measured on two different dates) must keep

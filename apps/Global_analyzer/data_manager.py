@@ -1012,7 +1012,12 @@ class DataManager:
             "",
         ]
 
-        exclude_cols = self.COMMON_COLUMNS[:8]
+        # "batch" (added in load_all_data_for_summary via extract_subbatch) is a
+        # derived subbatch label, not a real process parameter - it's a string
+        # column, so it never feeds Correlation/RF/BO anyway (those only look at
+        # numeric columns), and listing it here just adds noise when a load
+        # spans more than one subbatch.
+        exclude_cols = [*self.COMMON_COLUMNS[:8], "batch"]
 
         # Process each metadata source
         for measurement_type, metadata_df in self.current_metadata.items():
