@@ -413,6 +413,29 @@ def get_specific_data_of_sample(url, token, sample_id, entry_type, with_meta=Fal
     return res
 
 
+def _index_linked_data_by_sample(linked_data):
+    """Index (archive_data, archive_metadata) pairs by every sample each entry references.
+
+    An entry's `samples` field can list more than one sample - e.g. several
+    substrates annealed together in one oven run, or a process step logged
+    once for a whole batch - and each of those samples genuinely underwent
+    that process/measurement. Indexing by only `samples[0]` (the previous
+    behavior here) silently dropped the entry for every other referenced
+    sample, indistinguishable downstream from that sample never having been
+    processed that way at all.
+    """
+    res = {}
+    for ldata in linked_data:
+        for sample in ldata["archive"]["data"].get("samples", []):
+            lab_id = sample.get("lab_id")
+            if not lab_id:
+                continue
+            res.setdefault(lab_id, []).append(
+                (ldata["archive"]["data"], ldata["archive"]["metadata"])
+            )
+    return res
+
+
 def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
     query = {
         "required": {"metadata": "*"},
@@ -441,13 +464,7 @@ def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
     )
     response.raise_for_status()
     linked_data = response.json()["data"]
-    res = {}
-    for ldata in linked_data:
-        lab_id = ldata["archive"]["data"]["samples"][0]["lab_id"]
-        if lab_id not in res:
-            res[lab_id] = []
-        res[lab_id].append((ldata["archive"]["data"], ldata["archive"]["metadata"]))
-    return res
+    return _index_linked_data_by_sample(linked_data)
 
 
 def get_all_measurements_except_JV(url, token, sample_ids):
@@ -482,18 +499,13 @@ def get_all_measurements_except_JV(url, token, sample_ids):
     )
     response.raise_for_status()
     linked_data = response.json()["data"]
-    res = {}
-    for ldata in linked_data:
-        if (
-            "entry_type" not in ldata["archive"]["metadata"]
-            or "JV" in ldata["archive"]["metadata"]["entry_type"]
-        ):
-            continue
-        lab_id = ldata["archive"]["data"]["samples"][0]["lab_id"]
-        if lab_id not in res:
-            res[lab_id] = []
-        res[lab_id].append((ldata["archive"]["data"], ldata["archive"]["metadata"]))
-    return res
+    non_jv = [
+        ldata
+        for ldata in linked_data
+        if "entry_type" in ldata["archive"]["metadata"]
+        and "JV" not in ldata["archive"]["metadata"]["entry_type"]
+    ]
+    return _index_linked_data_by_sample(non_jv)
 
 
 def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
@@ -525,13 +537,7 @@ def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
     )
     response.raise_for_status()
     linked_data = response.json()["data"]
-    res = {}
-    for ldata in linked_data:
-        lab_id = ldata["archive"]["data"]["samples"][0]["lab_id"]
-        if lab_id not in res:
-            res[lab_id] = []
-        res[lab_id].append((ldata["archive"]["data"], ldata["archive"]["metadata"]))
-    return res
+    return _index_linked_data_by_sample(linked_data)
 
 
 def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
@@ -562,13 +568,7 @@ def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
     )
     response.raise_for_status()
     linked_data = response.json()["data"]
-    res = {}
-    for ldata in linked_data:
-        lab_id = ldata["archive"]["data"]["samples"][0]["lab_id"]
-        if lab_id not in res:
-            res[lab_id] = []
-        res[lab_id].append((ldata["archive"]["data"], ldata["archive"]["metadata"]))
-    return res
+    return _index_linked_data_by_sample(linked_data)
 
 
 def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_process"]):
