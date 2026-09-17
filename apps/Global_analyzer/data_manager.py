@@ -69,6 +69,21 @@ def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame
     return filtered.reset_index(drop=True)
 
 
+def exclude_samples(df: pd.DataFrame, excluded_sample_ids) -> pd.DataFrame:
+    """Drop every row belonging to any sample_id in excluded_sample_ids.
+
+    Unlike apply_row_filters (which excludes rows by a value threshold on
+    some column, e.g. "Fill Factor >= 0.3"), this excludes by sample
+    identity regardless of measured values - for a sample known to be bad
+    (contaminated, mislabeled, broke during handling) that should be out of
+    every calculation entirely, not just when its numbers happen to look
+    off.
+    """
+    if not excluded_sample_ids:
+        return df
+    return df[~df["sample_id"].isin(excluded_sample_ids)].reset_index(drop=True)
+
+
 def get_layer_type_options(metadata_dict: Dict[str, pd.DataFrame]) -> Dict[str, List[str]]:
     """For each metadata source with a 'layer_type' column and more than one
     distinct value (e.g. Spin Coating logging one row per fabrication layer -

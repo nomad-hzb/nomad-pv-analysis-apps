@@ -36,6 +36,7 @@ from data_manager import (
     DataManager,
     aggregate_results_per_sample,
     apply_row_filters,
+    exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
     select_layer_row_per_sample,
@@ -327,29 +328,38 @@ class SampleDataExplorer:
             ]
 
         self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
-        self._apply_row_filters()
+        sample_ids = (
+            sorted(self.full_analysis_df["sample_id"].unique())
+            if self.full_analysis_df is not None
+            else []
+        )
+        self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._apply_filters()
         self._refresh_variation_warning()
 
-    def _apply_row_filters(self):
-        """Apply the active Analysis Data row filters on top of the full merged
-        dataset, so self.analysis_df - what every downstream tab (Correlations,
-        Random Forest, Bayesian Optimization, Plotting, Experimental) actually
-        reads - only ever contains rows the user has chosen to keep. Filters
-        combine with AND; a filter referencing a column no longer present
-        (e.g. after unchecking it) is skipped rather than erroring."""
+    def _apply_filters(self):
+        """Apply the active Analysis Data row filters and sample exclusions on
+        top of the full merged dataset, so self.analysis_df - what every
+        downstream tab (Correlations, Random Forest, Bayesian Optimization,
+        Experimental) actually reads - only ever contains rows the user has
+        chosen to keep. Row filters combine with AND; a filter referencing a
+        column no longer present (e.g. after unchecking it) is skipped rather
+        than erroring."""
         if self.full_analysis_df is None:
             self.analysis_df = None
         else:
-            self.analysis_df = apply_row_filters(self.full_analysis_df, self.row_filters)
+            filtered = apply_row_filters(self.full_analysis_df, self.row_filters)
+            filtered = exclude_samples(filtered, self.gui.get_excluded_sample_ids())
+            self.analysis_df = filtered
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
 
     def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
         """The exact rows/columns currently feeding Correlations/Random Forest/
-        Bayesian Optimization/Plotting/Experimental - shared by the preview
-        table and its Download CSV button so both always show exactly the
-        same data. None if there's nothing loaded yet."""
+        Bayesian Optimization/Experimental - shared by the preview table and
+        its Download CSV button so both always show exactly the same data.
+        None if there's nothing loaded yet."""
         if self.analysis_df is None or self.analysis_df.empty:
             return None
 
@@ -417,13 +427,20 @@ class SampleDataExplorer:
             }
         )
         self._next_filter_id += 1
-        self._apply_row_filters()
+        self._apply_filters()
         self._rerun_active_analyses()
 
     def _on_remove_row_filter(self, filter_id):
         """Drop one active row filter (by id) and re-apply the rest."""
         self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
-        self._apply_row_filters()
+        self._apply_filters()
+        self._rerun_active_analyses()
+
+    def _on_sample_exclusion_toggled(self, change):
+        """A sample's checkbox in "Exclude specific samples" was checked or
+        unchecked - re-apply immediately (no separate Recalculate needed) and
+        re-run whichever of Correlations/RF/BO is already showing a result."""
+        self._apply_filters()
         self._rerun_active_analyses()
 
     def _refresh_variation_warning(self):

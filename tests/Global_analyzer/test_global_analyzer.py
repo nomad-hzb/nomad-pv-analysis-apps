@@ -8,6 +8,7 @@ from data_manager import (
     MeasurementRow,
     aggregate_results_per_sample,
     apply_row_filters,
+    exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
     select_layer_row_per_sample,
@@ -330,6 +331,44 @@ def test_set_layer_selectors_resets_to_first_option_when_choice_no_longer_valid(
     assert gui.get_layer_selections() == {"spin_coating": "Active Layer"}
 
 
+def test_set_sample_exclusion_checklist_all_checked_by_default():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2", "S3"], on_toggle=lambda _change: None)
+
+    assert len(gui.sample_exclusion_checklist_box.children) == 3
+    assert gui.get_excluded_sample_ids() == set()
+
+
+def test_set_sample_exclusion_checklist_unchecked_sample_is_excluded():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2"], on_toggle=lambda _change: None)
+
+    gui.sample_exclusion_checklist_box.children[0].value = False
+
+    assert gui.get_excluded_sample_ids() == {"S1"}
+
+
+def test_set_sample_exclusion_checklist_preserves_exclusion_across_rebuild():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2"], on_toggle=lambda _change: None)
+    gui.sample_exclusion_checklist_box.children[0].value = False  # exclude S1
+
+    # A Recalculate/layer-selection change rebuilds the list - S1 must stay excluded.
+    gui.set_sample_exclusion_checklist(["S1", "S2", "S3"], on_toggle=lambda _change: None)
+
+    assert gui.get_excluded_sample_ids() == {"S1"}
+
+
+def test_set_sample_exclusion_checklist_toggle_invokes_callback():
+    gui = GUIManager()
+    calls = []
+    gui.set_sample_exclusion_checklist(["S1"], on_toggle=lambda change: calls.append(change))
+
+    gui.sample_exclusion_checklist_box.children[0].value = False
+
+    assert len(calls) == 1
+
+
 def test_set_analysis_columns_populates_filter_column_dropdown():
     gui = GUIManager()
     gui.set_analysis_columns(["r1", "r2"], ["m1"])
@@ -599,6 +638,41 @@ def test_apply_row_filters_resets_index():
     df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
 
     result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
+
+    assert list(result.index) == [0, 1]
+
+
+def test_exclude_samples_drops_matching_sample_ids():
+    df = pd.DataFrame({"sample_id": ["S1", "S2", "S3"], "fill_factor": [0.9, 0.0, 0.8]})
+
+    result = exclude_samples(df, {"S2"})
+
+    assert list(result["sample_id"]) == ["S1", "S3"]
+
+
+def test_exclude_samples_drops_every_row_of_an_excluded_sample():
+    """Unlike apply_row_filters, exclusion is by identity - a sample with
+    several rows (e.g. "All Points" JV pixels) must lose all of them, not
+    just the ones with unflattering values."""
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S2"], "fill_factor": [0.9, 0.05, 0.8]})
+
+    result = exclude_samples(df, {"S1"})
+
+    assert list(result["sample_id"]) == ["S2"]
+
+
+def test_exclude_samples_empty_set_returns_all_rows():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "fill_factor": [0.9, 0.8]})
+
+    result = exclude_samples(df, set())
+
+    assert len(result) == 2
+
+
+def test_exclude_samples_resets_index():
+    df = pd.DataFrame({"sample_id": ["S1", "S2", "S3"], "fill_factor": [0.9, 0.0, 0.8]})
+
+    result = exclude_samples(df, {"S2"})
 
     assert list(result.index) == [0, 1]
 

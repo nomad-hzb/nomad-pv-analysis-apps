@@ -324,6 +324,23 @@ class GUIManager:
         )
 
         # ====================================================================
+        # ANALYSIS DATA - EXCLUDE SPECIFIC SAMPLES (by identity, not by value)
+        # ====================================================================
+        self.sample_exclusion_checklist_box = widgets.VBox(
+            layout={
+                "max_height": "220px",
+                "overflow_y": "auto",
+                "border": "1px solid #ddd",
+                "padding": "4px",
+            }
+        )
+        self.sample_exclusion_accordion = widgets.Accordion(
+            children=[self.sample_exclusion_checklist_box],
+            titles=("Exclude specific samples",),
+        )
+        self.sample_exclusion_accordion.selected_index = None
+
+        # ====================================================================
         # ANALYSIS DATA - DEBUG PREVIEW TABLE
         # ====================================================================
         self.analysis_data_preview_download_button = widgets.Button(
@@ -831,6 +848,38 @@ class GUIManager:
             rows.append(widgets.HBox([label, remove_button]))
         self.active_filters_box.children = rows
 
+    def set_sample_exclusion_checklist(self, sample_ids: list, on_toggle) -> None:
+        """(Re)build the "Exclude specific samples" checkbox list, all checked
+        (included) by default. A sample already unchecked (excluded) keeps
+        that state across a rebuild, matching set_analysis_columns' preserve-
+        or-default pattern - so a batch reload or layer-selection change
+        doesn't silently bring an excluded sample back.
+
+        Args:
+            sample_ids: every sample_id currently in the full (unfiltered)
+                analysis dataset.
+            on_toggle: observe callback (per checkbox, on the "value" trait)
+                invoked immediately on every check/uncheck - owns re-applying
+                the exclusion and refreshing the preview/analyses, so
+                unchecking a sample takes effect without a separate
+                Recalculate click.
+        """
+        previous = {cb.description: cb.value for cb in self.sample_exclusion_checklist_box.children}
+        checkboxes = []
+        for sample_id in sample_ids:
+            checkbox = widgets.Checkbox(
+                value=previous.get(sample_id, True), description=sample_id, indent=False
+            )
+            checkbox.observe(on_toggle, names="value")
+            checkboxes.append(checkbox)
+        self.sample_exclusion_checklist_box.children = checkboxes
+
+    def get_excluded_sample_ids(self) -> set:
+        """sample_ids currently unchecked in the "Exclude specific samples" list."""
+        return {
+            cb.description for cb in self.sample_exclusion_checklist_box.children if not cb.value
+        }
+
     def setup_batch_selection(self, url, token, load_data_function):
         """
         Build the Step 1 batch-selection widgets: a "Filter by user" dropdown, a search
@@ -978,11 +1027,15 @@ class GUIManager:
             [
                 widgets.HTML(
                     "<p style='color:#666;'>This is the full dataset loaded on the Parameter "
-                    "Summary/Plotting tabs (independent of what's currently selected there), "
-                    "and it feeds Correlations, Random Forest, and Bayesian Optimization. "
-                    "<b>Targets are always measurement results; supporting variables are "
-                    "always process metadata.</b> Uncheck any column you want excluded from "
-                    "all three, then click Recalculate.</p>"
+                    "Summary/Plotting tabs (independent of what's currently selected there). "
+                    "<b>This tab, Correlations, Random Forest, Bayesian Optimization, and "
+                    "Experimental (marked \U0001f517 in their tab titles) all read the exact "
+                    "same filtered dataset built here</b> - a column you uncheck, a row filter "
+                    "or sample exclusion you set, or a layer/aggregation choice you make below "
+                    "affects all five at once. Plotting and Parameter Summary are separate and "
+                    "unaffected. <b>Targets are always measurement results; supporting "
+                    "variables are always process metadata.</b> Uncheck any column you want "
+                    "excluded from all five, then click Recalculate.</p>"
                 ),
                 widgets.HTML(
                     "<h4 style='color:#666;'>Layer selection</h4>"
@@ -1020,11 +1073,10 @@ class GUIManager:
                 self.analysis_data_status_output,
                 widgets.HTML(
                     "<h4 style='color:#666; margin-top:16px;'>Filter rows</h4>"
-                    "<p style='color:#666;'>Exclude rows from every analysis below "
-                    "(Correlations, Random Forest, Bayesian Optimization, Plotting, "
-                    "Experimental) by thresholding any checked column - e.g. pick "
-                    "'Fill Factor (JV)', '>=', 0.3 to drop shorted/failed cells. "
-                    "Values are compared in the column's own units (Fill Factor is "
+                    "<p style='color:#666;'>Exclude rows from Correlations, Random Forest, "
+                    "Bayesian Optimization, and Experimental by thresholding any checked "
+                    "column - e.g. pick 'Fill Factor (JV)', '>=', 0.3 to drop shorted/failed "
+                    "cells. Values are compared in the column's own units (Fill Factor is "
                     "0-1, not 0-100).</p>"
                 ),
                 widgets.HBox(
@@ -1036,6 +1088,15 @@ class GUIManager:
                     ]
                 ),
                 self.active_filters_box,
+                widgets.HTML(
+                    "<h4 style='color:#666; margin-top:16px;'>Exclude specific samples</h4>"
+                    "<p style='color:#666;'>Remove a sample from Correlations/Random Forest/"
+                    "Bayesian Optimization/Experimental entirely - by identity, regardless of "
+                    "its values (e.g. it's known contaminated, mislabeled, or broke during "
+                    "handling). All samples are included by default; unchecking one takes "
+                    "effect immediately, no Recalculate needed.</p>"
+                ),
+                self.sample_exclusion_accordion,
                 self.analysis_data_preview_accordion,
             ],
             layout={"padding": "20px"},
@@ -1305,13 +1366,16 @@ class GUIManager:
                 experimental_tab,
             ]
         )
+        # Tabs 2-6 all read the exact same filtered dataset (built on the
+        # Analysis Data tab) - the shared prefix marks them as one linked
+        # group, distinct from Parameter Summary/Plotting which don't.
         self.main_tabs.set_title(0, "Parameter Summary")
         self.main_tabs.set_title(1, "Plotting")
-        self.main_tabs.set_title(2, "Analysis Data")
-        self.main_tabs.set_title(3, "Correlations")
-        self.main_tabs.set_title(4, "Random Forest")
-        self.main_tabs.set_title(5, "Bayesian Optimization")
-        self.main_tabs.set_title(6, "Experimental")
+        self.main_tabs.set_title(2, "\U0001f517 Analysis Data")
+        self.main_tabs.set_title(3, "\U0001f517 Correlations")
+        self.main_tabs.set_title(4, "\U0001f517 Random Forest")
+        self.main_tabs.set_title(5, "\U0001f517 Bayesian Optimization")
+        self.main_tabs.set_title(6, "\U0001f517 Experimental")
 
         return widgets.VBox(
             [
