@@ -1847,7 +1847,35 @@ def test_fetch_process_field_values_slot_die_coating():
     values, _source = fetch_process_field_values("url", "token", cache, "B1", "Slot Die Coating")
     assert values["Flow rate [ul/min]"] == 25.0
     assert values["Speed [mm/s]"] == 15.0
-    assert values["Solvent 1 name"] == "DMF"
+
+
+SCREEN_PRINTING_STEP = {
+    "method": "Screen Printing",
+    "layer": [{"layer_material_name": "Silver Paste", "layer_type": "Electrode"}],
+    "location": "HZB Screen Printer",
+    "solution": [{"solution_volume": 100.0}],
+    "properties": {
+        "screen_mesh": {"mesh_material": "Stainless Steel", "mesh_count": 43.0},
+        "emulsion_material": "Photopolymer",
+        "squeegee_shape": "Rectangle",
+        "sp_speed": 50.0,
+        "sp_method": "R2R",
+    },
+}
+
+
+def test_fetch_process_field_values_screen_printing():
+    cache = _cache_with("B1", [SCREEN_PRINTING_STEP])
+    values, _source = fetch_process_field_values("url", "token", cache, "B1", "Screen Printing")
+    assert values["Material name"] == "Silver Paste"
+    assert values["Tool/GB name"] == "HZB Screen Printer"
+    assert values["Solution volume [uL]"] == 100.0
+    assert values["Mesh material"] == "Stainless Steel"
+    assert values["Mesh count [meshes/cm]"] == 43.0
+    assert values["Emulsion material"] == "Photopolymer"
+    assert values["Squeegee shape"] == "Rectangle"
+    assert values["Printing speed [mm/s]"] == 50.0
+    assert values["Printing method"] == "R2R"
 
 
 BLADE_COATING_STEP = {

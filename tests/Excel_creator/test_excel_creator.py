@@ -60,3 +60,56 @@ def test_save_writes_workbook_to_disk(tmp_path):
 
     assert out_file.exists()
     assert out_file.stat().st_size > 0
+
+
+def test_build_excel_screen_printing_writes_expected_columns():
+    builder = ExperimentExcelBuilder(
+        [
+            {"process": "Experiment Info", "config": {}},
+            {"process": "Screen Printing", "config": {"solvents": 1, "solutes": 1}},
+        ],
+        is_testing=True,
+    )
+    builder.build_excel()
+
+    ws = builder.workbook["Experiment Data"]
+    all_values = [cell.value for row in ws.iter_rows() for cell in row if cell.value is not None]
+
+    for expected in [
+        "Layer type",
+        "Solvent 1 name",
+        "Solute 1 name",
+        "Annealing temperature [°C]",
+        "Mesh material",
+        "Mesh count [meshes/cm]",
+        "Emulsion material",
+        "Squeegee shape",
+        "Printing speed [mm/s]",
+        "Printing method",
+        "Snap-off distance [mm]",
+    ]:
+        assert any(expected in str(v) for v in all_values), expected
+
+
+def test_build_excel_screen_printing_quenching_toggle():
+    builder = ExperimentExcelBuilder(
+        [
+            {
+                "process": "Screen Printing",
+                "config": {
+                    "solvents": 0,
+                    "solutes": 0,
+                    "gasquenching": True,
+                    "vacuumquenching": True,
+                },
+            },
+        ],
+        is_testing=True,
+    )
+    builder.build_excel()
+
+    ws = builder.workbook["Experiment Data"]
+    all_values = [cell.value for row in ws.iter_rows() for cell in row if cell.value is not None]
+
+    assert any("Gas quenching duration [s]" in str(v) for v in all_values)
+    assert any("Vacuum quenching pressure [bar]" in str(v) for v in all_values)
