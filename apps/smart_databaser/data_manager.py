@@ -38,6 +38,7 @@ MATERIAL_GATED_PROCESS_TYPES = {
     "Slot Die Coating",
     "Inkjet Printing",
     "Blade Coating",
+    "Screen Printing",
     "Evaporation",
     "Sublimation",
     "Co-Evaporation",
@@ -95,6 +96,7 @@ AVAILABLE_PROCESSES = ["Experiment Info"] + sorted(
         "Ink Recycling",
         "Inkjet Printing",
         "Laser Scribing",
+        "Screen Printing",
         "Slot Die Coating",
         "Spin Coating",
         "Sputtering",
@@ -110,6 +112,7 @@ CONFIGURABLE_PROCESS_TYPES = {
     "Ink Recycling",
     "Slot Die Coating",
     "Blade Coating",
+    "Screen Printing",
 }
 
 DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
@@ -136,6 +139,12 @@ DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
         "gasquenching": False,
         "vacuumquenching": False,
     },
+    "Screen Printing": {
+        "solvents": 1,
+        "solutes": 1,
+        "gasquenching": False,
+        "vacuumquenching": False,
+    },
     "Co-Evaporation": {"materials": 2},
     "Ink Recycling": {"solvents": 1, "solutes": 1, "precursors": 1},
     "Evaporation": {"carbon_paste": False},
@@ -155,6 +164,7 @@ NUMERIC_CONFIG_FIELDS = [
             "Ink Recycling",
             "Slot Die Coating",
             "Blade Coating",
+            "Screen Printing",
         },
         0,
         20,
@@ -162,7 +172,14 @@ NUMERIC_CONFIG_FIELDS = [
     (
         "solutes",
         "Solutes",
-        {"Spin Coating", "Inkjet Printing", "Ink Recycling", "Slot Die Coating", "Blade Coating"},
+        {
+            "Spin Coating",
+            "Inkjet Printing",
+            "Ink Recycling",
+            "Slot Die Coating",
+            "Blade Coating",
+            "Screen Printing",
+        },
         0,
         20,
     ),
@@ -175,8 +192,16 @@ NUMERIC_CONFIG_FIELDS = [
 # process (not Experiment Info, which never appears in ExperimentState.process_sequence).
 BOOLEAN_CONFIG_FIELDS = [
     ("antisolvent", "Antisolvent", {"Spin Coating"}),
-    ("gasquenching", "Gas Quenching", {"Spin Coating", "Blade Coating", "Slot Die Coating"}),
-    ("vacuumquenching", "Vacuum Quenching", {"Spin Coating", "Blade Coating", "Slot Die Coating"}),
+    (
+        "gasquenching",
+        "Gas Quenching",
+        {"Spin Coating", "Blade Coating", "Slot Die Coating", "Screen Printing"},
+    ),
+    (
+        "vacuumquenching",
+        "Vacuum Quenching",
+        {"Spin Coating", "Blade Coating", "Slot Die Coating", "Screen Printing"},
+    ),
     ("gavd", "GAVD", {"Inkjet Printing"}),
     ("carbon_paste", "Carbon Paste", {"Evaporation"}),
 ]
