@@ -533,7 +533,6 @@ class MinimalistExperimentBuilder:
         if process_name == "Screen Printing":
             checkbox_options = [
                 ("gasquenching", "Gas Quenching"),
-                ("vacuumquenching", "Vacuum Quenching"),
                 ("airknifequenching", "Air Knife Quenching"),
             ]
 
@@ -672,7 +671,6 @@ class MinimalistExperimentBuilder:
                 "solvents": 1,
                 "solutes": 1,
                 "gasquenching": False,
-                "vacuumquenching": False,
                 "airknifequenching": False,
             },
             "Co-Evaporation": {"materials": 2},

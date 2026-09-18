@@ -100,7 +100,6 @@ def test_build_excel_screen_printing_quenching_toggle():
                     "solvents": 0,
                     "solutes": 0,
                     "gasquenching": True,
-                    "vacuumquenching": True,
                     "airknifequenching": True,
                 },
             },
@@ -113,10 +112,12 @@ def test_build_excel_screen_printing_quenching_toggle():
     all_values = [cell.value for row in ws.iter_rows() for cell in row if cell.value is not None]
 
     assert any("Gas quenching duration [s]" in str(v) for v in all_values)
-    assert any("Vacuum quenching pressure [bar]" in str(v) for v in all_values)
     assert any("Air knife angle [°]" in str(v) for v in all_values)
     assert any("Bead volume [mm/s]" in str(v) for v in all_values)
     assert any("Drying speed [cm/min]" in str(v) for v in all_values)
+    # Vacuum Quenching is not a Screen Printing option (removed per explicit decision -
+    # not needed for this process, unlike Spin Coating/Blade Coating).
+    assert not any("Vacuum quenching pressure [bar]" in str(v) for v in all_values)
 
 
 def test_build_excel_screen_printing_air_knife_quenching_off_by_default():

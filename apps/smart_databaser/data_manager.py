@@ -143,7 +143,6 @@ DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
         "solvents": 1,
         "solutes": 1,
         "gasquenching": False,
-        "vacuumquenching": False,
         "airknifequenching": False,
     },
     "Co-Evaporation": {"materials": 2},
@@ -201,7 +200,7 @@ BOOLEAN_CONFIG_FIELDS = [
     (
         "vacuumquenching",
         "Vacuum Quenching",
-        {"Spin Coating", "Blade Coating", "Slot Die Coating", "Screen Printing"},
+        {"Spin Coating", "Blade Coating", "Slot Die Coating"},
     ),
     ("airknifequenching", "Air Knife Quenching", {"Screen Printing"}),
     ("gavd", "GAVD", {"Inkjet Printing"}),

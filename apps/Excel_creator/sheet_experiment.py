@@ -367,15 +367,6 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                         ]
                     )
 
-                if config.get("vacuumquenching", False):
-                    steps.extend(
-                        [
-                            make_label("Vacuum quenching start time [s]", 8),
-                            make_label("Vacuum quenching duration [s]", 20),
-                            make_label("Vacuum quenching pressure [bar]", 0.01),
-                        ]
-                    )
-
                 if config.get("airknifequenching", False):
                     steps.extend(
                         [
