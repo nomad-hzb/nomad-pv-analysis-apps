@@ -5,7 +5,6 @@ Covers: ExperimentState process add/remove + renumbering, no-clobber write path,
 varying-field scope promotion, and material-gated progress counting.
 """
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,7 +13,6 @@ from alias_config import resolve_progress_units
 from app import initialize_ui
 from data_manager import (
     EXPERIMENT_INFO_COMPUTED_KEYS,
-    FIELD_MAPPINGS_CONFIG_PATH,
     FORBIDDEN_VALUE_CHARACTERS,
     PROCESS_TYPE_FIELD_PATHS,
     FieldProvenance,
@@ -56,8 +54,6 @@ from data_manager import (
     is_outlier,
     iter_varying_fields,
     list_process_occurrences,
-    load_field_mappings,
-    load_field_value_multipliers,
     load_required_field_exceptions,
     missing_critical_fields,
     occurrence_index_for_process,
@@ -94,6 +90,11 @@ from gui_components import (
     create_finish_section,
     create_quick_fill_all_button,
     create_whole_experiment_template_picker,
+)
+
+from hysprint_utils.process_specs import (
+    build_field_paths,
+    build_field_value_multipliers,
 )
 
 # ---------------------------------------------------------------------------
@@ -891,49 +892,49 @@ def test_is_outlier_ignores_non_numeric_value():
 
 
 # ---------------------------------------------------------------------------
-# Field-mapping config file (config/field_mappings.json) -- unit_verified flags and new
-# process types/fields are meant to be editable there without touching data_manager.py.
+# Field-mapping source (shared/hysprint_utils/process_specs.py) -- unit_verified flags
+# and new process types/fields are meant to be editable there without touching
+# data_manager.py. build_field_paths() is the module-level function under test; passing
+# it a small synthetic PROCESSES-shaped dict (instead of the real one) isolates each
+# mechanism the same way a temp field_mappings.json used to before this module existed.
 # ---------------------------------------------------------------------------
 
 
-def test_field_mappings_config_file_exists_and_is_the_loaded_source():
-    assert FIELD_MAPPINGS_CONFIG_PATH.exists()
-    assert load_field_mappings() == PROCESS_TYPE_FIELD_PATHS
+def test_process_type_field_paths_is_the_loaded_source():
+    assert build_field_paths() == PROCESS_TYPE_FIELD_PATHS
 
 
-def test_process_type_field_paths_matches_config_unit_verified_flags():
-    raw = json.loads(FIELD_MAPPINGS_CONFIG_PATH.read_text(encoding="utf-8"))
-    spin_coating_fields = raw["process_types"]["Spin Coating"]["fields"]
+def test_process_type_field_paths_matches_spec_unit_verified_flags():
+    from hysprint_utils.process_specs import PROCESSES
+
+    spin_coating_fields = PROCESSES["Spin Coating"]["fields"]
     for excel_key, field_spec in spin_coating_fields.items():
+        if "path" not in field_spec and "paths" not in field_spec:
+            continue
         _path, unit_verified = PROCESS_TYPE_FIELD_PATHS["Spin Coating"][excel_key]
-        assert unit_verified == field_spec["unit_verified"], excel_key
+        assert unit_verified == field_spec.get("unit_verified", True), excel_key
 
 
-def test_load_field_mappings_resolves_indexed_field_templates(tmp_path):
-    config = {
-        "process_types": {
-            "Test Process": {
-                "fields": {
-                    "Material name": {
-                        "path": ["layer", 0, "layer_material_name"],
-                        "unit_verified": True,
-                    }
-                },
-                "indexed_fields": [
+def test_build_field_paths_resolves_indexed_field_templates():
+    processes = {
+        "Test Process": {
+            "fields": {
+                "Material name": {"test": "x", "path": ["layer", 0, "layer_material_name"]},
+            },
+            "indexed": {
+                "solvents": [
                     {
-                        "excel_key_template": "Solvent {n} name",
-                        "path_template": ["solution", 0, "solvent", "{i}", "name"],
-                        "unit_verified": True,
-                        "range": [1, 3],
+                        "excel_key": "Solvent {n} name",
+                        "test": lambda n: "x",
+                        "path": ["solution", 0, "solvent", "{i}", "name"],
+                        "mapping_range": (1, 3),
                     }
-                ],
-            }
+                ]
+            },
         }
     }
-    config_path = tmp_path / "field_mappings.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    mappings = load_field_mappings(config_path)
+    mappings = build_field_paths(processes)
 
     # Every entry is normalized to a list of alternative paths (see _get_path_any),
     # even single-path ones like these.
@@ -952,33 +953,29 @@ def test_load_field_mappings_resolves_indexed_field_templates(tmp_path):
     assert "Solvent 4 name" not in mappings["Test Process"]
 
 
-def test_load_field_mappings_paths_plural_normalizes_to_alternative_list(tmp_path):
+def test_build_field_paths_paths_plural_normalizes_to_alternative_list():
     """'paths' (plural) is for fields whose archive value lives under a different
     parent key depending on other data on the same step (e.g. Evaporation's
     organic_evaporation vs inorganic_evaporation split) - same field name, different
     list. Resolution order is verified end-to-end via
     test_fetch_process_field_values_evaporation_falls_back_across_organic_inorganic
-    below, against the real config."""
-    config = {
-        "process_types": {
-            "Evaporation": {
-                "fields": {
-                    "Thickness [nm]": {
-                        "paths": [
-                            ["organic_evaporation", 0, "thickness"],
-                            ["inorganic_evaporation", 0, "thickness"],
-                        ],
-                        "unit_verified": False,
-                    }
-                },
-                "indexed_fields": [],
-            }
+    below, against the real spec."""
+    processes = {
+        "Evaporation": {
+            "fields": {
+                "Thickness [nm]": {
+                    "test": 1,
+                    "paths": [
+                        ["organic_evaporation", 0, "thickness"],
+                        ["inorganic_evaporation", 0, "thickness"],
+                    ],
+                    "unit_verified": False,
+                }
+            },
         }
     }
-    config_path = tmp_path / "field_mappings.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    mappings = load_field_mappings(config_path)
+    mappings = build_field_paths(processes)
 
     assert mappings["Evaporation"]["Thickness [nm]"] == (
         [["organic_evaporation", 0, "thickness"], ["inorganic_evaporation", 0, "thickness"]],
@@ -986,27 +983,23 @@ def test_load_field_mappings_paths_plural_normalizes_to_alternative_list(tmp_pat
     )
 
 
-def test_load_field_mappings_adding_a_field_requires_no_code_change(tmp_path):
+def test_build_field_paths_adding_a_field_requires_no_code_change():
     """Proves the 'easy to add/remove' property: a brand-new process type with a field
     marked unit_verified=False round-trips correctly through fetch_process_field_values
     without any change to data_manager.py."""
-    config = {
-        "process_types": {
-            "Annealing": {
-                "fields": {
-                    "Annealing temperature [°C]": {
-                        "path": ["annealing", "temperature"],
-                        "unit_verified": False,
-                    }
-                },
-                "indexed_fields": [],
-            }
+    processes = {
+        "Annealing": {
+            "fields": {
+                "Annealing temperature [°C]": {
+                    "test": 1,
+                    "path": ["annealing", "temperature"],
+                    "unit_verified": False,
+                }
+            },
         }
     }
-    config_path = tmp_path / "field_mappings.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    mappings = load_field_mappings(config_path)
+    mappings = build_field_paths(processes)
 
     assert mappings["Annealing"]["Annealing temperature [°C]"] == (
         [["annealing", "temperature"]],
@@ -1014,24 +1007,16 @@ def test_load_field_mappings_adding_a_field_requires_no_code_change(tmp_path):
     )
 
 
-def test_load_field_mappings_removing_a_field_from_config_removes_it_from_mapping(tmp_path):
-    config = {
-        "process_types": {
-            "Spin Coating": {
-                "fields": {
-                    "Material name": {
-                        "path": ["layer", 0, "layer_material_name"],
-                        "unit_verified": True,
-                    }
-                },
-                "indexed_fields": [],
-            }
+def test_build_field_paths_removing_a_field_from_spec_removes_it_from_mapping():
+    processes = {
+        "Spin Coating": {
+            "fields": {
+                "Material name": {"test": "x", "path": ["layer", 0, "layer_material_name"]},
+            },
         }
     }
-    config_path = tmp_path / "field_mappings.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    mappings = load_field_mappings(config_path)
+    mappings = build_field_paths(processes)
 
     assert "Material name" in mappings["Spin Coating"]
     assert "Layer type" not in mappings["Spin Coating"]
@@ -1753,7 +1738,7 @@ def test_fetch_process_field_values_sputtering_step():
 def test_fetch_process_field_values_cleaning_uv_ozone_step():
     """CleaningTechnique.time is declared unit='minute' in nomad-baseclasses even though
     this app's Excel columns for it are labeled seconds - fetch_process_field_values
-    applies the confirmed x60 conversion (field_mappings.json's "multiply": 60)."""
+    applies the confirmed x60 conversion (process_specs.py's "multiply": 60)."""
     cache = _cache_with("B1", [CLEANING_STEP])
     values, _source = fetch_process_field_values("url", "token", cache, "B1", "Cleaning UV-Ozone")
     assert values["Solvent 1"] == "Hellmanex-DI water"
@@ -1772,7 +1757,7 @@ def test_build_process_sequence_from_batch_resolves_aliased_and_cleaning_types(f
 
 # ---------------------------------------------------------------------------
 # New process-type mappings (2026-07-15, sourced from the authoritative NOMAD parser/
-# mapper code, not sample archive dumps - see field_mappings.json's _readme for the
+# mapper code, not sample archive dumps - see process_specs.py's docstring for the
 # source URLs and update procedure).
 # ---------------------------------------------------------------------------
 
@@ -1847,6 +1832,7 @@ def test_fetch_process_field_values_slot_die_coating():
     values, _source = fetch_process_field_values("url", "token", cache, "B1", "Slot Die Coating")
     assert values["Flow rate [ul/min]"] == 25.0
     assert values["Speed [mm/s]"] == 15.0
+    assert values["Solvent 1 name"] == "DMF"
 
 
 SCREEN_PRINTING_STEP = {
@@ -3821,7 +3807,7 @@ def test_sync_field_specs_from_columns_uses_required_fields_config(fresh_state):
 
 
 def test_load_field_value_multipliers_confirms_cleaning_time_conversion():
-    multipliers = load_field_value_multipliers()
+    multipliers = build_field_value_multipliers()
     assert multipliers["Cleaning UV-Ozone"]["UV-Ozone Time [s]"] == 60
     assert multipliers["Cleaning UV-Ozone"]["Time 1 [s]"] == 60
     assert multipliers["Cleaning O2-Plasma"]["Gas-Plasma Time [s]"] == 60
@@ -3913,9 +3899,9 @@ def test_build_field_mapping_debug_report_reports_mapped_and_ignored():
 
 
 def test_build_field_mapping_debug_report_unmapped_process_type_reports_everything_ignored():
-    """Ink Recycling has no field_mappings.json entry at all (separate mapper file, not
-    yet fetched - see field_mappings.json's _readme) and no _DERIVED_FIELDS entry either,
-    unlike Generic Process which now has both."""
+    """Ink Recycling has no process_specs.py archive path at all (separate mapper file,
+    not yet fetched - see process_specs.py's docstring) and no _DERIVED_FIELDS entry
+    either, unlike Generic Process which now has both."""
     report = build_field_mapping_debug_report("Ink Recycling", {"method": "Cleaning"})
     assert report["mapped"] == []
     assert {row["path"] for row in report["ignored"]} == {"method"}

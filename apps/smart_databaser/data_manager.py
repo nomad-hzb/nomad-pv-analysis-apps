@@ -29,22 +29,27 @@ from hysprint_utils.api_calls import (
     get_ids_in_batch,
     get_processing_steps,
 )
+from hysprint_utils.process_specs import (
+    ATMOSPHERIC_CONFIG_KEY,  # noqa: F401 (re-exported for gui_components)
+    AVAILABLE_PROCESSES,
+    build_boolean_config_fields,
+    build_configurable_process_types,
+    build_default_config_by_process_type,
+    build_field_paths,
+    build_field_value_multipliers,
+    build_indexed_config_keys,
+    build_material_gated_process_types,
+    build_numeric_config_fields,
+)
 
 logger = logging.getLogger(__name__)
 
-MATERIAL_GATED_PROCESS_TYPES = {
-    "Spin Coating",
-    "Dip Coating",
-    "Slot Die Coating",
-    "Inkjet Printing",
-    "Blade Coating",
-    "Screen Printing",
-    "Evaporation",
-    "Sublimation",
-    "Co-Evaporation",
-    "Sputtering",
-    "ALD",
-}
+# "Sublimation" is a confirmed-dead entry (never in AVAILABLE_PROCESSES or any process
+# picker, so no ProcessInstance can ever have that process_type) that used to be
+# hand-listed in this set - dropped as part of the process_specs.py migration
+# (nomad-hzb/nomad-pv-analysis-apps#38); see that module's own note for the full
+# verification. Not re-added here.
+MATERIAL_GATED_PROCESS_TYPES: set[str] = build_material_gated_process_types()
 
 MATERIAL_FIELD_KEY = "Material name"
 
@@ -82,130 +87,32 @@ CRITICAL_EXPERIMENT_INFO_KEYS = ("Batch", "Project_Name")
 # (they're literals inside a widget class) and this module must have zero widget imports.
 # The actual field-generation logic (generate_steps_for_process) is NOT duplicated - see
 # generate_header_workbook() below, which calls Excel_creator's own sheet_experiment.py.
-AVAILABLE_PROCESSES = ["Experiment Info"] + sorted(
-    [
-        "ALD",
-        "Annealing",
-        "Blade Coating",
-        "Cleaning O2-Plasma",
-        "Cleaning UV-Ozone",
-        "Co-Evaporation",
-        "Dip Coating",
-        "Evaporation",
-        "Generic Process",
-        "Ink Recycling",
-        "Inkjet Printing",
-        "Laser Scribing",
-        "Screen Printing",
-        "Slot Die Coating",
-        "Spin Coating",
-        "Sputtering",
-    ]
-)
+#
+# AVAILABLE_PROCESSES itself is imported directly above from process_specs (it no longer
+# needs "mirroring" - both this module and voila_experiment_app.py read the same list).
+#
+# "Evaporation"'s old "carbon_paste" boolean config (previously present in
+# DEFAULT_CONFIG_BY_PROCESS_TYPE and BOOLEAN_CONFIG_FIELDS below) was confirmed-dead -
+# "Evaporation" was never in CONFIGURABLE_PROCESS_TYPES, which gui_components.py's
+# control-rendering gates on, and sheet_experiment.py's Evaporation branch never read a
+# "carbon_paste" config key either - and is not carried over by process_specs.py's
+# derivation. See that module's note for the verification. Slot Die Coating's
+# "gasquenching"/"vacuumquenching" declarations ARE carried over even though they're
+# similarly inert on the Excel-generation side (sheet_experiment.py's Slot Die Coating
+# branch never reads them) - unlike carbon_paste, their checkboxes DO render, so
+# dropping them would be a user-visible change; see process_specs.py's Slot Die Coating
+# entry for the full note.
+CONFIGURABLE_PROCESS_TYPES: set[str] = build_configurable_process_types()
 
-CONFIGURABLE_PROCESS_TYPES = {
-    "Spin Coating",
-    "Cleaning O2-Plasma",
-    "Cleaning UV-Ozone",
-    "Inkjet Printing",
-    "Co-Evaporation",
-    "Ink Recycling",
-    "Slot Die Coating",
-    "Blade Coating",
-    "Screen Printing",
-}
-
-DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
-    "Spin Coating": {
-        "solvents": 1,
-        "solutes": 1,
-        "spinsteps": 1,
-        "antisolvent": False,
-        "gasquenching": False,
-        "vacuumquenching": False,
-    },
-    "Blade Coating": {
-        "solvents": 1,
-        "solutes": 1,
-        "gasquenching": False,
-        "vacuumquenching": False,
-    },
-    "Cleaning O2-Plasma": {"solvents": 2},
-    "Cleaning UV-Ozone": {"solvents": 2},
-    "Inkjet Printing": {"solvents": 1, "solutes": 1, "annealing": False, "gavd": False},
-    "Slot Die Coating": {
-        "solvents": 1,
-        "solutes": 1,
-        "gasquenching": False,
-        "vacuumquenching": False,
-    },
-    "Screen Printing": {
-        "solvents": 1,
-        "solutes": 1,
-        "gasquenching": False,
-        "airknifequenching": False,
-    },
-    "Co-Evaporation": {"materials": 2},
-    "Ink Recycling": {"solvents": 1, "solutes": 1, "precursors": 1},
-    "Evaporation": {"carbon_paste": False},
-}
+DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = build_default_config_by_process_type()
 
 # Declarative config-field catalog for the GUI layer: (config_key, label, applicable process
 # types, min, max). Kept as data here so gui_components.py only has to render, not decide.
-NUMERIC_CONFIG_FIELDS = [
-    (
-        "solvents",
-        "Solvents",
-        {
-            "Spin Coating",
-            "Cleaning O2-Plasma",
-            "Cleaning UV-Ozone",
-            "Inkjet Printing",
-            "Ink Recycling",
-            "Slot Die Coating",
-            "Blade Coating",
-            "Screen Printing",
-        },
-        0,
-        20,
-    ),
-    (
-        "solutes",
-        "Solutes",
-        {
-            "Spin Coating",
-            "Inkjet Printing",
-            "Ink Recycling",
-            "Slot Die Coating",
-            "Blade Coating",
-            "Screen Printing",
-        },
-        0,
-        20,
-    ),
-    ("spinsteps", "Steps", {"Spin Coating"}, 1, 5),
-    ("materials", "Materials", {"Co-Evaporation"}, 1, 10),
-    ("precursors", "Precursors", {"Ink Recycling"}, 0, 10),
-]
+NUMERIC_CONFIG_FIELDS = build_numeric_config_fields()
 
 # (config_key, label, applicable process types). "add_atmospheric" applies to every real
 # process (not Experiment Info, which never appears in ExperimentState.process_sequence).
-BOOLEAN_CONFIG_FIELDS = [
-    ("antisolvent", "Antisolvent", {"Spin Coating"}),
-    (
-        "gasquenching",
-        "Gas Quenching",
-        {"Spin Coating", "Blade Coating", "Slot Die Coating", "Screen Printing"},
-    ),
-    (
-        "vacuumquenching",
-        "Vacuum Quenching",
-        {"Spin Coating", "Blade Coating", "Slot Die Coating"},
-    ),
-    ("airknifequenching", "Air Knife Quenching", {"Screen Printing"}),
-    ("gavd", "GAVD", {"Inkjet Printing"}),
-    ("carbon_paste", "Carbon Paste", {"Evaporation"}),
-]
+BOOLEAN_CONFIG_FIELDS = build_boolean_config_fields()
 
 # config_key -> Excel field key(s) whose presence on a source archive step implies that
 # optional block was actually used there - probed by infer_config_from_source_step so a
@@ -215,14 +122,13 @@ BOOLEAN_CONFIG_FIELDS = [
 # adopt/replicate, since the target process's config stayed at its all-False default and
 # never gained a field_spec
 # slot for autofill_process_from_batch to write into. Not every BOOLEAN_CONFIG_FIELDS key
-# has a probe yet (e.g. "carbon_paste" has no mapped archive path at all currently) -
-# those simply never get inferred, same as before this change.
+# has a probe yet - those simply never get inferred, same as before this change.
 #
-# IMPORTANT: per field_mappings.json, Gas quenching and Vacuum quenching share the same
+# IMPORTANT: per process_specs.py, Gas quenching and Vacuum quenching share the same
 # archive "quenching" sub-object and even overlap on some field names ("duration" backs
 # both "Gas quenching duration [s]" AND "Vacuum quenching duration [s]"; same for
 # "pressure") - probing those would set BOTH booleans whenever either one has data. Only
-# each block's own EXCLUSIVE field is used here (confirmed against field_mappings.json,
+# each block's own EXCLUSIVE field is used here (confirmed against process_specs.py,
 # not guessed): "Gas" (quenching.gas) for gas quenching, "Vacuum quenching start time [s]"
 # (quenching.start_time) for vacuum quenching.
 BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -233,7 +139,7 @@ BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
     "gavd": ("GAVD start time [s]", "GAVD vacuum pressure [mbar]"),
 }
 
-ATMOSPHERIC_CONFIG_KEY = "add_atmospheric"
+# ATMOSPHERIC_CONFIG_KEY itself is imported directly above from process_specs.
 
 # Classic Windows-filename-reserved characters. This app derives Nomad IDs
 # (compute_nomad_id) and the output Excel filename (build_experiment_filename) directly
@@ -600,14 +506,12 @@ def rebuild_field_specs(state: ExperimentState) -> dict[tuple[int, str], int]:
 # ---------------------------------------------------------------------------
 # NOMAD live value sourcing - session-scoped cache, per-process-type field mapping.
 #
-# The field paths themselves live in config/field_mappings.json, not here, specifically
-# so unit_verified flags can be flipped and new process types/fields added without
-# touching this module - see that file's "_readme" key for the schema and the unit-
-# verification caveat (the archive query returns no unit metadata, so numeric fields are
-# copied unconverted until confirmed against the NOMAD web GUI).
+# The field paths themselves live in shared/hysprint_utils/process_specs.py, not here,
+# specifically so unit_verified flags can be flipped and new process types/fields added
+# without touching this module - see that module's docstring for the schema and the
+# unit-verification caveat (the archive query returns no unit metadata, so numeric
+# fields are copied unconverted until confirmed against the NOMAD web GUI).
 # ---------------------------------------------------------------------------
-
-FIELD_MAPPINGS_CONFIG_PATH = Path(__file__).parent / "config" / "field_mappings.json"
 
 
 def _get_path(data: Any, path: list) -> Any:
@@ -624,8 +528,9 @@ def _get_path(data: Any, path: list) -> Any:
 
 def _get_path_any(data: Any, paths: list[list]) -> Any:
     """Tries each alternative path in order, returns the first non-None hit. Every
-    loaded field entry is normalized to a list of paths (see load_field_mappings), even
-    when only one applies, so this is the only path-resolution function callers need."""
+    loaded field entry is normalized to a list of paths (see
+    process_specs.build_field_paths), even when only one applies, so this is the only
+    path-resolution function callers need."""
     for path in paths:
         value = _get_path(data, path)
         if value is not None:
@@ -633,120 +538,29 @@ def _get_path_any(data: Any, paths: list[list]) -> Any:
     return None
 
 
-def _resolve_indexed_path_template(path_template: list, index: int) -> list:
-    return [index if segment == "{i}" else segment for segment in path_template]
+# Process-type -> {excel_field_key: (paths, unit_verified)}, built from
+# shared/hysprint_utils/process_specs.py at import time. Extend by editing that module,
+# not this one.
+PROCESS_TYPE_FIELD_PATHS: dict[str, dict[str, tuple[list, bool]]] = build_field_paths()
 
+# Process-type -> {config_key: excel_key_template}, built from process_specs.py
+# alongside PROCESS_TYPE_FIELD_PATHS above - which indexed fields correspond to which
+# process config count (e.g. Spin Coating's "solvents" config maps to the "Solvent {n}
+# name" indexed field's config_key tag), used by infer_config_from_source_step to widen
+# a target process's config to match what a source batch step actually has data for.
+INDEXED_CONFIG_KEYS: dict[str, dict[str, str]] = build_indexed_config_keys()
 
-def load_field_mappings(
-    config_path: Path | None = None,
-) -> dict[str, dict[str, tuple[list[list], bool]]]:
-    """Loads config/field_mappings.json into {process_type: {excel_field_key: (paths,
-    unit_verified)}}. Pass config_path to load an alternate file (e.g. in tests).
-
-    A field entry's 'path' (the common case) is a single archive path; an entry may
-    instead use 'paths' (plural) - a list of alternative full paths, tried in order by
-    _get_path_any, first non-None wins. This is for cases where the archive stores
-    equivalent data under a different parent key depending on other data on the same
-    step - e.g. Evaporation's field values live under organic_evaporation,
-    inorganic_evaporation, or perovskite_evaporation depending on an 'Organic'
-    checkbox/co-evaporation flag not itself tracked by this app, but the field names
-    inside each are identical. Every entry is normalized here to a list of paths (even
-    single-path ones), so callers never special-case either shape. Same 'path_template'
-    / 'path_templates' (plural) split for indexed_fields."""
-    path = config_path or FIELD_MAPPINGS_CONFIG_PATH
-    with open(path, encoding="utf-8") as config_file:
-        raw = json.load(config_file)
-
-    mappings: dict[str, dict[str, tuple[list[list], bool]]] = {}
-    for process_type, spec in raw.get("process_types", {}).items():
-        field_paths: dict[str, tuple[list[list], bool]] = {}
-        for excel_key, field_spec in spec.get("fields", {}).items():
-            paths = field_spec["paths"] if "paths" in field_spec else [field_spec["path"]]
-            field_paths[excel_key] = (paths, field_spec["unit_verified"])
-        for indexed in spec.get("indexed_fields", []):
-            start, end = indexed["range"]
-            templates = (
-                indexed["path_templates"]
-                if "path_templates" in indexed
-                else [indexed["path_template"]]
-            )
-            for n in range(start, end + 1):
-                excel_key = indexed["excel_key_template"].format(n=n)
-                resolved_paths = [
-                    _resolve_indexed_path_template(template, n - 1) for template in templates
-                ]
-                field_paths[excel_key] = (resolved_paths, indexed["unit_verified"])
-        mappings[process_type] = field_paths
-    return mappings
-
-
-# Process-type -> {excel_field_key: (json_path, unit_verified)}, loaded from
-# config/field_mappings.json at import time. Extend by editing that file, not this one.
-PROCESS_TYPE_FIELD_PATHS: dict[str, dict[str, tuple[list, bool]]] = load_field_mappings()
-
-
-def load_indexed_config_keys(config_path: Path | None = None) -> dict[str, dict[str, str]]:
-    """{process_type: {config_key: excel_key_template}} - which indexed_fields entries in
-    field_mappings.json correspond to which process config count (e.g. Spin Coating's
-    "solvents" config maps to the "Solvent {n} name" indexed field's config_key tag) -
-    used by infer_config_from_source_step to widen a target process's config to match
-    what a source batch step actually has data for."""
-    path = config_path or FIELD_MAPPINGS_CONFIG_PATH
-    with open(path, encoding="utf-8") as config_file:
-        raw = json.load(config_file)
-
-    result: dict[str, dict[str, str]] = {}
-    for process_type, spec in raw.get("process_types", {}).items():
-        mapping = {
-            indexed["config_key"]: indexed["excel_key_template"]
-            for indexed in spec.get("indexed_fields", [])
-            if indexed.get("config_key")
-        }
-        if mapping:
-            result[process_type] = mapping
-    return result
-
-
-# Process-type -> {config_key: excel_key_template}, loaded from config/field_mappings.json
-# alongside PROCESS_TYPE_FIELD_PATHS above.
-INDEXED_CONFIG_KEYS: dict[str, dict[str, str]] = load_indexed_config_keys()
-
-
-def load_field_value_multipliers(config_path: Path | None = None) -> dict[str, dict[str, float]]:
-    """{process_type: {excel_field_key: multiplier}} for fields whose optional 'multiply'
-    key in field_mappings.json corrects a confirmed unit mismatch between the archive's
-    stored unit and this app's Excel column label (applied in fetch_process_field_values/
-    preview_value_for_field - the raw archive value is multiplied before it's written or
-    previewed). Example: Cleaning's shared CleaningTechnique.time quantity is declared
-    unit='minute' in nomad-baseclasses (verified against
-    baseclasses/material_processes_misc/cleaning.py), but this app's Excel columns for it
-    ("Time {n} [s]", "UV-Ozone Time [s]", "Gas-Plasma Time [s]") are labeled seconds - so
-    those entries carry "multiply": 60. Only add "multiply" once the unit mismatch is
-    actually confirmed (not guessed) - same discipline as unit_verified."""
-    path = config_path or FIELD_MAPPINGS_CONFIG_PATH
-    with open(path, encoding="utf-8") as config_file:
-        raw = json.load(config_file)
-
-    result: dict[str, dict[str, float]] = {}
-    for process_type, spec in raw.get("process_types", {}).items():
-        multipliers: dict[str, float] = {}
-        for excel_key, field_spec in spec.get("fields", {}).items():
-            if "multiply" in field_spec:
-                multipliers[excel_key] = field_spec["multiply"]
-        for indexed in spec.get("indexed_fields", []):
-            if "multiply" not in indexed:
-                continue
-            start, end = indexed["range"]
-            for n in range(start, end + 1):
-                multipliers[indexed["excel_key_template"].format(n=n)] = indexed["multiply"]
-        if multipliers:
-            result[process_type] = multipliers
-    return result
-
-
-# Process-type -> {excel_field_key: multiplier}, loaded from config/field_mappings.json
-# alongside PROCESS_TYPE_FIELD_PATHS above.
-FIELD_VALUE_MULTIPLIERS: dict[str, dict[str, float]] = load_field_value_multipliers()
+# Process-type -> {excel_field_key: multiplier}, built from process_specs.py alongside
+# PROCESS_TYPE_FIELD_PATHS above - for fields whose "multiply" entry corrects a
+# confirmed unit mismatch between the archive's stored unit and this app's Excel column
+# label (applied in fetch_process_field_values/preview_value_for_field - the raw
+# archive value is multiplied before it's written or previewed). Example: Cleaning's
+# shared CleaningTechnique.time quantity is declared unit='minute' in nomad-baseclasses
+# (verified against baseclasses/material_processes_misc/cleaning.py), but this app's
+# Excel columns for it ("Time {n} [s]", "UV-Ozone Time [s]", "Gas-Plasma Time [s]") are
+# labeled seconds - so those entries carry "multiply": 60. Only add "multiply" once the
+# unit mismatch is actually confirmed (not guessed) - same discipline as unit_verified.
+FIELD_VALUE_MULTIPLIERS: dict[str, dict[str, float]] = build_field_value_multipliers()
 
 
 REQUIRED_FIELDS_CONFIG_PATH = Path(__file__).parent / "config" / "required_fields.json"
@@ -899,7 +713,7 @@ def fetch_experiment_info_source(
     batch_id's first sample (same 'first occurrence wins' convention as
     fetch_process_field_values) - the archive source for Experiment Info fields that live
     on the sample/substrate entities rather than a process step (Substrate material,
-    Sample area, Number of junctions, ...; see field_mappings.json's "Experiment Info"
+    Sample area, Number of junctions, ...; see process_specs.py's "Experiment Info"
     entry). Two extra network hops beyond get_processing_steps: the sample's own entry
     data, then following its 'substrate' reference to that entry's own data. Returns None
     if the batch has no samples. Verified live against real batch
@@ -1066,7 +880,7 @@ def _derive_evaporation_organic(step: dict) -> str | None:
     make_label("Organic", True) - a literal True/False value in the sheet) is never
     stored as its own archive attribute: NOMAD's map_evaporation() only uses it to choose
     which of organic_evaporation/inorganic_evaporation gets populated on the step (see
-    this app's field_mappings.json _readme) - 'co_evaporation' is an unrelated flag
+    this app's process_specs.py docstring) - 'co_evaporation' is an unrelated flag
     (Evaporation-vs-Co-Evaporation section choice, not Organic-vs-Inorganic). Recovers
     'True'/'False' - matching the Excel column's own literal spelling, not a Python bool,
     so it round-trips through ProcessFieldSpec/Excel generation like any other string
@@ -1114,7 +928,7 @@ _GENERIC_PROCESS_PARAMETER_KEYS = [
 ]
 
 # Fields with no direct archive attribute of their own - computed from other fields on
-# the same step instead of a field_mappings.json path. Keep this small; only add an entry
+# the same step instead of a process_specs.py path. Keep this small; only add an entry
 # here once a plain path is confirmed impossible (see _derive_evaporation_organic).
 _DERIVED_FIELDS: dict[str, dict[str, Callable[[dict], Any]]] = {
     "Evaporation": {"Organic": _derive_evaporation_organic},
@@ -1125,8 +939,9 @@ _DERIVED_FIELDS: dict[str, dict[str, Callable[[dict], Any]]] = {
 
 
 def _apply_multiplier(process_type: str, field_key: str, value: Any) -> Any:
-    """Applies FIELD_VALUE_MULTIPLIERS' confirmed unit-conversion factor, if any, to a raw
-    archive value before it's written/previewed - see load_field_value_multipliers."""
+    """Applies FIELD_VALUE_MULTIPLIERS' confirmed unit-conversion factor, if any, to a
+    raw archive value before it's written/previewed - see
+    process_specs.build_field_value_multipliers."""
     multiplier = FIELD_VALUE_MULTIPLIERS.get(process_type, {}).get(field_key)
     if multiplier is not None and isinstance(value, int | float):
         return value * multiplier
@@ -1283,7 +1098,7 @@ def preview_value_for_field(
 # Field-mapping debug report - powers the in-app "Debug: Batch Field Mapping" panel.
 # Answers "what does this app actually take from a real batch, and what's left over on
 # the raw archive step that no mapping claims" directly against real data, instead of
-# guessing from field_mappings.json alone (which only shows what's configured, not what
+# guessing from process_specs.py alone (which only shows what's configured, not what
 # the archive actually contains for a specific real step). Read-only: never writes into
 # ExperimentState.
 # ---------------------------------------------------------------------------
@@ -1291,7 +1106,7 @@ def preview_value_for_field(
 
 def _flatten_leaf_paths(data: Any, prefix: list) -> list[tuple[list, Any]]:
     """[(path, value), ...] for every non-empty scalar leaf reachable from data, with path
-    as a list of str/int segments in the exact same format field_mappings.json's own
+    as a list of str/int segments in the exact same format process_specs.py's own
     'path'/'path_template' entries use - so a raw archive field can be directly compared
     against configured mapping paths by value equality, not string matching."""
     leaves: list[tuple[list, Any]] = []
@@ -1322,7 +1137,7 @@ def build_field_mapping_debug_report(process_type: str, raw_source: dict) -> dic
     fetch_experiment_info_source), returns:
     {"mapped": [{"excel_key", "value", "unit_verified", "paths"}, ...],
      "ignored": [{"path", "value"}, ...]}
-    "mapped" covers EVERY configured field_mappings.json entry for process_type,
+    "mapped" covers EVERY configured process_specs.py entry for process_type,
     including ones with no match on this particular step (value=None) - unlike
     fetch_process_field_values, which only returns fields it actually found. Values have
     any configured "multiply" conversion already applied (see _apply_multiplier), so what

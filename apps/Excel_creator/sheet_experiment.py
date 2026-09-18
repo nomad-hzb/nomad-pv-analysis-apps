@@ -4,6 +4,13 @@ from openpyxl.styles import Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from hysprint_utils.process_specs import (
+    atmospheric_args,
+    field_args,
+    indexed_group_args,
+    optional_block_args,
+)
+
 logger = logging.getLogger(__name__)
 
 TABLEAU_COLORS = {
@@ -92,82 +99,83 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
 
     def generate_steps_for_process(process_name, config):
         """
-        This method constructs steps for each process. If is_testing=True,
-        call make_label("Step Name", <test_value>) to pass a custom test value.
-        Otherwise, just pass "Step Name".
+        This method constructs steps for each process, in the order they should
+        appear as Excel columns. Field data (label + test value) comes from
+        shared/hysprint_utils/process_specs.py instead of being hardcoded inline -
+        see that module's docstring for why. This function still owns the actual
+        assembly ORDER per process, and the handful of genuinely special-cased
+        branches (Spin Coating's single-vs-multi spin step naming, Experiment
+        Info's Ink Recycling variant) - real conditional logic, not duplicated
+        data.
         """
+
+        def f(key, variant="fields"):
+            return make_label(*field_args(process_name, key, variant=variant))
+
+        def indexed(group_key, count):
+            steps = []
+            for i in range(1, count + 1):
+                for key, val in indexed_group_args(process_name, group_key, i):
+                    steps.append(make_label(key, val))
+            return steps
+
+        def optional(block_key):
+            return [
+                make_label(key, val) for key, val in optional_block_args(process_name, block_key)
+            ]
 
         if process_name == "Experiment Info":
             # Check if Ink Recycling exists in the sequence
             has_ink_recycling = any(p.get("process") == "Ink Recycling" for p in process_sequence)
 
             if has_ink_recycling:
-                # Simplified fields for ink recycling
                 return [
-                    make_label("Date", "27-05-2025"),
-                    make_label("Project_Name", "FiNa"),
-                    make_label("Batch", "1"),
-                    make_label("Subbatch", "1"),
-                    make_label("Sample", "1"),
-                    make_label("Nomad ID", ""),
-                    make_label("Variation", "Some variation"),
+                    f("Date", "fields_ink_recycling"),
+                    f("Project_Name", "fields_ink_recycling"),
+                    f("Batch", "fields_ink_recycling"),
+                    f("Subbatch", "fields_ink_recycling"),
+                    f("Sample", "fields_ink_recycling"),
+                    f("Nomad ID", "fields_ink_recycling"),
+                    f("Variation", "fields_ink_recycling"),
                 ]
 
-            # Original experiment info fields for other cases
             return [
                 # Using this format to speed up testing with nomad
                 # The format is: STEP, TEST_VARIABLE
-                make_label("Date", "26-02-2025"),
-                make_label("Project_Name", "FiNa"),
-                make_label("Batch", "1"),
-                make_label("Subbatch", "1"),
-                make_label("Sample", "1"),
-                make_label("Nomad ID", ""),
-                make_label("Variation", "1000 rpm"),
-                make_label("Sample dimension", "1 cm x 1 cm"),
-                make_label("Sample area [cm^2]", 0.16),
-                make_label("Number of pixels", 6),
-                make_label("Pixel area [cm^2]", 0.16),
-                make_label("Substrate material", "Soda Lime Glass"),
-                make_label("Substrate conductive layer", "ITO"),
-                make_label("Sheet Resistance [Ohms/square]", 15),
-                make_label("Transmission [%]", 90),
-                make_label("Number of junctions", 1),
-                make_label("Notes", "Test excel"),
+                f("Date"),
+                f("Project_Name"),
+                f("Batch"),
+                f("Subbatch"),
+                f("Sample"),
+                f("Nomad ID"),
+                f("Variation"),
+                f("Sample dimension"),
+                f("Sample area [cm^2]"),
+                f("Number of pixels"),
+                f("Pixel area [cm^2]"),
+                f("Substrate material"),
+                f("Substrate conductive layer"),
+                f("Sheet Resistance [Ohms/square]"),
+                f("Transmission [%]"),
+                f("Number of junctions"),
+                f("Notes"),
             ]
 
         if process_name == "Cleaning O2-Plasma" or process_name == "Cleaning UV-Ozone":
-            steps = []
-
-            steps.extend(
-                [
-                    make_label("Datetime", "09.01.2026 10:19:00"),
-                    make_label("Operator", "MaxMustermann"),
-                ]
-            )
-
-            for i in range(1, config.get("solvents", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Solvent {i}", "Hellmanex"),
-                        make_label(f"Time {i} [s]", 30 + i),
-                        make_label(f"Temperature {i} [°C]", 60 + i),
-                    ]
-                )
+            steps = [f("Datetime"), f("Operator")]
+            steps.extend(indexed("solvents", config.get("solvents", 0)))
 
             if process_name == "Cleaning O2-Plasma":
                 steps.extend(
                     [
-                        make_label("Gas-Plasma Gas", "Oxygen"),
-                        make_label("Gas-Plasma Time [s]", 180),
-                        make_label("Gas-Plasma Power [W]", 50),
-                        make_label("Notes", "Test cleaning"),
+                        f("Gas-Plasma Gas"),
+                        f("Gas-Plasma Time [s]"),
+                        f("Gas-Plasma Power [W]"),
+                        f("Notes"),
                     ]
                 )
             if process_name == "Cleaning UV-Ozone":
-                steps.extend(
-                    [make_label("UV-Ozone Time [s]", 900), make_label("Notes", "Test cleaning")]
-                )
+                steps.extend([f("UV-Ozone Time [s]"), f("Notes")])
             return steps
 
         if process_name in [
@@ -179,255 +187,156 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
             "Screen Printing",
         ]:
             steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Material name", "Cs0.05(MA0.17FA0.83)0.95Pb(I0.83Br0.17)3"),
-                make_label("Layer type", "Absorber"),
-                make_label("Tool/GB name", "HZB-HySprintBox"),
-                make_label("Layer thickness [nm]", 100),
+                f("Datetime"),
+                f("Operator"),
+                f("Material name"),
+                f("Layer type"),
+                f("Tool/GB name"),
+                f("Layer thickness [nm]"),
             ]
 
-            # Add solvent steps
-            for i in range(1, config.get("solvents", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Solvent {i} name", "DMF"),
-                        make_label(f"Solvent {i} volume [uL]", 10 * i),
-                        make_label(f"Solvent {i} relative amount", 1.5),
-                        make_label(f"Solvent {i} chemical ID", "1592-461-04-2"),
-                    ]
-                )
+            # Add solvent/solute steps
+            steps.extend(indexed("solvents", config.get("solvents", 0)))
+            steps.extend(indexed("solutes", config.get("solutes", 0)))
 
-            # Add solute steps
-            for i in range(1, config.get("solutes", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Solute {i} name", "PbI2"),
-                        make_label(f"Solute {i} Concentration [mM]", 1.42),
-                        make_label(f"Solute {i} chemical ID", "2393-752-02-3"),
-                    ]
-                )
             steps.extend(
                 [
-                    make_label("Viscosity [mPa*s]", 120),
-                    make_label("Contact angle [°]", 45),
-                    make_label("Density [g/cm^3]", 1),
-                    make_label("Surface tension [mN/m]", 72),
+                    f("Viscosity [mPa*s]"),
+                    f("Contact angle [°]"),
+                    f("Density [g/cm^3]"),
+                    f("Surface tension [mN/m]"),
                 ]
             )
 
             # Add process-specific steps
             if process_name == "Spin Coating":
-                steps.extend(
-                    [make_label("Solution volume [uL]", 100), make_label("Spin Delay [s]", 0.5)]
-                )
+                steps.extend([f("Solution volume [uL]"), f("Spin Delay [s]")])
 
                 if config.get("spinsteps", 0) == 1:
                     steps.extend(
                         [
-                            make_label("Rotation speed [rpm]", 1500),
-                            make_label("Rotation time [s]", 30),
-                            make_label("Acceleration [rpm/s]", 500),
+                            f("Rotation speed [rpm]"),
+                            f("Rotation time [s]"),
+                            f("Acceleration [rpm/s]"),
                         ]
                     )
                 else:
-                    for i in range(1, config.get("spinsteps", 0) + 1):
-                        steps.extend(
-                            [
-                                make_label(f"Rotation speed {i} [rpm]", 3000 + i),
-                                make_label(f"Rotation time {i} [s]", 30 + i),
-                                make_label(f"Acceleration {i} [rpm/s]", 1000 + i),
-                            ]
-                        )
+                    steps.extend(indexed("spinsteps", config.get("spinsteps", 0)))
 
                 if config.get("antisolvent", False):
-                    steps.extend(
-                        [
-                            make_label("Anti solvent name", "Toluene"),
-                            make_label("Anti solvent volume [ml]", 0.3),
-                            make_label("Anti solvent dropping time [s]", 25),
-                            make_label("Anti solvent dropping speed [ul/s]", 50),
-                            make_label("Anti solvent dropping heigt [mm]", 30),
-                        ]
-                    )
+                    steps.extend(optional("antisolvent"))
 
                 if config.get("gasquenching", False):
-                    steps.extend(
-                        [
-                            make_label("Gas", "Nitrogen"),
-                            make_label("Gas quenching start time [s]", 5),
-                            make_label("Gas quenching duration [s]", 15),
-                            make_label("Gas quenching flow rate [ml/s]", 20),
-                            make_label("Gas quenching pressure [bar]", 1.2),
-                            make_label("Gas quenching velocity [m/s]", 2.5),
-                            make_label("Gas quenching height [mm]", 10),
-                            make_label("Nozzle shape", "Round"),
-                            make_label("Nozzle size [mm²]", 3),
-                        ]
-                    )
+                    steps.extend(optional("gasquenching"))
 
                 if config.get("vacuumquenching", False):
-                    steps.extend(
-                        [
-                            make_label("Vacuum quenching start time [s]", 8),
-                            make_label("Vacuum quenching duration [s]", 20),
-                            make_label("Vacuum quenching pressure [bar]", 0.01),
-                        ]
-                    )
+                    steps.extend(optional("vacuumquenching"))
 
             elif process_name == "Slot Die Coating":
                 steps.extend(
                     [
-                        make_label("Solution volume [uL]", 100),
-                        make_label("Flow rate [ul/min]", 25),
-                        make_label("Head gap [mm]", 0.3),
-                        make_label("Speed [mm/s]", 15),
-                        make_label("Air knife angle [°]", 45),
-                        make_label("Air knife gap [cm]", 0.5),
-                        make_label("Bead volume [mm/s]", 2),
-                        make_label("Drying speed [cm/min]", 30),
-                        make_label("Chuck heating temperature [°C]", 25),
+                        f("Solution volume [uL]"),
+                        f("Flow rate [ul/min]"),
+                        f("Head gap [mm]"),
+                        f("Speed [mm/s]"),
+                        f("Air knife angle [°]"),
+                        f("Air knife gap [cm]"),
+                        f("Bead volume [mm/s]"),
+                        f("Drying speed [cm/min]"),
+                        f("Chuck heating temperature [°C]"),
                     ]
                 )
 
             elif process_name == "Dip Coating":
-                steps.extend(
-                    [
-                        make_label("Dipping duration [s]", 15),
-                    ]
-                )
+                steps.append(f("Dipping duration [s]"))
 
             elif process_name == "Blade Coating":
                 steps.extend(
                     [
-                        make_label("Solution volume [uL]", 100),
-                        make_label("Blade Speed [mm/s]", 15),
-                        make_label("Dispensed Ink Volume [uL]", 100),
-                        make_label("Blade Gap [um]", 300),
-                        make_label("Blade Size", 25),
-                        make_label("Coating Width [mm]", 20),
-                        make_label("Coating Length [mm]", 70),
-                        make_label("Dead Length [mm]", 40),
-                        make_label("Bed Temperature [°C]", 25),
-                        make_label("Ink Temperature [°C]", 25),
+                        f("Solution volume [uL]"),
+                        f("Blade Speed [mm/s]"),
+                        f("Dispensed Ink Volume [uL]"),
+                        f("Blade Gap [um]"),
+                        f("Blade Size"),
+                        f("Coating Width [mm]"),
+                        f("Coating Length [mm]"),
+                        f("Dead Length [mm]"),
+                        f("Bed Temperature [°C]"),
+                        f("Ink Temperature [°C]"),
                     ]
                 )
 
                 if config.get("gasquenching", False):
-                    steps.extend(
-                        [
-                            make_label("Gas", "Nitrogen"),
-                            make_label("Gas quenching start time [s]", 5),
-                            make_label("Gas quenching duration [s]", 15),
-                            make_label("Gas quenching flow rate [ml/s]", 20),
-                            make_label("Gas quenching pressure [bar]", 1.2),
-                            make_label("Gas quenching velocity [m/s]", 2.5),
-                            make_label("Gas quenching height [mm]", 10),
-                            make_label("Nozzle shape", "Round"),
-                            make_label("Nozzle size [mm²]", 3),
-                        ]
-                    )
+                    steps.extend(optional("gasquenching"))
 
             elif process_name == "Screen Printing":
                 steps.extend(
                     [
-                        make_label("Solution volume [uL]", 100),
-                        make_label("Mesh material", "Stainless Steel"),
-                        make_label("Mesh count [meshes/cm]", 43),
-                        make_label("Mesh thickness [um]", 40),
-                        make_label("Thread diameter [um]", 30),
-                        make_label("Mesh opening [um]", 60),
-                        make_label("Mesh tension [N/cm]", 18),
-                        make_label("Mesh angle [°]", 22.5),
-                        make_label("Emulsion material", "Photopolymer"),
-                        make_label("Emulsion thickness [um]", 10),
-                        make_label("Squeegee material", "Polyurethane"),
-                        make_label("Squeegee shape", "Rectangle"),
-                        make_label("Squeegee angle [°]", 45),
-                        make_label("Printing speed [mm/s]", 50),
-                        make_label("Printing direction", "Forward"),
-                        make_label("Printing pressure [bar]", 2),
-                        make_label("Snap-off distance [mm]", 1.5),
-                        make_label("Printing method", "R2R"),
+                        f("Solution volume [uL]"),
+                        f("Mesh material"),
+                        f("Mesh count [meshes/cm]"),
+                        f("Mesh thickness [um]"),
+                        f("Thread diameter [um]"),
+                        f("Mesh opening [um]"),
+                        f("Mesh tension [N/cm]"),
+                        f("Mesh angle [°]"),
+                        f("Emulsion material"),
+                        f("Emulsion thickness [um]"),
+                        f("Squeegee material"),
+                        f("Squeegee shape"),
+                        f("Squeegee angle [°]"),
+                        f("Printing speed [mm/s]"),
+                        f("Printing direction"),
+                        f("Printing pressure [bar]"),
+                        f("Snap-off distance [mm]"),
+                        f("Printing method"),
                     ]
                 )
 
                 if config.get("gasquenching", False):
-                    steps.extend(
-                        [
-                            make_label("Gas", "Nitrogen"),
-                            make_label("Gas quenching start time [s]", 5),
-                            make_label("Gas quenching duration [s]", 15),
-                            make_label("Gas quenching flow rate [ml/s]", 20),
-                            make_label("Gas quenching pressure [bar]", 1.2),
-                            make_label("Gas quenching velocity [m/s]", 2.5),
-                            make_label("Gas quenching height [mm]", 10),
-                            make_label("Nozzle shape", "Round"),
-                            make_label("Nozzle size [mm²]", 3),
-                        ]
-                    )
+                    steps.extend(optional("gasquenching"))
 
                 if config.get("airknifequenching", False):
-                    steps.extend(
-                        [
-                            make_label("Air knife angle [°]", 45),
-                            make_label("Air knife gap [cm]", 0.5),
-                            make_label("Bead volume [mm/s]", 2),
-                            make_label("Drying speed [cm/min]", 30),
-                        ]
-                    )
+                    steps.extend(optional("airknifequenching"))
 
             elif process_name == "Inkjet Printing":
                 steps.extend(
                     [
-                        make_label("Printhead name", "Spectra 0.8uL"),
-                        make_label("Number of active nozzles", 128),
-                        make_label("Active nozzles", "all"),
-                        make_label("Droplet density X [dpi]", 400),
-                        make_label("Droplet density Y [dpi]", 300),
-                        make_label("Quality factor", 3),
-                        make_label("Step size", 10),
-                        make_label("Printing direction", 10),
-                        make_label("Number of swaths", 10),
-                        make_label("Printed area [mm²]", 100),
-                        make_label("Droplet per second [1/s]", 5000),
-                        make_label("Droplet volume [pl]", 10),
-                        make_label("Ink reservoir pressure [bar]", 0.3),
-                        make_label("Table temperature [°C]", 40),
-                        make_label("Dropping Height [mm]", 12),
-                        make_label("Substrate thickness [mm]", 20),
-                        make_label("Printing speed [mm/s]", 10),
-                        make_label("Print head angle [deg]", 13),
-                        make_label("Nozzle temperature [°C]", 35),
-                        make_label("Nozzle voltage config file", "testfile.txt"),
-                        make_label("Image used", "Square inch 300 dpi"),
+                        f("Printhead name"),
+                        f("Number of active nozzles"),
+                        f("Active nozzles"),
+                        f("Droplet density X [dpi]"),
+                        f("Droplet density Y [dpi]"),
+                        f("Quality factor"),
+                        f("Step size"),
+                        f("Printing direction"),
+                        f("Number of swaths"),
+                        f("Printed area [mm²]"),
+                        f("Droplet per second [1/s]"),
+                        f("Droplet volume [pl]"),
+                        f("Ink reservoir pressure [bar]"),
+                        f("Table temperature [°C]"),
+                        f("Dropping Height [mm]"),
+                        f("Substrate thickness [mm]"),
+                        f("Printing speed [mm/s]"),
+                        f("Print head angle [deg]"),
+                        f("Nozzle temperature [°C]"),
+                        f("Nozzle voltage config file"),
+                        f("Image used"),
                         # make_label('rel. humidity [%]', 45),
                     ]
                 )
 
                 if config.get("gavd", False):
-                    steps.extend(
-                        [
-                            make_label("GAVD Gas", "Nitrogen"),
-                            make_label("GAVD start time [s]", 5),
-                            make_label("GAVD vacuum pressure [mbar]", 10),
-                            make_label("GAVD temperature [°C]", 25),
-                            make_label("GAVD vacuum time [s]", 15),
-                            make_label("Gas flow duration [s]", 15),
-                            make_label("Gas flow pressure [mbar]", 100),
-                            make_label("Nozzle shape", "round"),
-                            make_label("Nozzle type", "mesh"),
-                            make_label("GAVD comment", "GAVD Note"),
-                        ]
-                    )
+                    steps.extend(optional("gavd"))
 
             # Add annealing steps for all coating processes
             steps.extend(
                 [
-                    make_label("Annealing time [min]", 30),
-                    make_label("Annealing temperature [°C]", 120),
-                    make_label("Annealing atmosphere", "Nitrogen"),
-                    make_label("Notes", "Process notes"),
+                    f("Annealing time [min]"),
+                    f("Annealing temperature [°C]"),
+                    f("Annealing atmosphere"),
+                    f("Notes"),
                 ]
             )
 
@@ -435,191 +344,146 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
 
         # PVD Processes
         if process_name == "Evaporation" or process_name == "Sublimation":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Material name", "PCBM"),
-                make_label("Layer type", "Electron Transport Layer"),
-                make_label("Tool/GB name", "Hysprint Evap"),
-                make_label("Organic", True),
-                make_label("Sample holder width [mm]", "25"),
-                make_label("Base pressure [bar]", 1e-6),
-                make_label("Pressure start [bar]", 5e-6),
-                make_label("Pressure end [bar]", 3e-6),
-                make_label("Source temperature start[°C]", 150),
-                make_label("Source temperature end[°C]", 160),
-                make_label("Substrate temperature [°C]", 25),
-                make_label("Thickness [nm]", 100),
-                make_label("Rate start [angstrom/s]", 0.5),
-                make_label("Rate target [angstrom/s]", 1.0),
-                make_label("Tooling factor", 1.5),
-                make_label("Notes", "Test note"),
+            # "Sublimation" is a legacy alias with identical columns/test values to
+            # Evaporation and (same as before this migration) no archive paths of its
+            # own either way - see process_specs.py's note on the "Evaporation" entry.
+            lookup_name = "Evaporation"
+            return [
+                make_label(*field_args(lookup_name, "Datetime")),
+                make_label(*field_args(lookup_name, "Operator")),
+                make_label(*field_args(lookup_name, "Material name")),
+                make_label(*field_args(lookup_name, "Layer type")),
+                make_label(*field_args(lookup_name, "Tool/GB name")),
+                make_label(*field_args(lookup_name, "Organic")),
+                make_label(*field_args(lookup_name, "Sample holder width [mm]")),
+                make_label(*field_args(lookup_name, "Base pressure [bar]")),
+                make_label(*field_args(lookup_name, "Pressure start [bar]")),
+                make_label(*field_args(lookup_name, "Pressure end [bar]")),
+                make_label(*field_args(lookup_name, "Source temperature start[°C]")),
+                make_label(*field_args(lookup_name, "Source temperature end[°C]")),
+                make_label(*field_args(lookup_name, "Substrate temperature [°C]")),
+                make_label(*field_args(lookup_name, "Thickness [nm]")),
+                make_label(*field_args(lookup_name, "Rate start [angstrom/s]")),
+                make_label(*field_args(lookup_name, "Rate target [angstrom/s]")),
+                make_label(*field_args(lookup_name, "Tooling factor")),
+                make_label(*field_args(lookup_name, "Notes")),
             ]
-            return steps
 
-        # if process_name == 'Seq-Evaporation' or process_name == 'Co-Evaporation':
         if process_name == "Co-Evaporation":
             steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Material name", "Aluminium"),
-                make_label("Layer type", "Electrode"),
-                make_label("Tool/GB name", "IRIS Evap"),
+                f("Datetime"),
+                f("Operator"),
+                f("Material name"),
+                f("Layer type"),
+                f("Tool/GB name"),
             ]
-            for i in range(1, config.get("materials", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Material name {i}", "Cupper"),
-                        make_label(f"Source temperature start {i}[°C]", 100 + 10 + i),
-                        make_label(f"Source temperature end {i}[°C]", 110 + 10 + i),
-                        make_label(f"Thickness {i} [nm]", 20 + i),
-                        make_label(f"Rate {i} [angstrom/s]", 0.5 + i),
-                        make_label(f"Base pressure {i} [bar]", 1e-6),
-                        make_label(f"Pressure start {i} [bar]", 5e-6),
-                        make_label(f"Pressure end {i} [bar]", 3e-6),
-                        make_label(f"Substrate temperature {i} [°C]", 25),
-                        make_label(f"Tooling factor {i}", 1.0 + 0.1 + i),
-                    ]
-                )
-            steps.append(make_label("Notes", "Test note co-evaporation"))
+            steps.extend(indexed("materials", config.get("materials", 0)))
+            steps.append(f("Notes"))
             return steps
 
         if process_name == "Sputtering":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Material name", "TiO2"),
-                make_label("Layer type", "Electron Transport Layer"),
-                make_label("Tool/GB name", "Hysprint tool"),
-                make_label("Gas", "Argon"),
-                make_label("Temperature [°C]", 200),
-                make_label("Pressure [mbar]", 0.01),
-                make_label("Deposition time [s]", 300),
-                make_label("Burn in time [s]", 60),
-                make_label("Power [W]", 150),
-                make_label("Rotation rate [rpm]", 30),
-                make_label("Thickness [nm]", 50),
-                make_label("Gas flow rate [cm^3/min]", 20),
-                make_label("Notes", "Notes Sputtering"),
+            return [
+                f("Datetime"),
+                f("Operator"),
+                f("Material name"),
+                f("Layer type"),
+                f("Tool/GB name"),
+                f("Gas"),
+                f("Temperature [°C]"),
+                f("Pressure [mbar]"),
+                f("Deposition time [s]"),
+                f("Burn in time [s]"),
+                f("Power [W]"),
+                f("Rotation rate [rpm]"),
+                f("Thickness [nm]"),
+                f("Gas flow rate [cm^3/min]"),
+                f("Notes"),
             ]
-            return steps
 
         if process_name == "Laser Scribing":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Laser wavelength [nm]", 532),
-                make_label("Laser pulse time [ps]", 8),
-                make_label("Laser pulse frequency [kHz]", 80),
-                make_label("Speed [mm/s]", 100),
-                make_label("Fluence [J/cm2]", 0.5),
-                make_label("Power [%]", 75),
-                make_label("Recipe file", "test_scribing_recipe.xml"),
-                make_label("Dead area [cm2]", 2),
-                make_label("Width of cell [mm]", 5),
-                make_label("Number of cells", 6),
-                make_label("Notes", "Laser Note"),
+            return [
+                f("Datetime"),
+                f("Operator"),
+                f("Laser wavelength [nm]"),
+                f("Laser pulse time [ps]"),
+                f("Laser pulse frequency [kHz]"),
+                f("Speed [mm/s]"),
+                f("Fluence [J/cm2]"),
+                f("Power [%]"),
+                f("Recipe file"),
+                f("Dead area [cm2]"),
+                f("Width of cell [mm]"),
+                f("Number of cells"),
+                f("Notes"),
             ]
-            return steps
 
         if process_name == "ALD":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Material name", "Al2O3"),
-                make_label("Layer type", "Electron Transport Layer"),
-                make_label("Tool/GB name", "IRIS ALD"),
-                make_label("Source", "TMA"),
-                make_label("Thickness [nm]", 25),
-                make_label("Temperature [°C]", 150),
-                make_label("Rate [A/s]", 0.1),
-                make_label("Time [s]", 1800),
-                make_label("Number of cycles", 250),
-                make_label("Precursor 1", "TMA"),
-                make_label("Pulse duration 1 [s]", 0.2),
-                make_label("Manifold temperature 1 [°C]", 80),
-                make_label("Bottle temperature 1 [°C]", 25),
-                make_label("Precursor 2 (Oxidizer/Reducer)", "H2O"),
-                make_label("Pulse duration 2 [s]", 0.1),
-                make_label("Manifold temperature 2 [°C]", 70),
-                make_label("Notes", "ALD Note"),
+            return [
+                f("Datetime"),
+                f("Operator"),
+                f("Material name"),
+                f("Layer type"),
+                f("Tool/GB name"),
+                f("Source"),
+                f("Thickness [nm]"),
+                f("Temperature [°C]"),
+                f("Rate [A/s]"),
+                f("Time [s]"),
+                f("Number of cycles"),
+                f("Precursor 1"),
+                f("Pulse duration 1 [s]"),
+                f("Manifold temperature 1 [°C]"),
+                f("Bottle temperature 1 [°C]"),
+                f("Precursor 2 (Oxidizer/Reducer)"),
+                f("Pulse duration 2 [s]"),
+                f("Manifold temperature 2 [°C]"),
+                f("Notes"),
             ]
-            return steps
 
         if process_name == "Annealing":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Annealing time [min]", 60),
-                make_label("Annealing temperature [°C]", 150),
-                make_label("Annealing athmosphere", "Nitrogen"),
-                make_label("Relative humidity [%]", 35),
-                make_label("Notes", "Test annealing process"),
+            return [
+                f("Datetime"),
+                f("Operator"),
+                f("Annealing time [min]"),
+                f("Annealing temperature [°C]"),
+                f("Annealing athmosphere"),
+                f("Relative humidity [%]"),
+                f("Notes"),
             ]
-            return steps
 
         if process_name == "Generic Process":
-            steps = [
-                make_label("Datetime", "09.01.2026 10:19:00"),
-                make_label("Operator", "MaxMustermann"),
-                make_label("Name", "Test Generic Process"),
-                make_label("Notes", "This is a test generic process"),
+            return [
+                f("Datetime"),
+                f("Operator"),
+                f("Name"),
+                f("Notes"),
             ]
-            return steps
 
         if process_name == "Ink Recycling":
             steps = []
-            # Ink Preparation steps
-            for i in range(1, config.get("solvents", 0) + 1):
-                steps.extend(
-                    [
-                        make_label("Datetime", "09.01.2026 10:19:00"),
-                        make_label("Operator", "MaxMustermann"),
-                        make_label(f"Solvent {i} name", f"DMF {i}"),
-                        make_label(f"Solvent {i} volume [ml]", 10 * i),
-                    ]
-                )
-            for i in range(1, config.get("solutes", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Solute {i} name", f"PbI2 {i}"),
-                        make_label(f"Solute {i} concentration [M]", 1.5 * i),
-                        make_label(f"Solute {i} amount [g]", 5.0 * i),
-                        make_label(f"Solute {i} moles [mol]", 0.02 * i),
-                    ]
-                )
-            for i in range(1, config.get("precursors", 0) + 1):
-                steps.extend(
-                    [
-                        make_label(f"Precursor {i} name", f"MAI {i}"),
-                        make_label(f"Precursor {i} moles [mol]", 0.01 * i),
-                    ]
-                )
+            steps.extend(indexed("solvents", config.get("solvents", 0)))
+            steps.extend(indexed("solutes", config.get("solutes", 0)))
+            steps.extend(indexed("precursors", config.get("precursors", 0)))
 
-            # Mixing steps
             steps.extend(
                 [
-                    make_label("Functional liquid name", "FL"),
-                    make_label("Functional liquid volume [ml]", 25),
-                    make_label("Dissolving temperature [°C]", 60),
+                    f("Functional liquid name"),
+                    f("Functional liquid volume [ml]"),
+                    f("Dissolving temperature [°C]"),
                 ]
             )
-
-            # Filtering steps
             steps.extend(
                 [
-                    make_label("Filter material", "Paper"),
-                    make_label("Filter size [mm]", 0.45),
-                    make_label("Filter weight [g]", 0.5),
+                    f("Filter material"),
+                    f("Filter size [mm]"),
+                    f("Filter weight [g]"),
                 ]
             )
-
-            # Results steps
             steps.extend(
                 [
-                    make_label("Recovered solute [g]", 4.2),
-                    make_label("Yield [%]", 84),
-                    make_label("Notes", "Test recycling process"),
+                    f("Recovered solute [g]"),
+                    f("Yield [%]"),
+                    f("Notes"),
                 ]
             )
             return steps
@@ -640,17 +504,7 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
 
         # Append atmospheric values if requested (for all processes except Experiment Info)
         if process_name != "Experiment Info" and custom_config.get("add_atmospheric", False):
-            atmospheric_steps = [
-                make_label("Room temperature [°C]", 21),
-                make_label("rel. humidity [%]", "30"),
-                make_label("GB start oxygen level [ppm]", 0.1),
-                make_label("GB end oxygen level [ppm]", 0.1),
-                make_label("GB start water level [ppm]", 0.1),
-                make_label("GB end water level [ppm]", 0.1),
-                make_label("GB start temperature [°C]", 0.1),
-                make_label("GB end temperature [°C]", 0.1),
-            ]
-            steps.extend(atmospheric_steps)
+            steps.extend(make_label(key, val) for key, val in atmospheric_args())
 
         step_count = len(steps)
         end_col = start_col + step_count - 1
