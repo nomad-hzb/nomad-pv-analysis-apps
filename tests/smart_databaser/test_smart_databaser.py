@@ -1878,6 +1878,27 @@ def test_fetch_process_field_values_screen_printing():
     assert values["Printing method"] == "R2R"
 
 
+SCREEN_PRINTING_AIR_KNIFE_STEP = {
+    "method": "Screen Printing",
+    "layer": [{"layer_material_name": "Silver Paste", "layer_type": "Electrode"}],
+    "quenching": {
+        "air_knife_angle": 45.0,
+        "air_knife_distance_to_thin_film": 0.5,
+        "bead_volume": 2.0,
+        "drying_speed": 30.0,
+    },
+}
+
+
+def test_fetch_process_field_values_screen_printing_air_knife_quenching():
+    cache = _cache_with("B1", [SCREEN_PRINTING_AIR_KNIFE_STEP])
+    values, _source = fetch_process_field_values("url", "token", cache, "B1", "Screen Printing")
+    assert values["Air knife angle [°]"] == 45.0
+    assert values["Air knife gap [cm]"] == 0.5
+    assert values["Bead volume [mm/s]"] == 2.0
+    assert values["Drying speed [cm/min]"] == 30.0
+
+
 BLADE_COATING_STEP = {
     "method": "Blade Coating",
     "layer": [{"layer_material_name": "Perovskite", "layer_type": "Absorber"}],
