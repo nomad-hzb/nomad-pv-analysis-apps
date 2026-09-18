@@ -453,6 +453,7 @@ class MinimalistExperimentBuilder:
                 "Inkjet Printing",
                 "Slot Die Coating",
                 "Blade Coating",
+                "Screen Printing",
             ]:
                 self.current_sequence[index]["config"] = self._get_default_config(new_process_type)
             else:

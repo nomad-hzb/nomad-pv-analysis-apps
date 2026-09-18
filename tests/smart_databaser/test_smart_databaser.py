@@ -1835,6 +1835,56 @@ def test_fetch_process_field_values_slot_die_coating():
     assert values["Solvent 1 name"] == "DMF"
 
 
+SCREEN_PRINTING_STEP = {
+    "method": "Screen Printing",
+    "layer": [{"layer_material_name": "Silver Paste", "layer_type": "Electrode"}],
+    "location": "HZB Screen Printer",
+    "solution": [{"solution_volume": 100.0}],
+    "properties": {
+        "screen_mesh": {"mesh_material": "Stainless Steel", "mesh_count": 43.0},
+        "emulsion_material": "Photopolymer",
+        "squeegee_shape": "Rectangle",
+        "sp_speed": 50.0,
+        "sp_method": "R2R",
+    },
+}
+
+
+def test_fetch_process_field_values_screen_printing():
+    cache = _cache_with("B1", [SCREEN_PRINTING_STEP])
+    values, _source = fetch_process_field_values("url", "token", cache, "B1", "Screen Printing")
+    assert values["Material name"] == "Silver Paste"
+    assert values["Tool/GB name"] == "HZB Screen Printer"
+    assert values["Solution volume [uL]"] == 100.0
+    assert values["Mesh material"] == "Stainless Steel"
+    assert values["Mesh count [meshes/cm]"] == 43.0
+    assert values["Emulsion material"] == "Photopolymer"
+    assert values["Squeegee shape"] == "Rectangle"
+    assert values["Printing speed [mm/s]"] == 50.0
+    assert values["Printing method"] == "R2R"
+
+
+SCREEN_PRINTING_AIR_KNIFE_STEP = {
+    "method": "Screen Printing",
+    "layer": [{"layer_material_name": "Silver Paste", "layer_type": "Electrode"}],
+    "quenching": {
+        "air_knife_angle": 45.0,
+        "air_knife_distance_to_thin_film": 0.5,
+        "bead_volume": 2.0,
+        "drying_speed": 30.0,
+    },
+}
+
+
+def test_fetch_process_field_values_screen_printing_air_knife_quenching():
+    cache = _cache_with("B1", [SCREEN_PRINTING_AIR_KNIFE_STEP])
+    values, _source = fetch_process_field_values("url", "token", cache, "B1", "Screen Printing")
+    assert values["Air knife angle [°]"] == 45.0
+    assert values["Air knife gap [cm]"] == 0.5
+    assert values["Bead volume [mm/s]"] == 2.0
+    assert values["Drying speed [cm/min]"] == 30.0
+
+
 BLADE_COATING_STEP = {
     "method": "Blade Coating",
     "layer": [{"layer_material_name": "Perovskite", "layer_type": "Absorber"}],

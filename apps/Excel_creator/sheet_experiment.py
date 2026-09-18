@@ -296,9 +296,6 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                 if config.get("gasquenching", False):
                     steps.extend(optional("gasquenching"))
 
-                if config.get("vacuumquenching", False):
-                    steps.extend(optional("vacuumquenching"))
-
                 if config.get("airknifequenching", False):
                     steps.extend(optional("airknifequenching"))
 

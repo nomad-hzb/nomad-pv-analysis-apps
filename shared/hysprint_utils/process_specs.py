@@ -722,14 +722,115 @@ PROCESSES = {
             "gasquenching": _GAS_QUENCHING_FIELDS,
         },
     },
-    # "Screen Printing" deliberately NOT included yet: it's mid-review on a separate
-    # branch/PR (nomad-hzb/nomad-pv-analysis-apps#37, off main, not merged) and this
-    # module is built against main's current process types on purpose, so this branch
-    # stays fully decoupled from that PR per explicit user decision - merging this
-    # unification must not introduce Screen Printing as a side effect before #37 lands.
-    # Add it back here as this branch's last step, once #37 has merged and this branch
-    # is rebased onto main - the full spec (fields/indexed/optional/meta, already
-    # written and validated once) is saved for reuse, not lost.
+    "Screen Printing": {
+        # Folded in 2026-09-18 (#37 merged) - field/path data confirmed against
+        # #37's final merged state (nomad-hzb/nomad-pv-analysis-apps#36/#37), not
+        # re-derived from scratch. Gas Quenching and Air Knife Quenching only, per
+        # explicit user decision - Vacuum Quenching was implemented then deliberately
+        # removed (not needed for this process), and Antisolvent was never added
+        # (that's Spin-Coating-only).
+        "meta": {
+            "material_gated": True,
+            "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
+            "boolean_config": [
+                ("gasquenching", "Gas Quenching"),
+                ("airknifequenching", "Air Knife Quenching"),
+            ],
+            "config_defaults": {
+                "solvents": 1,
+                "solutes": 1,
+                "gasquenching": False,
+                "airknifequenching": False,
+            },
+        },
+        "fields": {
+            **_COATING_PREFIX_FIELDS,
+            **_COATING_SOLUTION_PROPERTY_FIELDS,
+            "Solution volume [uL]": {
+                "test": 100,
+                "path": ["solution", 0, "solution_volume"],
+                "unit_verified": False,
+            },
+            "Mesh material": {
+                "test": "Stainless Steel",
+                "path": ["properties", "screen_mesh", "mesh_material"],
+            },
+            "Mesh count [meshes/cm]": {
+                "test": 43,
+                "path": ["properties", "screen_mesh", "mesh_count"],
+            },
+            "Mesh thickness [um]": {
+                "test": 40,
+                "path": ["properties", "screen_mesh", "mesh_thickness"],
+                "unit_verified": False,
+            },
+            "Thread diameter [um]": {
+                "test": 30,
+                "path": ["properties", "screen_mesh", "thread_diameter"],
+                "unit_verified": False,
+            },
+            "Mesh opening [um]": {
+                "test": 60,
+                "path": ["properties", "screen_mesh", "mesh_opening"],
+                "unit_verified": False,
+            },
+            "Mesh tension [N/cm]": {
+                "test": 18,
+                "path": ["properties", "screen_mesh", "mesh_tension"],
+                "unit_verified": False,
+            },
+            "Mesh angle [°]": {
+                "test": 22.5,
+                "path": ["properties", "screen_mesh", "mesh_angle"],
+                "unit_verified": False,
+            },
+            "Emulsion material": {
+                "test": "Photopolymer",
+                "path": ["properties", "emulsion_material"],
+            },
+            "Emulsion thickness [um]": {
+                "test": 10,
+                "path": ["properties", "emulsion_thickness"],
+                "unit_verified": False,
+            },
+            "Squeegee material": {
+                "test": "Polyurethane",
+                "path": ["properties", "squeegee_material"],
+            },
+            "Squeegee shape": {"test": "Rectangle", "path": ["properties", "squeegee_shape"]},
+            "Squeegee angle [°]": {
+                "test": 45,
+                "path": ["properties", "squeegee_angle"],
+                "unit_verified": False,
+            },
+            "Printing speed [mm/s]": {
+                "test": 50,
+                "path": ["properties", "sp_speed"],
+                "unit_verified": False,
+            },
+            "Printing direction": {"test": "Forward", "path": ["properties", "sp_direction"]},
+            "Printing pressure [bar]": {
+                "test": 2,
+                "path": ["properties", "sp_pressure"],
+                "unit_verified": False,
+            },
+            "Snap-off distance [mm]": {
+                "test": 1.5,
+                "path": ["properties", "snap_off"],
+                "unit_verified": False,
+            },
+            "Printing method": {"test": "R2R", "path": ["properties", "sp_method"]},
+            **_COATING_SUFFIX_FIELDS,
+        },
+        "indexed": {
+            "solvents": _COATING_SOLVENT_INDEXED["fields"],
+            "solutes": _COATING_SOLUTE_INDEXED["fields"],
+        },
+        "optional": {
+            "gasquenching": _GAS_QUENCHING_FIELDS,
+            "airknifequenching": _AIR_KNIFE_QUENCHING_FIELDS,
+        },
+    },
     "Inkjet Printing": {
         "meta": {
             "material_gated": True,
