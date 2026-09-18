@@ -382,6 +382,7 @@ class MinimalistExperimentBuilder:
             "Ink Recycling",
             "Slot Die Coating",
             "Blade Coating",
+            "Screen Printing",
         ]
 
         if process_name not in configurable_processes:
@@ -396,6 +397,7 @@ class MinimalistExperimentBuilder:
             "Ink Recycling",
             "Slot Die Coating",
             "Blade Coating",
+            "Screen Printing",
         ]:
             solvents_widget = widgets.BoundedIntText(
                 value=config.get("solvents", 0),
@@ -418,6 +420,7 @@ class MinimalistExperimentBuilder:
             "Ink Recycling",
             "Slot Die Coating",
             "Blade Coating",
+            "Screen Printing",
         ]:
             solutes_widget = widgets.BoundedIntText(
                 value=config.get("solutes", 0),
@@ -517,6 +520,29 @@ class MinimalistExperimentBuilder:
                     description=option_label,
                     style={"description_width": "initial"},
                     layout=widgets.Layout(width="140px"),
+                )
+                checkbox.observe(
+                    lambda change, idx=index, key=option_key: self._update_config(
+                        idx, key, change["new"]
+                    ),
+                    names="value",
+                )
+                checkbox_controls.append(checkbox)
+
+        # Checkboxes for Screen Printing
+        if process_name == "Screen Printing":
+            checkbox_options = [
+                ("gasquenching", "Gas Quenching"),
+                ("vacuumquenching", "Vacuum Quenching"),
+                ("airknifequenching", "Air Knife Quenching"),
+            ]
+
+            for option_key, option_label in checkbox_options:
+                checkbox = widgets.Checkbox(
+                    value=config.get(option_key, False),
+                    description=option_label,
+                    style={"description_width": "initial"},
+                    layout=widgets.Layout(width="150px"),
                 )
                 checkbox.observe(
                     lambda change, idx=index, key=option_key: self._update_config(
@@ -647,6 +673,7 @@ class MinimalistExperimentBuilder:
                 "solutes": 1,
                 "gasquenching": False,
                 "vacuumquenching": False,
+                "airknifequenching": False,
             },
             "Co-Evaporation": {"materials": 2},
             "Ink Recycling": {"solvents": 1, "solutes": 1, "precursors": 1},

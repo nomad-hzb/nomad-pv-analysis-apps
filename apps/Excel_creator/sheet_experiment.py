@@ -376,6 +376,16 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                         ]
                     )
 
+                if config.get("airknifequenching", False):
+                    steps.extend(
+                        [
+                            make_label("Air knife angle [°]", 45),
+                            make_label("Air knife gap [cm]", 0.5),
+                            make_label("Bead volume [mm/s]", 2),
+                            make_label("Drying speed [cm/min]", 30),
+                        ]
+                    )
+
             elif process_name == "Inkjet Printing":
                 steps.extend(
                     [
