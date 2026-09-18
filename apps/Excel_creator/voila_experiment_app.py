@@ -41,6 +41,7 @@ class MinimalistExperimentBuilder:
             "Ink Recycling",
             "Inkjet Printing",
             "Laser Scribing",
+            "Screen Printing",
             "Slot Die Coating",
             "Spin Coating",
             "Sputtering",
@@ -607,6 +608,7 @@ class MinimalistExperimentBuilder:
                 "Inkjet Printing",
                 "Slot Die Coating",
                 "Blade Coating",
+                "Screen Printing",
             ]:
                 self.current_sequence[index]["config"] = self._get_default_config(new_process_type)
             else:
@@ -635,6 +637,12 @@ class MinimalistExperimentBuilder:
             "Cleaning UV-Ozone": {"solvents": 2},
             "Inkjet Printing": {"solvents": 1, "solutes": 1, "annealing": False, "gavd": False},
             "Slot Die Coating": {
+                "solvents": 1,
+                "solutes": 1,
+                "gasquenching": False,
+                "vacuumquenching": False,
+            },
+            "Screen Printing": {
                 "solvents": 1,
                 "solutes": 1,
                 "gasquenching": False,
