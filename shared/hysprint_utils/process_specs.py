@@ -510,32 +510,20 @@ PROCESSES = {
         },
     },
     "Slot Die Coating": {
-        # KNOWN PRE-EXISTING BUG, preserved as-is (not silently fixed by this
-        # migration): "gasquenching"/"vacuumquenching" are declared applicable below so
-        # their checkboxes render in smart_databaser's GUI (same as before this
-        # migration), but there is deliberately no "optional" block for either key here,
-        # matching the original sheet_experiment.py Slot Die Coating branch, which never
-        # read either config flag - toggling these checkboxes has always had zero effect
-        # on the generated Excel columns. Flagging for a future decision (remove the
-        # dead checkboxes, or wire them up to real gas/vacuum quenching blocks like Spin
-        # Coating's), not fixing either way here - out of scope for this migration.
-        # Same reasoning covers field_mappings.json's old (also phantom, also dropped
-        # here) Gas/Vacuum quenching archive paths for Slot Die Coating - they could
-        # never have matched a real field_spec either, since the columns they'd map
-        # from are never generated.
+        # Fixed 2026-09-18 (previously a known pre-existing bug, see git history/PR #39
+        # discussion): the "Gas Quenching"/"Vacuum Quenching" checkboxes used to be
+        # declared applicable here (so they rendered in smart_databaser's GUI) with no
+        # matching "optional" block, so toggling them had zero effect on the generated
+        # Excel columns - confirmed dead, not a real feature, so removed rather than
+        # wired up. field_mappings.json's old Gas/Vacuum quenching archive paths for
+        # Slot Die Coating were the same kind of phantom entry and were already dropped
+        # when this module was first built (they could never have matched a real
+        # field_spec, since the columns they'd map from were never generated).
         "meta": {
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
-            "boolean_config": [
-                ("gasquenching", "Gas Quenching"),
-                ("vacuumquenching", "Vacuum Quenching"),
-            ],
-            "config_defaults": {
-                "solvents": 1,
-                "solutes": 1,
-                "gasquenching": False,
-                "vacuumquenching": False,
-            },
+            "boolean_config": [],
+            "config_defaults": {"solvents": 1, "solutes": 1},
         },
         "fields": {
             **_COATING_PREFIX_FIELDS,
