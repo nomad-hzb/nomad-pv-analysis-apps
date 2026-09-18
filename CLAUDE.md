@@ -20,6 +20,7 @@ apps/<AppName>/
     <app>.ipynb              # exactly 2 cells
 shared/hysprint_utils/       # DO NOT DUPLICATE ANYTHING FROM HERE
     config.py               # URL_BASE / API_ENDPOINT — the ONLY place these are defined
+    process_specs.py        # Excel_creator + smart_databaser process-type catalog — see below
     api_calls.py, access_token.py, auth_manager.py, batch_selection.py,
     error_handler.py, plotting_utils.py, process_handling.py, schemas.py
 tests/<app_name>/            # ONE folder per app, at repo root — never inside apps/
@@ -92,6 +93,41 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
 11. **No regressions.** If making a checklist item pass would break an
     app's currently-working behavior or an already-passing test, stop and
     flag it — don't force the fix through.
+
+## Adding or changing a process type (Excel_creator / smart_databaser)
+
+Both apps model the same set of "process types" (Spin Coating, ALD, Cleaning
+O2-Plasma, ...) and used to hand-duplicate that catalog across two different
+files in two different shapes — `apps/Excel_creator/sheet_experiment.py`
+(which Excel columns a process generates, with what test values) and
+`apps/smart_databaser/config/field_mappings.json` (which NOMAD archive path
+each of those columns autofills from) — plus up to *eight* separate
+hand-maintained lists across `apps/smart_databaser/data_manager.py` and
+`apps/Excel_creator/voila_experiment_app.py` for which process types exist,
+which have config controls, and what those controls are. A process type
+missing from just one of those eight spots was a real, live bug (Screen
+Printing's config controls silently not rendering in Excel_creator's own
+GUI — nomad-hzb/nomad-pv-analysis-apps#36/#37/#38).
+
+`shared/hysprint_utils/process_specs.py` is now the single source of truth
+for all of that: per process type, its Excel columns (label + test value +
+archive path + `unit_verified`/`multiply`), its indexed/repeated column
+groups (solvents, solutes, ...), its optional blocks (Gas Quenching, ...),
+and its config metadata (numeric/boolean controls, defaults, whether it's
+material-gated). Both apps read from it — `sheet_experiment.py` still owns
+the per-process *assembly order* (which fields appear when, plus the
+handful of genuinely special-cased branches like Spin Coating's
+single-vs-multi spin step naming), but looks up each field's data from
+`process_specs.py` instead of hardcoding it inline; `data_manager.py` and
+`voila_experiment_app.py` derive their process-type/config-control lists
+from it instead of maintaining their own copies. **To add or change a
+process type, edit `process_specs.py` first** (per its own module
+docstring for the exact schema and the discipline around `unit_verified` —
+only confirm a path against the real `map_<type>` function in
+nomad-baseclasses, never guess); only touch `sheet_experiment.py` if the
+new process needs genuinely new assembly logic (not just new fields).
+`config/field_mappings.json` and `config/schema_coverage.md` no longer
+exist — don't recreate either.
 
 ## Change management: issues, PRs, versions
 
