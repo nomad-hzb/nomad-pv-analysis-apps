@@ -38,6 +38,7 @@ MATERIAL_GATED_PROCESS_TYPES = {
     "Slot Die Coating",
     "Inkjet Printing",
     "Blade Coating",
+    "Screen Printing",
     "Evaporation",
     "Sublimation",
     "Co-Evaporation",
@@ -95,6 +96,7 @@ AVAILABLE_PROCESSES = ["Experiment Info"] + sorted(
         "Ink Recycling",
         "Inkjet Printing",
         "Laser Scribing",
+        "Screen Printing",
         "Slot Die Coating",
         "Spin Coating",
         "Sputtering",
@@ -110,6 +112,7 @@ CONFIGURABLE_PROCESS_TYPES = {
     "Ink Recycling",
     "Slot Die Coating",
     "Blade Coating",
+    "Screen Printing",
 }
 
 DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
@@ -136,6 +139,12 @@ DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = {
         "gasquenching": False,
         "vacuumquenching": False,
     },
+    "Screen Printing": {
+        "solvents": 1,
+        "solutes": 1,
+        "gasquenching": False,
+        "airknifequenching": False,
+    },
     "Co-Evaporation": {"materials": 2},
     "Ink Recycling": {"solvents": 1, "solutes": 1, "precursors": 1},
     "Evaporation": {"carbon_paste": False},
@@ -155,6 +164,7 @@ NUMERIC_CONFIG_FIELDS = [
             "Ink Recycling",
             "Slot Die Coating",
             "Blade Coating",
+            "Screen Printing",
         },
         0,
         20,
@@ -162,7 +172,14 @@ NUMERIC_CONFIG_FIELDS = [
     (
         "solutes",
         "Solutes",
-        {"Spin Coating", "Inkjet Printing", "Ink Recycling", "Slot Die Coating", "Blade Coating"},
+        {
+            "Spin Coating",
+            "Inkjet Printing",
+            "Ink Recycling",
+            "Slot Die Coating",
+            "Blade Coating",
+            "Screen Printing",
+        },
         0,
         20,
     ),
@@ -175,8 +192,17 @@ NUMERIC_CONFIG_FIELDS = [
 # process (not Experiment Info, which never appears in ExperimentState.process_sequence).
 BOOLEAN_CONFIG_FIELDS = [
     ("antisolvent", "Antisolvent", {"Spin Coating"}),
-    ("gasquenching", "Gas Quenching", {"Spin Coating", "Blade Coating", "Slot Die Coating"}),
-    ("vacuumquenching", "Vacuum Quenching", {"Spin Coating", "Blade Coating", "Slot Die Coating"}),
+    (
+        "gasquenching",
+        "Gas Quenching",
+        {"Spin Coating", "Blade Coating", "Slot Die Coating", "Screen Printing"},
+    ),
+    (
+        "vacuumquenching",
+        "Vacuum Quenching",
+        {"Spin Coating", "Blade Coating", "Slot Die Coating"},
+    ),
+    ("airknifequenching", "Air Knife Quenching", {"Screen Printing"}),
     ("gavd", "GAVD", {"Inkjet Printing"}),
     ("carbon_paste", "Carbon Paste", {"Evaporation"}),
 ]
@@ -185,8 +211,9 @@ BOOLEAN_CONFIG_FIELDS = [
 # optional block was actually used there - probed by infer_config_from_source_step so a
 # boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already
 # are (see INDEXED_CONFIG_KEYS). Without this, a source step with real Anti solvent/Gas
-# quenching/Vacuum quenching/GAVD data was silently dropped on adopt/replicate, since the
-# target process's config stayed at its all-False default and never gained a field_spec
+# quenching/Vacuum quenching/Air Knife quenching/GAVD data was silently dropped on
+# adopt/replicate, since the target process's config stayed at its all-False default and
+# never gained a field_spec
 # slot for autofill_process_from_batch to write into. Not every BOOLEAN_CONFIG_FIELDS key
 # has a probe yet (e.g. "carbon_paste" has no mapped archive path at all currently) -
 # those simply never get inferred, same as before this change.
@@ -202,6 +229,7 @@ BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
     "antisolvent": ("Anti solvent name", "Anti solvent volume [ml]"),
     "gasquenching": ("Gas", "Gas quenching flow rate [ml/s]", "Gas quenching velocity [m/s]"),
     "vacuumquenching": ("Vacuum quenching start time [s]",),
+    "airknifequenching": ("Air knife angle [°]", "Bead volume [mm/s]", "Drying speed [cm/min]"),
     "gavd": ("GAVD start time [s]", "GAVD vacuum pressure [mbar]"),
 }
 

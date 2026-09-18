@@ -11,8 +11,14 @@ for why: a column with no Excel header is noise to map, not a real gap).
 
 Generated 2026-07-31 by diffing a "maximal config" (every optional numeric field capped
 at 5, every boolean checkbox on - see script below) against `field_mappings.json` +
-`_DERIVED_FIELDS`. Regenerate by running the script at the bottom whenever
-`field_mappings.json` or `sheet_experiment.py` changes materially - this file is a
+`_DERIVED_FIELDS`. Screen Printing row added 2026-09-18 by re-running the same script
+after adding that process type (nomad-pv-analysis-apps#36) - all other rows unchanged
+by that re-run, confirming no other process type regressed. Screen Printing row updated
+again the same day (91/80, was 87/76) after adding its third quenching option, Air Knife
+Quenching (Air knife angle/gap, Bead volume, Drying speed) - all 4 new columns came back
+covered, no new gap. Regenerate by running the
+script at the bottom whenever `field_mappings.json` or `sheet_experiment.py` changes
+materially - this file is a
 snapshot, not a live view.
 
 ## Summary
@@ -32,6 +38,7 @@ snapshot, not a live view.
 | Ink Recycling | 59 | 0 | 59 |
 | Inkjet Printing | 88 | 77 | 11 |
 | Laser Scribing | 21 | 10 | 11 |
+| Screen Printing | 91 | 80 | 11 |
 | Slot Die Coating | 66 | 55 | 11 |
 | Spin Coating | 91 | 79 | 12 |
 | Sputtering | 23 | 12 | 11 |

@@ -176,6 +176,7 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
             "Slot Die Coating",
             "Inkjet Printing",
             "Blade Coating",
+            "Screen Printing",
         ]:
             steps = [
                 make_label("Datetime", "09.01.2026 10:19:00"),
@@ -324,6 +325,55 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                             make_label("Gas quenching height [mm]", 10),
                             make_label("Nozzle shape", "Round"),
                             make_label("Nozzle size [mm²]", 3),
+                        ]
+                    )
+
+            elif process_name == "Screen Printing":
+                steps.extend(
+                    [
+                        make_label("Solution volume [uL]", 100),
+                        make_label("Mesh material", "Stainless Steel"),
+                        make_label("Mesh count [meshes/cm]", 43),
+                        make_label("Mesh thickness [um]", 40),
+                        make_label("Thread diameter [um]", 30),
+                        make_label("Mesh opening [um]", 60),
+                        make_label("Mesh tension [N/cm]", 18),
+                        make_label("Mesh angle [°]", 22.5),
+                        make_label("Emulsion material", "Photopolymer"),
+                        make_label("Emulsion thickness [um]", 10),
+                        make_label("Squeegee material", "Polyurethane"),
+                        make_label("Squeegee shape", "Rectangle"),
+                        make_label("Squeegee angle [°]", 45),
+                        make_label("Printing speed [mm/s]", 50),
+                        make_label("Printing direction", "Forward"),
+                        make_label("Printing pressure [bar]", 2),
+                        make_label("Snap-off distance [mm]", 1.5),
+                        make_label("Printing method", "R2R"),
+                    ]
+                )
+
+                if config.get("gasquenching", False):
+                    steps.extend(
+                        [
+                            make_label("Gas", "Nitrogen"),
+                            make_label("Gas quenching start time [s]", 5),
+                            make_label("Gas quenching duration [s]", 15),
+                            make_label("Gas quenching flow rate [ml/s]", 20),
+                            make_label("Gas quenching pressure [bar]", 1.2),
+                            make_label("Gas quenching velocity [m/s]", 2.5),
+                            make_label("Gas quenching height [mm]", 10),
+                            make_label("Nozzle shape", "Round"),
+                            make_label("Nozzle size [mm²]", 3),
+                        ]
+                    )
+
+                if config.get("airknifequenching", False):
+                    steps.extend(
+                        [
+                            make_label("Air knife angle [°]", 45),
+                            make_label("Air knife gap [cm]", 0.5),
+                            make_label("Bead volume [mm/s]", 2),
+                            make_label("Drying speed [cm/min]", 30),
                         ]
                     )
 
