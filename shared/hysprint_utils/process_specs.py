@@ -636,19 +636,22 @@ PROCESSES = {
         # pending a real batch to verify against." Preserved as-is, not fixed here.
     },
     "Blade Coating": {
+        # Fixed 2026-09-18: "Vacuum Quenching" was declared applicable (checkbox
+        # rendered in smart_databaser's GUI) with no matching "optional" block -
+        # sheet_experiment.py's Blade Coating branch only ever handled "gasquenching",
+        # never "vacuumquenching", so toggling it always had zero effect on the
+        # generated Excel columns. Same dead-checkbox pattern as Slot Die Coating's
+        # (see that entry's note) - removed rather than wired up, per explicit user
+        # decision, even though map_blade_coating() in nomad-baseclasses does genuinely
+        # support vacuum quenching archive-side (`map_vacuum_quenching(data) or
+        # map_gas_quenching_with_nozzle(data) or ...`) - a real feature this app simply
+        # never exposed, not a phantom one, but removed anyway to match Slot Die
+        # Coating's treatment.
         "meta": {
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
-            "boolean_config": [
-                ("gasquenching", "Gas Quenching"),
-                ("vacuumquenching", "Vacuum Quenching"),
-            ],
-            "config_defaults": {
-                "solvents": 1,
-                "solutes": 1,
-                "gasquenching": False,
-                "vacuumquenching": False,
-            },
+            "boolean_config": [("gasquenching", "Gas Quenching")],
+            "config_defaults": {"solvents": 1, "solutes": 1, "gasquenching": False},
         },
         "fields": {
             **_COATING_PREFIX_FIELDS,
@@ -706,27 +709,17 @@ PROCESSES = {
             "solutes": _COATING_SOLUTE_INDEXED["fields"],
         },
         "optional": {
-            # KNOWN GAP, preserved as-is (not silently fixed here): "Nozzle shape"/
-            # "Nozzle size [mm²]" ARE generated Excel columns for Blade Coating's Gas
-            # Quenching block (identical to Spin Coating's), but field_mappings.json
-            # never had archive paths for them here specifically, even though the same
-            # paths ARE mapped for Spin Coating/Slot Die Coating's own Gas Quenching
-            # (quenching.nozzle_shape/quenching.nozzle_size) - originally tracked in
-            # config/schema_coverage.md's "Real, worth-investigating gaps" (retired by
-            # this migration): "Likely the same paths apply; not yet verified against a
-            # real Blade Coating batch with Gas Quenching data."
-            # Deliberately NOT inferring/adding those paths here just because they'd be
-            # mechanically easy to copy from _GAS_QUENCHING_FIELDS - same discipline as
-            # unit_verified: only add a path once actually confirmed, not guessed.
-            "gasquenching": {
-                **{
-                    k: v
-                    for k, v in _GAS_QUENCHING_FIELDS.items()
-                    if k not in ("Nozzle shape", "Nozzle size [mm²]")
-                },
-                "Nozzle shape": {"test": "Round"},
-                "Nozzle size [mm²]": {"test": 3},
-            }
+            # Fixed 2026-09-18 (previously a documented-but-unverified gap): "Nozzle
+            # shape"/"Nozzle size [mm²]" now use the same quenching.nozzle_shape/
+            # quenching.nozzle_size paths as _GAS_QUENCHING_FIELDS (Spin Coating's).
+            # Confirmed, not inferred - map_blade_coating() in nomad-baseclasses sets
+            # `archive.quenching = map_vacuum_quenching(data) or
+            # map_gas_quenching_with_nozzle(data) or map_air_knife_gas_quenching(data)`,
+            # the exact same process-agnostic map_gas_quenching_with_nozzle() Spin
+            # Coating uses - it reads 'Nozzle shape'/'Nozzle size [mm²]' and sets
+            # GasQuenchingWithNozzle.nozzle_shape/nozzle_size regardless of which
+            # process calls it, so the archive path is identical for both.
+            "gasquenching": _GAS_QUENCHING_FIELDS,
         },
     },
     # "Screen Printing" deliberately NOT included yet: it's mid-review on a separate
