@@ -380,7 +380,7 @@ class TestWriteFitResultsToNomadNaNHandling:
         import pandas as pd
 
         dm = DataManager.__new__(DataManager)
-        dm.url = "https://nomad-hzb-se.de/nomad-oasis/api/v1"
+        dm.url = "https://test-oasis.example.org/nomad-oasis/api/v1"
         dm.token = "test-token"
 
         entries_data = pd.DataFrame(

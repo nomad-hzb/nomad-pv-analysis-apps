@@ -88,6 +88,15 @@ class AuthenticationUI:
         self._create_widgets()
         self._setup_observers()
 
+    def _oasis_host(self):
+        """Host of the Oasis this app is actually configured against, for display.
+
+        Taken from the auth manager rather than a literal or a second
+        hysprint_utils import, so the panel can never disagree with the
+        endpoint the requests go to.
+        """
+        return self.auth_manager.base_url.split("://", 1)[-1].rstrip("/")
+
     def _create_widgets(self):
         self.auth_button = WidgetFactory.create_button(
             description="Authenticate",
@@ -106,7 +115,8 @@ class AuthenticationUI:
         self.settings_content = widgets.VBox(
             [
                 widgets.HTML(
-                    "<p><strong>SE Oasis:</strong> https://nomad-hzb-se.de/nomad-oasis/api/v1</p>"
+                    f"<p><strong>Oasis:</strong> {self.auth_manager.base_url}"
+                    f"{self.auth_manager.api_endpoint}</p>"
                     "<p><em>Auth: NOMAD_CLIENT_ACCESS_TOKEN env var (secrets.py as fallback)</em></p>"
                 ),
                 self.auth_button,
@@ -130,7 +140,9 @@ class AuthenticationUI:
             self.auth_manager.authenticate_with_token()
             user_info = self.auth_manager.verify_token()
             user_display = user_info.get("name", user_info.get("username", "Unknown User"))
-            self._update_status(f"Status: Authenticated as {user_display} on SE Oasis.", "green")
+            self._update_status(
+                f"Status: Authenticated as {user_display} on {self._oasis_host()}.", "green"
+            )
             if hasattr(self, "success_callback") and self.success_callback:
                 self.success_callback()
         except Exception as e:

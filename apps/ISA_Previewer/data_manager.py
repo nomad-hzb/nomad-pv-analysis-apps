@@ -7,6 +7,8 @@
 #     /home/jovyan/uploads actually contains
 # resolve_h5_path is the only place that converts between them.
 
+import contextlib
+import io
 import logging
 import os
 
@@ -20,6 +22,30 @@ from insitu_analyser.utils.nomad_api_calls import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def quiet_stdout():
+    """Keep progress chatter printed by a dependency out of the app.
+
+    insitu_analyser reports progress on stdout ("[get_entryid] Entry id for sample_id ..."),
+    and IPython's %store magic announces every write ("Stored 'h5_path' (str)"). Neither has
+    a switch to turn it off. Under Voila this text lands at the top of the page, above the
+    app, where a user reads it as an error.
+
+    Captured and logged at DEBUG rather than discarded, so it is still reachable when
+    something goes wrong. bootstrap.py does the same for import-time banners; it wraps
+    __import__ and so deliberately does not cover runtime output like this.
+
+    Only wrap calls into a dependency. A print() meant for an ipywidgets Output must not be
+    routed through here.
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        yield
+    text = buffer.getvalue().strip()
+    if text:
+        logger.debug("Suppressed dependency output: %s", text)
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +87,11 @@ def get_container() -> str:
     """
     inside_upload = os.path.relpath(os.path.dirname(os.getcwd()), get_uploads_root())
     return "/".join(inside_upload.replace(os.sep, "/").split("/")[1:])
+
+
+def get_own_app_folder() -> str:
+    """This app's own folder name under the container ("ISA_Previewer")."""
+    return os.path.basename(os.getcwd())
 
 
 def find_upload_folder(upload_id: str) -> str | None:
@@ -119,22 +150,32 @@ def build_notebook_url(link: config.AppLink, user: str) -> str:
     base = config.VOILA_PATH_TEMPLATE.format(user=user)
     if link.upload_id:
         # A target in a different upload is addressed by that upload alone: it does not
-        # necessarily mirror this repo's apps/<AppFolder> layout.
+        # necessarily mirror this repo's apps/<AppFolder> layout, so an empty folder
+        # there really does mean "at the top of that upload".
         path = f"uploads/{link.upload_id}"
+        folder = link.folder
     else:
+        # get_container() stops at the folder holding all app folders, so the app folder
+        # itself still has to be appended. An empty link.folder means "a sibling in this
+        # app's own folder", not "directly under the container" - treating it as the
+        # latter produced .../apps/timely_teller.ipynb, with ISA_Previewer missing.
         path = f"uploads/{get_own_upload_folder()}/{get_container()}"
-    folder = f"{link.folder}/" if link.folder else ""
-    return f"{base}/{path}/{folder}{link.notebook}"
+        folder = link.folder or get_own_app_folder()
+    return f"{base}/{path}/{f'{folder}/' if folder else ''}{link.notebook}"
 
 
-def available_links(h5_path: str, user: str) -> list[tuple[str, str]]:
+def available_links(h5_path: str, user: str, exclude: str | None = None) -> list[tuple[str, str]]:
     """The (label, url) links worth offering for one h5, in config.LINK_ORDER.
 
-    Every variant offers every link; a link whose requires_h5_dataset is missing from this
-    file is dropped, since the notebook behind it would open on nothing.
+    A variant offers every link but its own (exclude, from Variant.link_key), since a link
+    that reopens the notebook it is shown in is only a way to lose the current selection. A
+    link whose requires_h5_dataset is missing from this file is dropped as well, since the
+    notebook behind it would open on nothing.
     """
     links = []
     for key in config.LINK_ORDER:
+        if key == exclude:
+            continue
         link = config.APP_LINKS[key]
         if link.requires_h5_dataset and not h5_has_dataset(h5_path, link.requires_h5_dataset):
             logger.debug("Link %s hidden: %s has no %s", key, h5_path, link.requires_h5_dataset)
@@ -157,7 +198,8 @@ def list_uploads_with_measurements(url: str, token: str) -> list[tuple[str, str]
     HySprint_Batch (see isa_inducer.upload_sample_json), so a batch query returns nothing
     for exactly the uploads this app exists for.
     """
-    uploads = get_uploads_with_entry_type(url, token, config.MEASUREMENT_ENTRY_TYPE)
+    with quiet_stdout():
+        uploads = get_uploads_with_entry_type(url, token, config.MEASUREMENT_ENTRY_TYPE)
     return sorted(((name, upload_id) for upload_id, name in uploads.items()), key=lambda o: o[0])
 
 
@@ -167,11 +209,12 @@ def list_samples_in_upload(url: str, token: str, upload_id: str) -> list[str]:
     get_sample_description prepends config.PLACEHOLDER_OPTION itself, so the returned list
     always starts with a "nothing selected" entry.
     """
-    sample_ids = get_samples_in_upload(url, token, upload_id)
-    if not sample_ids:
-        logger.info("Upload %s holds no samples", upload_id)
-        return [config.PLACEHOLDER_OPTION]
-    return get_sample_description(url, token, sample_ids)
+    with quiet_stdout():
+        sample_ids = get_samples_in_upload(url, token, upload_id)
+        if not sample_ids:
+            logger.info("Upload %s holds no samples", upload_id)
+            return [config.PLACEHOLDER_OPTION]
+        return get_sample_description(url, token, sample_ids)
 
 
 def sample_id_from_option(option: str) -> str:
@@ -195,14 +238,15 @@ def list_h5_measurements(
         return []
 
     sample_id = sample_id_from_option(sample_option)
-    measurements = get_specific_data_of_sample(
-        url,
-        token,
-        sample_id,
-        config.MEASUREMENT_ENTRY_TYPE,
-        with_meta=True,
-        upload_id=upload_id,
-    )
+    with quiet_stdout():
+        measurements = get_specific_data_of_sample(
+            url,
+            token,
+            sample_id,
+            config.MEASUREMENT_ENTRY_TYPE,
+            with_meta=True,
+            upload_id=upload_id,
+        )
 
     options: list[tuple[str, str]] = []
     for data, metadata in measurements:
@@ -307,8 +351,9 @@ def store_for_linked_notebooks(h5_path: str, screenwidth: int) -> None:
         return
     ipython.user_ns["h5_path"] = os.path.abspath(h5_path)
     ipython.user_ns["screenwidth"] = screenwidth
-    for name in ("h5_path", "screenwidth"):
-        ipython.run_line_magic("store", name)
+    with quiet_stdout():
+        for name in ("h5_path", "screenwidth"):
+            ipython.run_line_magic("store", name)
 
 
 def _read_stored(name: str):
@@ -316,7 +361,8 @@ def _read_stored(name: str):
     if ipython is None:
         return None
     try:
-        ipython.run_line_magic("store", f"-r {name}")
+        with quiet_stdout():
+            ipython.run_line_magic("store", f"-r {name}")
     except Exception:
         logger.exception("Reading %s from the IPython store failed", name)
         return None

@@ -89,6 +89,14 @@ class AppLink:
 
 
 APP_LINKS = {
+    "heatmap_analysis": AppLink(
+        label="Open Heatmap Analysis",
+        folder="",
+        notebook="isa_previewer.ipynb",
+        # Ungated, and the way back rather than a way out: the analysis notebooks are usually
+        # reached from the main previewer, but they are reachable from the app dashboard too,
+        # and a user who arrived that way had no route to the heatmaps at all.
+    ),
     "optical_analysis": AppLink(
         label="Open Optical Analysis",
         folder="",
@@ -130,9 +138,17 @@ APP_LINKS = {
     ),
 }
 
-LINK_ORDER = ("optical_analysis", "giwaxs_analysis", "thickness", "peak_analyzer", "timely_teller")
-"""Order the links are rendered in. Every variant offers all of them, so which links a
-given notebook shows is decided by the h5 in front of it, not by which notebook it is."""
+LINK_ORDER = (
+    "heatmap_analysis",
+    "optical_analysis",
+    "giwaxs_analysis",
+    "thickness",
+    "peak_analyzer",
+    "timely_teller",
+)
+"""Order the links are rendered in. A variant offers all of them except its own (see
+Variant.link_key), so which links a given notebook shows is decided by the h5 in front of it
+and by which notebook it is."""
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +189,10 @@ class Variant:
     measurement selectors, so all three notebooks work standalone when opened from the app
     dashboard; a linked one just arrives with the selection already made."""
 
+    link_key: str | None = None
+    """The APP_LINKS key this notebook itself is, so its own link is left out of its link row.
+    Without it every notebook would offer a link that reopens itself in a new tab."""
+
 
 VARIANTS = {
     "main": Variant(
@@ -181,18 +201,21 @@ VARIANTS = {
         initialize_overview=True,
         xrd=True,
         optical=True,
+        link_key="heatmap_analysis",
     ),
     "giwaxs": Variant(
         title="ISA GIWAXS Analysis",
         sections=("cuts", "comparison"),
         initialize_overview=False,
         select_from_store=True,
+        link_key="giwaxs_analysis",
     ),
     "optical": Variant(
         title="ISA Optical Analysis",
         sections=("optical_data",),
         initialize_overview=False,
         select_from_store=True,
+        link_key="optical_analysis",
     ),
     "timely": Variant(
         title="ISA Timely Teller",
@@ -203,5 +226,8 @@ VARIANTS = {
         selection=SELECTION_UPLOAD,
         initialize_overview=False,
         select_from_store=True,
+        # Set for completeness only: an upload variant shows no link row at all, because it
+        # has no single file the links could be about.
+        link_key="timely_teller",
     ),
 }

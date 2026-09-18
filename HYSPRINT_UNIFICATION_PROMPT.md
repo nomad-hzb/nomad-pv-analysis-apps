@@ -105,9 +105,11 @@ Shared modules in `shared/hysprint_utils/` are imported WITH the `hysprint_utils
 
 ### pyproject.toml
 - T1 - `pyproject.toml` exists in the app directory
-- T2 - `hysprint-utils` dependency declared identically in every app, using the exact working form:
-  `"hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared"`
-  Any other variant (relative `../../shared` paths, different absolute paths, alternate PEP 508 spellings) must be replaced with this exact string.
+- T2 - `hysprint-utils` dependency declared identically in every app, as a bare requirement: `"hysprint-utils"`.
+  Never an absolute `file:///home/jovyan/uploads/<session-hash>/shared` path — that session hash is
+  specific to one upload and one Oasis, so it breaks the moment either changes. Every notebook's
+  cell 0 runs `bootstrap.py` (repo root) before any app code imports it, which is what makes the
+  bare requirement resolve; see CLAUDE.md's bootstrap.py gotcha.
 - T3 - `pydantic>=2.0` listed in dependencies
 - T4 - `[tool.hatch.build.targets.wheel] packages = ["."]` present (flat layout)
 - T5 - `[tool.hatch.metadata] allow-direct-references = true` present
@@ -208,11 +210,13 @@ ruff check --select T20 apps/
 Zero errors.
 
 **G6 - Consistent `hysprint-utils` dependency string.**
-Grep for `hysprint-utils @` across every `pyproject.toml` under `apps/`. Every occurrence must be exactly:
+Grep for `hysprint-utils` across every `pyproject.toml` under `apps/`. Every occurrence must be exactly
+a bare requirement:
 ```
-"hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared"
+"hysprint-utils"
 ```
-No relative paths, no alternate spellings.
+Never an absolute `file:///home/jovyan/uploads/<session-hash>/shared` path — see CLAUDE.md's
+bootstrap.py gotcha for why the bare form is what actually resolves.
 
 **G7 - No `sys.path` hacks.**
 Grep for `sys.path.append` and `sys.path.insert` across all files. Zero matches.
@@ -258,8 +262,8 @@ After all gates are evaluated, include a "Gate results" table in the final repor
 - Only change what the checklist requires; do not refactor unrelated code.
 - No regressions: if making a check pass would break an app's currently-working behavior or an already-passing test, stop and flag it instead of proceeding. A green app must stay green.
 - For app folders whose name starts with `0`: fix everything safely fixable, but never guess at work that depends on me. Leave those items and record a to-do list instead.
-- The `hysprint-utils` dependency in every app's `pyproject.toml` must be exactly:
-  `"hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared"`
+- The `hysprint-utils` dependency in every app's `pyproject.toml` must be a bare requirement,
+  `"hysprint-utils"` — never an absolute `file:///home/jovyan/uploads/<session-hash>/shared` path.
 - Replace bare `print()` status/debug calls with `logging.getLogger(__name__)` at module level, using appropriate levels.
 - All `logger.*()` calls use `%s`/`%d` placeholder style, never f-strings inside the format string.
 - All shared `hysprint_utils` imports use the `hysprint_utils.` prefix; app-local modules use plain names.

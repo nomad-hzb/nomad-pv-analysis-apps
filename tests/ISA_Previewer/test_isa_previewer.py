@@ -1,6 +1,7 @@
 """Tests for the ISA Previewer's own logic: config consistency, path handling, link gating,
 measurement listing and section assembly. Nothing here talks to NOMAD or opens an h5."""
 
+import logging
 import os
 
 import pytest
@@ -134,14 +135,37 @@ def test_uploads_root_is_found_at_any_depth_inside_the_upload(dm, tmp_path, monk
 # links
 # ---------------------------------------------------------------------------
 def test_build_notebook_url_addresses_a_sibling_in_this_app(dm, cfg, monkeypatch):
+    """A sibling notebook lives in this app's own folder, which the URL must contain.
+
+    An empty AppLink.folder means "next to me", not "directly under the container": the
+    container path stops at apps/, so leaving the app folder off produced
+    .../apps/giwaxs_analysis.ipynb and 404ed.
+    """
     monkeypatch.setattr(dm, "get_own_upload_folder", lambda: "apps-upload-AAAAAAAAAAAAAAAAAAAAAA")
     monkeypatch.setattr(dm, "get_container", lambda: "apps")
+    monkeypatch.setattr(dm, "get_own_app_folder", lambda: "ISA_Previewer")
 
     url = dm.build_notebook_url(cfg.APP_LINKS["giwaxs_analysis"], "someone")
 
     assert url == (
         "/nomad-oasis/north/user/someone/voila/voila/render"
-        "/uploads/apps-upload-AAAAAAAAAAAAAAAAAAAAAA/apps/giwaxs_analysis.ipynb"
+        "/uploads/apps-upload-AAAAAAAAAAAAAAAAAAAAAA/apps/ISA_Previewer/giwaxs_analysis.ipynb"
+    )
+
+
+def test_build_notebook_url_in_a_cloned_repo_inside_an_upload(dm, cfg, monkeypatch):
+    """The deployed CE-AME layout: the repo is a git clone one level inside the upload."""
+    monkeypatch.setattr(
+        dm, "get_own_upload_folder", lambda: "dashboard_test-ne_Y0arITbmweei7SZW5ug"
+    )
+    monkeypatch.setattr(dm, "get_container", lambda: "nomad-pv-analysis-apps/apps")
+    monkeypatch.setattr(dm, "get_own_app_folder", lambda: "ISA_Previewer")
+
+    url = dm.build_notebook_url(cfg.APP_LINKS["timely_teller"], "someone")
+
+    assert url.endswith(
+        "/uploads/dashboard_test-ne_Y0arITbmweei7SZW5ug"
+        "/nomad-pv-analysis-apps/apps/ISA_Previewer/timely_teller.ipynb"
     )
 
 
@@ -180,6 +204,7 @@ def test_available_links_drops_links_whose_dataset_is_missing(dm, cfg, monkeypat
     labels = [label for label, _url in dm.available_links("run.h5", "someone")]
 
     assert labels == [
+        cfg.APP_LINKS["heatmap_analysis"].label,
         cfg.APP_LINKS["thickness"].label,
         cfg.APP_LINKS["peak_analyzer"].label,
         cfg.APP_LINKS["timely_teller"].label,
@@ -193,6 +218,43 @@ def test_available_links_keeps_config_order(dm, cfg, monkeypatch):
     labels = [label for label, _url in dm.available_links("run.h5", "someone")]
 
     assert labels == [cfg.APP_LINKS[key].label for key in cfg.LINK_ORDER]
+
+
+def test_available_links_leaves_out_the_calling_notebooks_own_link(dm, cfg, monkeypatch):
+    """A link that reopens the notebook it is shown in only loses the current selection."""
+    monkeypatch.setattr(dm, "h5_has_dataset", lambda _path, _dataset: True)
+    monkeypatch.setattr(dm, "build_notebook_url", lambda link, _user: f"/url/{link.notebook}")
+
+    labels = [label for label, _url in dm.available_links("run.h5", "someone", "heatmap_analysis")]
+
+    assert cfg.APP_LINKS["heatmap_analysis"].label not in labels
+    assert cfg.APP_LINKS["optical_analysis"].label in labels
+
+
+def test_quiet_stdout_keeps_dependency_chatter_off_the_page(dm, capsys, caplog):
+    """insitu_analyser and %store print progress with no switch to turn it off."""
+    with caplog.at_level(logging.DEBUG):
+        with dm.quiet_stdout():
+            print("[get_entryid] Entry id for sample_id 'Al_Ni_NP' is uwxYL4vaUU1H5Ego.")
+
+    assert capsys.readouterr().out == ""
+    assert "get_entryid" in caplog.text
+
+
+def test_quiet_stdout_restores_stdout_after_a_failure(dm, capsys):
+    """A library call that raises must not leave the rest of the app muted."""
+    with pytest.raises(ValueError):
+        with dm.quiet_stdout():
+            raise ValueError("boom")
+
+    print("visible again")
+    assert capsys.readouterr().out == "visible again\n"
+
+
+def test_every_variant_names_a_real_link_key(cfg):
+    """A typo in Variant.link_key would silently stop excluding anything."""
+    for name, variant in cfg.VARIANTS.items():
+        assert variant.link_key in cfg.APP_LINKS, name
 
 
 # ---------------------------------------------------------------------------
@@ -326,11 +388,13 @@ def test_an_upload_variant_hands_no_file_on(gui, cfg, monkeypatch):
 def test_a_measurement_variant_stores_its_file_and_returns_the_links(gui, cfg, monkeypatch):
     stored = []
     monkeypatch.setattr(gui.data_manager, "store_for_linked_notebooks", lambda *a: stored.append(a))
-    monkeypatch.setattr(gui, "build_link_row", lambda path, user: f"links for {path}")
+    monkeypatch.setattr(
+        gui, "build_link_row", lambda path, user, exclude: f"links for {path} without {exclude}"
+    )
 
     row = gui.handover_row("/uploads/run/file.h5", "someone", 1200, cfg.VARIANTS["main"])
 
-    assert row == "links for /uploads/run/file.h5"
+    assert row == "links for /uploads/run/file.h5 without heatmap_analysis"
     assert stored == [("/uploads/run/file.h5", 1200)]
 
 
