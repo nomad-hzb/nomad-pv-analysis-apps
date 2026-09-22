@@ -11,6 +11,7 @@ from data_manager import (
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    parse_uploaded_analysis_csv,
     select_layer_row_per_sample,
     variation_warning,
 )
@@ -573,6 +574,24 @@ def test_create_box_plot_with_bin_count_creates_one_trace_per_bin_in_order():
     first_start = float(names[0].split(" to ")[0])
     second_start = float(names[1].split(" to ")[0])
     assert first_start < second_start
+
+
+def test_parse_uploaded_analysis_csv_keeps_existing_sample_id():
+    csv_bytes = b"sample_id,rise_pct,hydration_pct\nS1,120.0,75\nS2,140.0,80\n"
+
+    df = parse_uploaded_analysis_csv(csv_bytes)
+
+    assert list(df["sample_id"]) == ["S1", "S2"]
+    assert list(df.columns) == ["sample_id", "rise_pct", "hydration_pct"]
+
+
+def test_parse_uploaded_analysis_csv_generates_sample_id_when_missing():
+    csv_bytes = b"rise_pct,hydration_pct\n120.0,75\n140.0,80\n"
+
+    df = parse_uploaded_analysis_csv(csv_bytes)
+
+    assert list(df["sample_id"]) == ["row_1", "row_2"]
+    assert list(df.columns) == ["sample_id", "rise_pct", "hydration_pct"]
 
 
 def test_variation_warning_flags_low_variation_columns():
