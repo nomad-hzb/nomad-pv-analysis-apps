@@ -289,6 +289,17 @@ class GUIManager:
         self.analysis_data_status_output = widgets.Output()
 
         # ====================================================================
+        # ANALYSIS DATA - UPLOAD YOUR OWN CSV (bypasses the NOMAD batch load)
+        # ====================================================================
+        self.analysis_data_upload = widgets.FileUpload(
+            description="Upload CSV",
+            accept=".csv",
+            multiple=False,
+            layout={"width": "220px"},
+        )
+        self.analysis_data_upload_output = widgets.Output()
+
+        # ====================================================================
         # ANALYSIS DATA - ROW FILTERS (e.g. "Fill Factor (JV) >= 0.3")
         # ====================================================================
         self.filter_column_selector = widgets.Dropdown(
@@ -727,6 +738,8 @@ class GUIManager:
             self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
         if "recalculate_analysis_data" in callbacks:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
+        if "upload_analysis_csv" in callbacks:
+            self.analysis_data_upload.observe(callbacks["upload_analysis_csv"], names="value")
         if "add_row_filter" in callbacks:
             self.add_filter_button.on_click(callbacks["add_row_filter"])
         if "download_analysis_data_preview" in callbacks:
@@ -1037,6 +1050,18 @@ class GUIManager:
                     "variables are always process metadata.</b> Uncheck any column you want "
                     "excluded from all five, then click Recalculate.</p>"
                 ),
+                widgets.HTML(
+                    "<h4 style='color:#666;'>Or upload your own data</h4>"
+                    "<p style='color:#666;'>Upload a CSV in this tab's own export format "
+                    "(see 'Download CSV' below) to run Correlations/Random Forest/Bayesian "
+                    "Optimization on data that never came from a NOMAD batch load - e.g. a "
+                    "quick offline experiment. This replaces the currently loaded dataset; "
+                    "a missing sample_id column is generated automatically (row_1, row_2, "
+                    "...). Since a flat exported CSV doesn't preserve which columns were "
+                    "originally results vs. process metadata, every numeric column becomes "
+                    "available as both a target and a supporting variable.</p>"
+                ),
+                widgets.HBox([self.analysis_data_upload, self.analysis_data_upload_output]),
                 widgets.HTML(
                     "<h4 style='color:#666;'>Layer selection</h4>"
                     "<p style='color:#666;'>A process step logged once per fabrication layer "
