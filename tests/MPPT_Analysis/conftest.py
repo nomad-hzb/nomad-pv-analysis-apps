@@ -58,7 +58,7 @@ def loaded_app_state(mppt_dataframe):
     full_curves = pd.concat([curves_df], keys=[sample_id])
     sample_ids = pd.Series([sample_id])
     state = AppState()
-    state.set_api_config("https://nomad-hzb-se.de", "test-token")
+    state.set_api_config("https://test-oasis.example.org", "test-token")
     state.load_curves_data(full_curves, sample_ids, pd.DataFrame(), pd.DataFrame())
     state.set_selected_samples([sample_id])
     return state
@@ -68,7 +68,7 @@ def loaded_app_state(mppt_dataframe):
 def mock_data_manager():
     """DataManager instance with no live API connectivity."""
     dm = DataManager.__new__(DataManager)
-    dm.url = "https://nomad-hzb-se.de/nomad-oasis/api/v1"
+    dm.url = "https://test-oasis.example.org/nomad-oasis/api/v1"
     dm.token = "test-token"
     return dm
 

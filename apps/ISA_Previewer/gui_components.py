@@ -230,13 +230,16 @@ def open_source(target: str, variant: config.Variant, screenwidth: int):
     A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant a
     TIMELYTELLER on the selected upload folder, which scans that folder for h5 files itself.
     """
-    if variant.selection == config.SELECTION_UPLOAD:
-        return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
-    return PERFECTPREVIEWER(
-        target,
-        screenwidth=screenwidth,
-        initialize_overview=variant.initialize_overview,
-    )
+    # Both constructors report their progress on stdout ("Optical 2 h5 path: ..."), which
+    # under Voila renders above the app rather than inside it.
+    with data_manager.quiet_stdout():
+        if variant.selection == config.SELECTION_UPLOAD:
+            return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
+        return PERFECTPREVIEWER(
+            target,
+            screenwidth=screenwidth,
+            initialize_overview=variant.initialize_overview,
+        )
 
 
 def handover_row(
@@ -251,7 +254,7 @@ def handover_row(
     if variant.selection == config.SELECTION_UPLOAD:
         return None
     data_manager.store_for_linked_notebooks(target, screenwidth)
-    return build_link_row(target, user)
+    return build_link_row(target, user, variant.link_key)
 
 
 def section_builders(source, variant: config.Variant) -> dict:
@@ -304,9 +307,12 @@ def overview_widgets(previewer: PERFECTPREVIEWER, variant: config.Variant) -> li
     return [built["giwaxs_content"], built["ui"], built["optical_content"]]
 
 
-def build_link_row(h5_path: str, user: str) -> widgets.Widget | None:
-    """The row of "open that other notebook" links this h5 qualifies for."""
-    links = data_manager.available_links(h5_path, user)
+def build_link_row(h5_path: str, user: str, exclude: str | None = None) -> widgets.Widget | None:
+    """The row of "open that other notebook" links this h5 qualifies for.
+
+    exclude is the calling variant's own link key, so a notebook does not link to itself.
+    """
+    links = data_manager.available_links(h5_path, user, exclude)
     if not links:
         return None
     html = " ".join(

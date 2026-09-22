@@ -73,14 +73,23 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
    leave `ruff check` clean before moving on. The ruff config lives ONLY at
    the root `pyproject.toml` — never add a per-app ruff config. Current
    ruleset is `E, F, I, G` (not `T20` yet — see Known gaps below).
-7. **`pyproject.toml` per app** needs the exact dependency string:
-   `"hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared"`
-   — no relative paths, no alternate spellings — plus
+7. **`pyproject.toml` per app** declares `"hysprint-utils"` as a bare
+   requirement — no `file://` path. Keep the `dependencies` list accurate:
+   `bootstrap.py` installs the app's own directory from cell 0, so this list
+   is what actually installs an app's third-party requirements on the Oasis
+   (see the bootstrap gotcha below). It resolves because every notebook's
+   cell 0 runs `bootstrap.py` first (see gotcha below), which installs
+   `shared/` before any app code imports it. Never pin an absolute
+   `file:///home/jovyan/uploads/<session-hash>/shared` path — that session
+   hash is specific to one upload and one Oasis, so an absolute pin breaks
+   the moment either changes. Also needs
    `[tool.hatch.metadata] allow-direct-references = true` and
    `[tool.hatch.build.targets.wheel] packages = ["."]`. `pytest`/`pytest-mock`
    belong only in the root `pyproject.toml`, never per-app.
 8. **Notebooks: exactly 2 cells.** No `sys.path.append`/`insert` anywhere,
-   in any app file or notebook.
+   in any app file or notebook — except inside `bootstrap.py` itself (see
+   gotcha below), which every notebook's cell 0 invokes via
+   `_ = runpy.run_path("../../bootstrap.py")`.
 9. **Tests live at `tests/<app_name>/test_<app_name>.py`**, never inside
    `apps/`. Each app's `conftest.py` must load its own `data_manager`/
    `plot_manager`/etc. under a **unique** name via
@@ -214,6 +223,65 @@ Windows, if `tasklist`/PowerShell start hanging, prefer Git Bash's own
 `ps aux` / `kill -9 <pid>` — `ps` runs in the POSIX layer and stays
 responsive even when WMI-backed tooling is struggling under load.
 
+## Known environment gotcha — every notebook bootstraps via `bootstrap.py`, never its own install cell
+
+`hysprint_utils` becomes importable in the *current* kernel only if
+something puts `shared/` on `sys.path` directly. A plain
+`pip install <shared dir>` is not enough by itself: a fresh kernel's
+`site.py` already ran before that install happens, so the kernel would need
+a restart before the newly installed package becomes importable. This is
+the literal mechanism behind "Voila apps need to be run twice" — diagnosed
+against `App_dashboard`, see `memory/project_voila_hysprint_utils_install.md`.
+
+**How to apply:** every notebook's cell 0 is exactly:
+```python
+import runpy
+_ = runpy.run_path("../../bootstrap.py")
+```
+The `_ =` is load-bearing, not a style tic: `runpy.run_path()` **returns the
+executed module's globals dict**, and a notebook auto-displays the value of
+its last expression — so without the binding, cell 0 dumps `__builtins__`,
+every imported module and every bootstrap function into the app's UI under
+Voila. Hit for real on CE-AME. Don't "simplify" it away.
+
+`bootstrap.py` (repo root) installs `shared/` and then inserts it directly
+into `sys.path` — a deliberate, sanctioned exception to rule 8, not
+something to "clean up" if seen again. Before that install runs it also
+applies this deployment's environment from `oasis_local_config.py` (repo
+root, gitignored, same pattern as `secrets.py`; opt-in, absent by default):
+every uppercase string it defines becomes an environment variable of the
+same name, so `HYSPRINT_URL_BASE` reaches `hysprint_utils.config` before
+any app imports it, and `HTTP_PROXY`/`HTTPS_PROXY` are in place before pip
+reaches PyPI for `hatchling`. Container-level variables always win. Adding
+a new override needs no change to `bootstrap.py` — see `DEPLOYMENT.md`.
+After `shared/`, it installs **the app's own directory** when the cwd has a
+`pyproject.toml` — the cwd is the notebook's folder, so that is the app being
+launched. This is the only thing that installs an app's third-party
+dependencies on the Oasis; before it existed those lists were inert at
+runtime, which is how `ISA_Previewer` hit `ModuleNotFoundError:
+insitu_analyser` on a fresh CE-AME container with the pin sitting in its
+`pyproject.toml` all along. It runs once per container, guarded by a marker
+in the temp dir keyed on the app path plus the `pyproject.toml` contents, so
+editing dependencies re-triggers it and an unchanged app never pays twice.
+A failed app install warns and continues (most apps need nothing the NORTH
+image lacks, and breaking a working app over it would be a regression);
+only the `shared/` install is fatal.
+
+Last, it **silences import-time stdout** for the rest of the kernel's life by
+wrapping `builtins.__import__`: several third-party packages greet stdout when
+imported (`insitu_analyser` pulls in INSIGHT, which prints a multi-line
+welcome banner), and under Voila that renders above the app where it reads as
+an error. Cell 0 has returned before an app's imports run, so this has to be a
+lasting hook rather than a `with` block. Narrow on purpose — stderr untouched
+so warnings still surface, runtime output untouched, already-imported modules
+take a fast path, text kept at DEBUG rather than dropped. Set
+`HYSPRINT_KEEP_IMPORT_OUTPUT=1` to disable it while debugging an import. Don't
+add per-app banner suppression on top of this.
+
+Don't reimplement any of this per-app; the two apps that used to have their own
+install cell (`App_dashboard`, `JV-Analysis`) were migrated to call
+`bootstrap.py` instead.
+
 ## Known gaps (tracked, not silently fixed)
 
 - `log_notebook_usage()` (in `shared/hysprint_utils/access_token.py`) writes
@@ -261,6 +329,37 @@ responsive even when WMI-backed tooling is struggling under load.
 - `XPS-Automated` isn't a real app yet (one raw personal notebook, no
   `data_manager`/`plot_manager`/`gui_components`/`app.py` split, no sample
   data in-repo to validate a rewrite against). Needs a dedicated future pass.
+- None of the nine `Electrochemical_analysis` notebooks has a `bootstrap.py`
+  cell, so they get no deployment environment: bootstrap exports
+  `HYSPRINT_URL_BASE` and the proxy into its own process, and a separate kernel
+  never sees them. `hysprint_utils` itself usually still imports (it is
+  pip-installed into the container once any other app has run), but
+  `config.py` then falls back to its own HZB default and no proxy is applied,
+  so on a non-HZB or proxied Oasis these notebooks reach nothing. Adding cell 0
+  to each (the two-line `runpy.run_path` form) is the small fix and is worth
+  doing on its own; the full unification pass is a separate, much bigger job
+  (nine notebooks including `Untitled.ipynb` and a pyDRTtools tutorial,
+  `!pip install impedance` in cell 0 of three, star imports from
+  `Manuel_echem_function` and `nomad_api_calls`). Don't conflate the two.
+- `apps/Excel_creator/sheet_data_entry_guide.py:213` writes an SE Oasis link,
+  and `:224` an HZB-specific `scribehow.com` how-to link, into every generated
+  workbook. Not simply derivable like the other apps: the link leaves in a file
+  that gets mailed around and targets a Voila GUI page, so what it should point
+  at is a decision first. The citation sheet's GitHub links
+  (`sheet_how_to_cite.py:7,16,22,28`) point at the `nomad-hzb/nomad-hysprint`
+  schema repo and may want revisiting in the same pass. Needs a version bump.
+- Open question, no decision yet: how should content tied to one Oasis be
+  handled in general? Three ad-hoc answers already exist — per-item env
+  override with an opt-out (`App_dashboard/data_manager.py:301`, where an empty
+  string drops a Projects card and all six drop the section), deliberate
+  hardcoding (`PeroDatabase_downloader/config.py` pins the SE Oasis as a fixed
+  data source to download *from*, like the public central server), and plain
+  derivation from `hysprint_utils.config` (everything else). Unsettled: whether
+  "Oasis-specific" is a property of a whole app or only of links inside
+  portable apps; whether a non-portable item should be hidden, labelled, or
+  left pointing at its home Oasis; and whether NORTH tool configuration is the
+  right home for this once the plugin packaging below happens. Don't invent a
+  fourth mechanism without settling it.
 
 ## Ultimate goal: NOMAD plugin
 

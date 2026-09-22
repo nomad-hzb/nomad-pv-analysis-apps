@@ -8,8 +8,8 @@ version = "0.3.0"
 description = "Live-autofilled NOMAD experiment Excel builder for HySPRINT"
 requires-python = ">=3.10"
 dependencies = [
-    "hysprint-utils @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/shared",
-    "excel-creator @ file:///home/jovyan/uploads/analysis_apps_restructuring-WxUahazkSNy-bSE9GaZyZQ/apps/Excel_creator",
+    "hysprint-utils",
+    "excel-creator",
     "ipython>=8.12",
     "ipywidgets>=8.1",
     "openpyxl>=3.1",

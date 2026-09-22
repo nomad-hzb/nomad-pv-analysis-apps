@@ -168,13 +168,14 @@ CATEGORIES: dict[str, list[AppEntry]] = {
     ],
     # In-situ apps read the HDF5 files insitu_analyser writes to NOMAD. The previewer is the
     # usual way in and hands its selection to the others, but each of them also works on its
-    # own: opened from here they start on their own upload/sample/run selectors.
-    "µSlot-die coater": [
+    # own: opened from here they start on their own upload/sample/run selectors, and each one
+    # links back to the previewer's heatmaps.
+    "In-situ and GIWAXS Data Analysis": [
         AppEntry(
             "ISA_Previewer",
             "isa_previewer.ipynb",
             "ISA Previewer",
-            "Pick a NOMAD upload, sample and in-situ run, then step through its heatmaps, "
+            "Pick a NOMAD upload, sample and measurement, then step through its heatmaps, "
             "diffractograms and logging.",
             "fa-map",
         ),
@@ -182,7 +183,7 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "ISA_Previewer",
             "giwaxs_analysis.ipynb",
             "GIWAXS Analysis",
-            "Cuts and run-to-run comparison for the detector images of an in-situ run.",
+            "Cuts and run-to-run comparison for the GIWAXS detector images.",
             "fa-sun",
         ),
         AppEntry(
@@ -298,19 +299,29 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 }
 
 
-PROJECTS: list[Project] = [
-    Project(
-        "Slot-die coater ML",
-        "PL-imaging to JV-performance pipeline for slot-die coated devices.",
-        "fa-industry",
-        [
+def _project_upload_id(env_var: str, hzb_default: str) -> str | None:
+    """Resolve one Projects-section upload_id from env, HZB's value as default.
+
+    A fork with no matching upload sets the env var to an empty string to drop
+    that card entirely, rather than keeping a link that can only ever 404.
+    """
+    return os.environ.get(env_var, hzb_default) or None
+
+
+def _build_projects() -> list[Project]:
+    slot_die_apps = [
+        entry
+        for entry in (
             AppEntry(
                 "",
                 "image_cropper.ipynb",
                 "1. Image Cropper",
                 "Crop raw PL images down to the region used by the rest of the pipeline.",
                 "fa-crop",
-                upload_id="ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_IMAGE_CROPPER_UPLOAD_ID",
+                    "ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg",
+                ),
             ),
             AppEntry(
                 "",
@@ -319,7 +330,9 @@ PROJECTS: list[Project] = [
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -328,7 +341,9 @@ PROJECTS: list[Project] = [
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="XnIHIdrkTT6VFyxFD8a6Hg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -337,7 +352,9 @@ PROJECTS: list[Project] = [
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="sSP9nxKDRhax0cuBzsrvEA",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
+                ),
             ),
             AppEntry(
                 "",
@@ -346,7 +363,9 @@ PROJECTS: list[Project] = [
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="Jeb8HXjnSNy9T0-Z5VVbhA",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
+                ),
             ),
             AppEntry(
                 "",
@@ -356,11 +375,26 @@ PROJECTS: list[Project] = [
                 "dataset back to NOMAD.",
                 "fa-object-group",
                 # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id="YRS7abDQS26o2NplzjBwKg",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
+                ),
             ),
-        ],
-    ),
-]
+        )
+        if entry.upload_id
+    ]
+    if not slot_die_apps:
+        return []
+    return [
+        Project(
+            "Slot-die coater ML",
+            "PL-imaging to JV-performance pipeline for slot-die coated devices.",
+            "fa-industry",
+            slot_die_apps,
+        )
+    ]
+
+
+PROJECTS: list[Project] = _build_projects()
 
 
 LEARNING_FOLDER = LearningEntry(
@@ -388,27 +422,66 @@ def log_navigation(action: str) -> None:
     log_button_usage(action, user=get_current_user())
 
 
+UPLOADS_DIR_NAME = "uploads"
+
+
+def _cwd_parts() -> list[str]:
+    """The current working directory as path segments, separator-agnostic."""
+    return [part for part in os.getcwd().replace("\\", "/").split("/") if part]
+
+
+def _uploads_index(parts: list[str]) -> int | None:
+    """Index of the NOMAD 'uploads' mount in parts, or None if cwd is not under one.
+
+    The leftmost match wins: the mount lives at a fixed prefix (/home/jovyan/uploads),
+    so a later segment of the same name is an upload or folder that happens to be
+    called "uploads", not the mount point.
+    """
+    for index, part in enumerate(parts):
+        # Needs at least <upload_id>/<AppFolder> after it to be usable.
+        if part == UPLOADS_DIR_NAME and index + 2 < len(parts):
+            return index
+    return None
+
+
 def get_upload_id() -> str:
     """Derive this dashboard's own NOMAD upload ID from the current working directory.
 
-    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>.
-    Read from cwd rather than hardcoded so this keeps working if the upload is ever
-    re-uploaded under a different ID.
+    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/.../<AppFolder>, so the
+    upload ID is the segment right after 'uploads'. Read from cwd rather than hardcoded
+    so this keeps working if the upload is ever re-uploaded under a different ID.
+
+    Anchored on the 'uploads' segment rather than counting directories up from the cwd,
+    because how deep the repo sits inside the upload varies with how it was deployed:
+    unpacking the repo at the top of an upload gives <upload_id>/apps/<AppFolder>, while
+    `git clone` inside the upload adds the repo directory, giving
+    <upload_id>/nomad-pv-analysis-apps/apps/<AppFolder>. Fixed-depth walking silently
+    returned the repo folder as the upload ID in the latter case, producing links with
+    the upload name missing entirely.
     """
-    container_dir = os.path.dirname(os.getcwd())
-    upload_dir = os.path.dirname(container_dir)
-    return os.path.basename(upload_dir)
+    parts = _cwd_parts()
+    index = _uploads_index(parts)
+    if index is None:
+        # Not under an uploads mount (local dev, tests): best-effort, previous behaviour.
+        return os.path.basename(os.path.dirname(os.path.dirname(os.getcwd())))
+    return parts[index + 1]
 
 
 def get_uploads_path() -> str:
-    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
+    """Derive 'uploads/<upload_id>/.../<container>' from the current working directory.
 
-    <container> is the folder holding all app folders (this repo's own upload mirrors
-    the repo layout, so <container> is "apps").
+    <container> is the folder holding all app folders ("apps" for this repo). Everything
+    between the upload ID and the app folder is preserved, so a repo cloned into a
+    subdirectory of the upload keeps that subdirectory in the path. See get_upload_id
+    for why this is not a fixed number of levels.
     """
-    container_dir = os.path.dirname(os.getcwd())
-    container = os.path.basename(container_dir)
-    return f"uploads/{get_upload_id()}/{container}"
+    parts = _cwd_parts()
+    index = _uploads_index(parts)
+    if index is None:
+        container = os.path.basename(os.path.dirname(os.getcwd()))
+        return f"{UPLOADS_DIR_NAME}/{get_upload_id()}/{container}"
+    # From 'uploads' up to, but not including, this app's own folder.
+    return "/".join(parts[index:-1])
 
 
 def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:

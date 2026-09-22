@@ -41,8 +41,10 @@ workflow: from JV curve analysis and MPPT tracking to EQE, TRPL, XRD, XPS, and m
 ## Requirements
 
 - Python 3.10 or higher
-- A NOMAD account on the [HZB SE Oasis](https://nomad-hzb-se.de/nomad-oasis/gui/)
-  (required for any app that reads from or writes to NOMAD)
+- A NOMAD account on the Oasis you point these apps at — defaults to the
+  [HZB SE Oasis](https://nomad-hzb-se.de/nomad-oasis/gui/), see Configuration
+  below to target a different one — (required for any app that reads from or
+  writes to NOMAD)
 
 > If you do not have a NOMAD account, register at the link above before
 > attempting to run any app that connects to the Oasis.
@@ -80,22 +82,23 @@ at `http://localhost:8866` by default.
 
 ## Configuration
 
-Most apps require a NOMAD Oasis URL and authentication token. Set these as
-environment variables before running:
+Most apps talk to a NOMAD Oasis and need its URL and an access token.
+
+The Oasis URL defaults to the HZB SE Oasis (`shared/hysprint_utils/config.py`);
+point these apps at a different Oasis by overriding it with environment
+variables instead of editing that file:
 
 ```bash
-export NOMAD_URL=https://nomad-hzb-se.de/nomad-oasis
-export NOMAD_TOKEN=your_token_here
-export HYSPRINT_SERVER=hzb          # selects the data adapter for your server
+export HYSPRINT_URL_BASE=https://your-oasis.example.org
+export HYSPRINT_API_ENDPOINT=/nomad-oasis/api/v1
 ```
 
-Alternatively, create a `.env` file in the app folder (never commit this file):
+For authentication, export `NOMAD_CLIENT_ACCESS_TOKEN`, or create a
+`secrets.py` file at the repo root (never commit this file) defining
+`NOMAD_TOKEN = "your_token_here"`.
 
-```
-NOMAD_URL=https://nomad-hzb-se.de/nomad-oasis
-NOMAD_TOKEN=your_token_here
-HYSPRINT_SERVER=hzb
-```
+Deploying the suite to an Oasis other than HZB SE — including one behind an
+outbound proxy — is covered step by step in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
