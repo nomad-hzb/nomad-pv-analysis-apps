@@ -3,7 +3,17 @@ import pandas as pd
 import plotly.graph_objects as go
 import pytest
 from data_loader import HySprintDataLoader
-from data_manager import DataManager, MeasurementRow, variation_warning
+from data_manager import (
+    DataManager,
+    MeasurementRow,
+    aggregate_results_per_sample,
+    apply_row_filters,
+    exclude_samples,
+    get_categorical_columns,
+    get_layer_type_options,
+    select_layer_row_per_sample,
+    variation_warning,
+)
 from experimental_analysis import (
     compute_process_drift,
     detect_outliers,
@@ -282,6 +292,121 @@ def test_set_analysis_columns_defaults_new_columns_to_checked():
     assert gui.get_checked_metadata_columns() == ["m1", "m2"]
 
 
+def test_set_layer_selectors_creates_one_dropdown_per_source():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"], "slot_die_coating": ["HTL"]})
+
+    assert len(gui.layer_selector_box.children) == 2
+    assert gui.get_layer_selections() == {"spin_coating": "Active Layer", "slot_die_coating": "HTL"}
+
+
+def test_set_layer_selectors_empty_input_clears_dropdowns():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+
+    gui.set_layer_selectors({})
+
+    assert gui.layer_selector_box.children == ()
+    assert gui.get_layer_selections() == {}
+
+
+def test_set_layer_selectors_preserves_choice_across_rebuild():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+    gui.layer_selector_box.children[0].value = "ETL"
+
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+
+    assert gui.get_layer_selections() == {"spin_coating": "ETL"}
+
+
+def test_set_layer_selectors_resets_to_first_option_when_choice_no_longer_valid():
+    gui = GUIManager()
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"]})
+    gui.layer_selector_box.children[0].value = "ETL"
+
+    # ETL no longer present after a batch reload - falls back to first option.
+    gui.set_layer_selectors({"spin_coating": ["Active Layer", "HTL"]})
+
+    assert gui.get_layer_selections() == {"spin_coating": "Active Layer"}
+
+
+def test_set_sample_exclusion_checklist_all_checked_by_default():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2", "S3"], on_toggle=lambda _change: None)
+
+    assert len(gui.sample_exclusion_checklist_box.children) == 3
+    assert gui.get_excluded_sample_ids() == set()
+
+
+def test_set_sample_exclusion_checklist_unchecked_sample_is_excluded():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2"], on_toggle=lambda _change: None)
+
+    gui.sample_exclusion_checklist_box.children[0].value = False
+
+    assert gui.get_excluded_sample_ids() == {"S1"}
+
+
+def test_set_sample_exclusion_checklist_preserves_exclusion_across_rebuild():
+    gui = GUIManager()
+    gui.set_sample_exclusion_checklist(["S1", "S2"], on_toggle=lambda _change: None)
+    gui.sample_exclusion_checklist_box.children[0].value = False  # exclude S1
+
+    # A Recalculate/layer-selection change rebuilds the list - S1 must stay excluded.
+    gui.set_sample_exclusion_checklist(["S1", "S2", "S3"], on_toggle=lambda _change: None)
+
+    assert gui.get_excluded_sample_ids() == {"S1"}
+
+
+def test_set_sample_exclusion_checklist_toggle_invokes_callback():
+    gui = GUIManager()
+    calls = []
+    gui.set_sample_exclusion_checklist(["S1"], on_toggle=lambda change: calls.append(change))
+
+    gui.sample_exclusion_checklist_box.children[0].value = False
+
+    assert len(calls) == 1
+
+
+def test_set_analysis_columns_populates_filter_column_dropdown():
+    gui = GUIManager()
+    gui.set_analysis_columns(["r1", "r2"], ["m1"])
+    assert gui.filter_column_selector.options == ("m1", "r1", "r2")
+
+
+def test_render_active_filters_shows_placeholder_when_none_active():
+    gui = GUIManager()
+    gui.render_active_filters([], on_remove=lambda _fid: None)
+    assert len(gui.active_filters_box.children) == 1
+    assert "No filters active" in gui.active_filters_box.children[0].value
+
+
+def test_render_active_filters_renders_one_row_per_filter():
+    gui = GUIManager()
+    row_filters = [
+        {"id": 1, "column": "fill_factor", "op": ">=", "value": 0.3},
+        {"id": 2, "column": "voc", "op": "<", "value": 1.2},
+    ]
+    gui.render_active_filters(row_filters, on_remove=lambda _fid: None)
+    assert len(gui.active_filters_box.children) == 2
+
+
+def test_render_active_filters_remove_button_calls_on_remove_with_correct_id():
+    gui = GUIManager()
+    removed_ids = []
+    row_filters = [
+        {"id": 1, "column": "fill_factor", "op": ">=", "value": 0.3},
+        {"id": 2, "column": "voc", "op": "<", "value": 1.2},
+    ]
+    gui.render_active_filters(row_filters, on_remove=removed_ids.append)
+
+    remove_button = gui.active_filters_box.children[1].children[1]
+    remove_button.click()
+
+    assert removed_ids == [2]
+
+
 def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     dm = DataManager(data_loader=None, param_manager=ParameterManager())
 
@@ -318,6 +443,70 @@ def test_load_all_data_for_summary_attaches_batch_column(monkeypatch):
     dm.load_all_data_for_summary(["HZB_FiNa_1_3_C-1"], {"HZB_FiNa_1_3_C-1": "v1"})
 
     assert dm.current_metadata["spin_coating"].loc[0, "batch"] == "HZB_FiNa_1_3"
+
+
+def test_build_parameter_summary_markdown_excludes_batch_column():
+    """ "batch" is a derived subbatch label (extract_subbatch), not a real
+    process parameter - it never feeds Correlation/RF/BO (string, not
+    numeric) and should not clutter the Parameter Summary tables either,
+    even when it varies (e.g. a load spanning more than one subbatch)."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_metadata = {
+        "spin_coating": pd.DataFrame(
+            {
+                "sample_id": ["S1", "S2"],
+                "batch": ["HZB_JJ_19_", "HZB_JJ_19_ns_"],
+                "annealing_temperature": [40.0, 50.0],
+            }
+        )
+    }
+
+    markdown = dm.build_parameter_summary_markdown()
+
+    assert "annealing_temperature" in markdown
+    assert "batch" not in markdown
+
+
+def test_load_all_data_for_summary_keeps_every_entry_per_sample(monkeypatch):
+    """Regression test for issue #34: a sample re-measured more than once for
+    the same result type (e.g. JV measured on two different dates) must keep
+    every entry, not just the first."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.data_loader = type(
+        "FakeLoader",
+        (),
+        {
+            "url": "http://example.test",
+            "token": "token",
+            "load_inkjet_printing_data": staticmethod(lambda *a, **k: None),
+            "load_cleaning_data": staticmethod(lambda *a, **k: None),
+            "load_substrate_data": staticmethod(lambda *a, **k: None),
+            "load_evaporation_data": staticmethod(lambda *a, **k: None),
+            "load_slot_die_coating_data": staticmethod(lambda *a, **k: None),
+            "load_spin_coating_data": staticmethod(lambda *a, **k: None),
+            "load_ald_data": staticmethod(lambda *a, **k: None),
+            "load_blade_coating_data": staticmethod(lambda *a, **k: None),
+            "load_dip_coating_data": staticmethod(lambda *a, **k: None),
+            "load_laser_scribing_data": staticmethod(lambda *a, **k: None),
+            "load_annealing_data": staticmethod(lambda *a, **k: None),
+        },
+    )()
+
+    def fake_get_all_eqe(url, token, sample_ids, measurement_type):
+        if measurement_type != "HySprint_JVmeasurement":
+            return None
+        first_measurement = {"jv_curve": [{"fill_factor": 0.5}], "datetime": "2024-01-01"}
+        second_measurement = {"jv_curve": [{"fill_factor": 0.8}], "datetime": "2024-02-01"}
+        return {"S1": [(first_measurement, {}), (second_measurement, {})]}
+
+    monkeypatch.setattr("data_manager.get_all_eqe", fake_get_all_eqe, raising=False)
+
+    dm.load_all_data_for_summary(["S1"], {"S1": ""})
+
+    jv_df = dm.current_results["jv_measurement"]
+    assert len(jv_df) == 2
+    assert set(jv_df["fill_factor"]) == {0.5, 0.8}
+    assert (jv_df["sample_id"] == "S1").all()
 
 
 def test_get_uploads_path_derives_from_cwd(monkeypatch):
@@ -405,6 +594,221 @@ def test_variation_warning_ignores_columns_not_in_df():
     flagged = variation_warning(df, ["a", "missing_col"], min_unique=6)
 
     assert flagged == []
+
+
+def test_apply_row_filters_no_filters_returns_all_rows():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [])
+
+    assert len(result) == 3
+
+
+def test_apply_row_filters_drops_rows_below_threshold():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
+
+    assert list(result["fill_factor"]) == [0.5, 0.9]
+
+
+def test_apply_row_filters_combines_multiple_filters_with_and():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9], "voc": [0.0, 1.0, 1.3]})
+
+    result = apply_row_filters(
+        df,
+        [
+            {"column": "fill_factor", "op": ">=", "value": 0.3},
+            {"column": "voc", "op": "<", "value": 1.2},
+        ],
+    )
+
+    assert list(result["fill_factor"]) == [0.5]
+
+
+def test_apply_row_filters_skips_filter_on_missing_column():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "not_a_column", "op": ">=", "value": 0.3}])
+
+    assert len(result) == 3
+
+
+def test_apply_row_filters_resets_index():
+    df = pd.DataFrame({"fill_factor": [0.1, 0.5, 0.9]})
+
+    result = apply_row_filters(df, [{"column": "fill_factor", "op": ">=", "value": 0.3}])
+
+    assert list(result.index) == [0, 1]
+
+
+def test_exclude_samples_drops_matching_sample_ids():
+    df = pd.DataFrame({"sample_id": ["S1", "S2", "S3"], "fill_factor": [0.9, 0.0, 0.8]})
+
+    result = exclude_samples(df, {"S2"})
+
+    assert list(result["sample_id"]) == ["S1", "S3"]
+
+
+def test_exclude_samples_drops_every_row_of_an_excluded_sample():
+    """Unlike apply_row_filters, exclusion is by identity - a sample with
+    several rows (e.g. "All Points" JV pixels) must lose all of them, not
+    just the ones with unflattering values."""
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S2"], "fill_factor": [0.9, 0.05, 0.8]})
+
+    result = exclude_samples(df, {"S1"})
+
+    assert list(result["sample_id"]) == ["S2"]
+
+
+def test_exclude_samples_empty_set_returns_all_rows():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "fill_factor": [0.9, 0.8]})
+
+    result = exclude_samples(df, set())
+
+    assert len(result) == 2
+
+
+def test_exclude_samples_resets_index():
+    df = pd.DataFrame({"sample_id": ["S1", "S2", "S3"], "fill_factor": [0.9, 0.0, 0.8]})
+
+    result = exclude_samples(df, {"S2"})
+
+    assert list(result.index) == [0, 1]
+
+
+def test_get_layer_type_options_flags_multi_layer_sources_only():
+    metadata = {
+        "spin_coating": pd.DataFrame(
+            {"sample_id": ["S1", "S1"], "layer_type": ["ETL", "Active Layer"]}
+        ),
+        "cleaning": pd.DataFrame({"sample_id": ["S1"], "layer_type": ["Substrate"]}),
+        "evaporation": pd.DataFrame({"sample_id": ["S1"]}),  # no layer_type column
+    }
+
+    options = get_layer_type_options(metadata)
+
+    assert options == {"spin_coating": ["Active Layer", "ETL"]}
+
+
+def test_select_layer_row_per_sample_keeps_only_matching_layer():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2"],
+            "layer_type": ["ETL", "Active Layer", "Active Layer"],
+            "annealing_temperature": [None, 50, 60],
+        }
+    )
+
+    result = select_layer_row_per_sample(df, "Active Layer")
+
+    assert list(result["sample_id"]) == ["S1", "S2"]
+    assert list(result["annealing_temperature"]) == [50, 60]
+
+
+def test_select_layer_row_per_sample_passes_through_single_layer_source():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "layer_type": ["Substrate", "Substrate"]})
+
+    result = select_layer_row_per_sample(df, "irrelevant")
+
+    assert len(result) == 2
+
+
+def test_select_layer_row_per_sample_passes_through_no_layer_type_column():
+    df = pd.DataFrame({"sample_id": ["S1", "S2"], "fill_factor": [0.5, 0.8]})
+
+    result = select_layer_row_per_sample(df, "Active Layer")
+
+    assert len(result) == 2
+
+
+def test_aggregate_results_per_sample_mean_is_default():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "fill_factor": [0.2, 0.8]})
+
+    result = aggregate_results_per_sample(df)
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.5)
+
+
+def test_aggregate_results_per_sample_median():
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S1"], "fill_factor": [0.1, 0.5, 0.9]})
+
+    result = aggregate_results_per_sample(df, method="Median")
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.5)
+
+
+def test_aggregate_results_per_sample_max():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "fill_factor": [0.2, 0.8]})
+
+    result = aggregate_results_per_sample(df, method="Max")
+
+    assert result.loc[result["sample_id"] == "S1", "fill_factor"].iloc[0] == pytest.approx(0.8)
+
+
+def test_aggregate_results_per_sample_all_points_passes_through_unchanged():
+    df = pd.DataFrame({"sample_id": ["S1", "S1", "S2"], "fill_factor": [0.2, 0.8, 0.5]})
+
+    result = aggregate_results_per_sample(df, method="All Points")
+
+    assert len(result) == 3
+    assert list(result["fill_factor"]) == [0.2, 0.8, 0.5]
+
+
+def test_get_categorical_columns_identifies_real_grouping_variables():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3", "S4"],
+            "material": ["A", "A", "B", "B"],
+            "constant": ["X", "X", "X", "X"],
+            "all_unique": ["a", "b", "c", "d"],
+        }
+    )
+
+    assert get_categorical_columns(df) == ["material"]
+
+
+def test_get_categorical_columns_skips_unhashable_values_without_raising():
+    """Regression test: raw JV voltage/current_density curve arrays pass
+    through as their own object-dtype columns unaggregated when "All Points"
+    is the chosen results-aggregation method. nunique() on a list-valued
+    column raises TypeError (lists aren't hashable) - this must be skipped,
+    not propagate and abort the whole Recalculate/ANOVA-selector refresh."""
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3"],
+            "material": ["A", "A", "B"],
+            "voltage": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        }
+    )
+
+    assert get_categorical_columns(df) == ["material"]
+
+
+def test_get_categorical_columns_excludes_custom_columns():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", "S3"],
+            "batch": ["b1", "b2", "b3"],
+            "material": ["A", "A", "B"],
+        }
+    )
+
+    assert get_categorical_columns(df, exclude=["sample_id", "batch"]) == ["material"]
+
+
+def test_aggregate_results_per_sample_keeps_first_datetime():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1"],
+            "fill_factor": [0.2, 0.8],
+            "datetime": ["2024-01-01", "2024-01-02"],
+        }
+    )
+
+    result = aggregate_results_per_sample(df)
+
+    assert result.loc[result["sample_id"] == "S1", "datetime"].iloc[0] == "2024-01-01"
 
 
 def test_variation_warning_empty_when_all_vary_enough():

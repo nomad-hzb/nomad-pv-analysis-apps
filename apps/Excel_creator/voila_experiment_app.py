@@ -10,6 +10,12 @@ from IPython.display import display
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+from hysprint_utils.process_specs import (
+    AVAILABLE_PROCESSES,
+    PROCESSES,
+    build_default_config_by_process_type,
+)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -27,25 +33,11 @@ class MinimalistExperimentBuilder:
         self.current_sequence = []
         self.templates = {}
 
-        # Available process types
-        processes = [
-            "ALD",
-            "Annealing",
-            "Blade Coating",
-            "Cleaning O2-Plasma",
-            "Cleaning UV-Ozone",
-            "Co-Evaporation",
-            "Dip Coating",
-            "Evaporation",
-            "Generic Process",
-            "Ink Recycling",
-            "Inkjet Printing",
-            "Laser Scribing",
-            "Slot Die Coating",
-            "Spin Coating",
-            "Sputtering",
-        ]
-        self.available_processes = ["Experiment Info"] + sorted(processes)
+        # Available process types - shared/hysprint_utils/process_specs.py is the single
+        # source of truth (also used by smart_databaser's data_manager.py), so this list
+        # and the config controls below can't silently drift out of sync the way they
+        # once did (see process_specs.py's docstring for the history).
+        self.available_processes = AVAILABLE_PROCESSES
 
         self.setup_widgets()
         self.load_templates()
@@ -350,7 +342,15 @@ class MinimalistExperimentBuilder:
             return main_row
 
     def _create_inline_config_controls(self, index, process_name, config):
-        """Create inline configuration controls - returns (numeric_controls, checkbox_controls)"""
+        """Create inline configuration controls - returns (numeric_controls, checkbox_controls)
+
+        Numeric/checkbox controls are rendered generically from
+        PROCESSES[process_name]["meta"]["numeric_config"/"boolean_config"] in
+        shared/hysprint_utils/process_specs.py, instead of one hand-written
+        if/elif block per process type - the exact pattern gui_components.py's
+        own _sync_config_controls already used, now shared by both apps' GUIs
+        so a new process type's controls can't be added to one and missed in
+        the other."""
         numeric_controls = []
         checkbox_controls = []
 
@@ -371,192 +371,32 @@ class MinimalistExperimentBuilder:
             )
             checkbox_controls.append(atmospheric_checkbox)
 
-        # Check if process has configuration options
-        configurable_processes = [
-            "Spin Coating",
-            "Cleaning O2-Plasma",
-            "Cleaning UV-Ozone",
-            "Inkjet Printing",
-            "Co-Evaporation",
-            "Ink Recycling",
-            "Slot Die Coating",
-            "Blade Coating",
-        ]
+        meta = PROCESSES.get(process_name, {}).get("meta", {})
 
-        if process_name not in configurable_processes:
-            return numeric_controls, checkbox_controls
-
-        # Solvents
-        if process_name in [
-            "Spin Coating",
-            "Cleaning O2-Plasma",
-            "Cleaning UV-Ozone",
-            "Inkjet Printing",
-            "Ink Recycling",
-            "Slot Die Coating",
-            "Blade Coating",
-        ]:
-            solvents_widget = widgets.BoundedIntText(
-                value=config.get("solvents", 0),
-                min=0,
-                max=20,
-                description="Solvents:",
-                style={"description_width": "55px"},
-                layout=widgets.Layout(width="120px"),
-            )
-            solvents_widget.observe(
-                lambda change, idx=index: self._update_config(idx, "solvents", change["new"]),
-                names="value",
-            )
-            numeric_controls.append(solvents_widget)
-
-        # Solutes
-        if process_name in [
-            "Spin Coating",
-            "Inkjet Printing",
-            "Ink Recycling",
-            "Slot Die Coating",
-            "Blade Coating",
-        ]:
-            solutes_widget = widgets.BoundedIntText(
-                value=config.get("solutes", 0),
-                min=0,
-                max=20,
-                description="Solutes:",
-                style={"description_width": "50px"},
-                layout=widgets.Layout(width="115px"),
-            )
-            solutes_widget.observe(
-                lambda change, idx=index: self._update_config(idx, "solutes", change["new"]),
-                names="value",
-            )
-            numeric_controls.append(solutes_widget)
-
-        # Spin Steps
-        if process_name == "Spin Coating":
-            spinsteps_widget = widgets.BoundedIntText(
-                value=config.get("spinsteps", 1),
-                min=1,
-                max=5,
-                description="Steps:",
-                style={"description_width": "40px"},
-                layout=widgets.Layout(width="100px"),
-            )
-            spinsteps_widget.observe(
-                lambda change, idx=index: self._update_config(idx, "spinsteps", change["new"]),
-                names="value",
-            )
-            numeric_controls.append(spinsteps_widget)
-
-        # Materials (for Co-Evaporation)
-        if process_name == "Co-Evaporation":
-            materials_widget = widgets.BoundedIntText(
-                value=config.get("materials", 1),
-                min=1,
-                max=10,
-                description="Materials:",
-                style={"description_width": "65px"},
-                layout=widgets.Layout(width="130px"),
-            )
-            materials_widget.observe(
-                lambda change, idx=index: self._update_config(idx, "materials", change["new"]),
-                names="value",
-            )
-            numeric_controls.append(materials_widget)
-
-        # Precursors (for Ink Recycling)
-        if process_name == "Ink Recycling":
-            precursors_widget = widgets.BoundedIntText(
-                value=config.get("precursors", 0),
-                min=0,
-                max=10,
-                description="Precursors:",
-                style={"description_width": "70px"},
-                layout=widgets.Layout(width="135px"),
-            )
-            precursors_widget.observe(
-                lambda change, idx=index: self._update_config(idx, "precursors", change["new"]),
-                names="value",
-            )
-            numeric_controls.append(precursors_widget)
-
-        # Checkboxes for Spin Coating
-        if process_name == "Spin Coating":
-            checkbox_options = [
-                ("antisolvent", "Antisolvent"),
-                ("gasquenching", "Gas Quenching"),
-                ("vacuumquenching", "Vacuum Quenching"),
-            ]
-
-            for option_key, option_label in checkbox_options:
-                checkbox = widgets.Checkbox(
-                    value=config.get(option_key, False),
-                    description=option_label,
-                    style={"description_width": "initial"},
-                    layout=widgets.Layout(width="140px"),
-                )
-                checkbox.observe(
-                    lambda change, idx=index, key=option_key: self._update_config(
-                        idx, key, change["new"]
-                    ),
-                    names="value",
-                )
-                checkbox_controls.append(checkbox)
-
-        # Checkboxes for Spin Coating
-        if process_name == "Blade Coating" or process_name == "Slot Die Coating":
-            checkbox_options = [
-                ("gasquenching", "Gas Quenching"),
-                ("vacuumquenching", "Vacuum Quenching"),
-            ]
-
-            for option_key, option_label in checkbox_options:
-                checkbox = widgets.Checkbox(
-                    value=config.get(option_key, False),
-                    description=option_label,
-                    style={"description_width": "initial"},
-                    layout=widgets.Layout(width="140px"),
-                )
-                checkbox.observe(
-                    lambda change, idx=index, key=option_key: self._update_config(
-                        idx, key, change["new"]
-                    ),
-                    names="value",
-                )
-                checkbox_controls.append(checkbox)
-
-        # Checkboxes for Inkjet Printing
-        if process_name == "Inkjet Printing":
-            checkbox_options = [
-                # ('annealing', 'Annealing'),
-                ("gavd", "GAVD")
-            ]
-
-            for option_key, option_label in checkbox_options:
-                checkbox = widgets.Checkbox(
-                    value=config.get(option_key, False),
-                    description=option_label,
-                    style={"description_width": "initial"},
-                    layout=widgets.Layout(width="100px"),
-                )
-                checkbox.observe(
-                    lambda change, idx=index, key=option_key: self._update_config(
-                        idx, key, change["new"]
-                    ),
-                    names="value",
-                )
-                checkbox_controls.append(checkbox)
-
-        # Carbon paste for Evaporation
-        if process_name == "Evaporation":
-            checkbox = widgets.Checkbox(
-                value=config.get("carbon_paste", False),
-                description="Carbon Paste",
+        for key, label, min_val, max_val in meta.get("numeric_config", []):
+            widget = widgets.BoundedIntText(
+                value=config.get(key, min_val),
+                min=min_val,
+                max=max_val,
+                description=f"{label}:",
                 style={"description_width": "initial"},
                 layout=widgets.Layout(width="130px"),
             )
+            widget.observe(
+                lambda change, idx=index, k=key: self._update_config(idx, k, change["new"]),
+                names="value",
+            )
+            numeric_controls.append(widget)
+
+        for key, label in meta.get("boolean_config", []):
+            checkbox = widgets.Checkbox(
+                value=config.get(key, False),
+                description=label,
+                style={"description_width": "initial"},
+                layout=widgets.Layout(width="150px"),
+            )
             checkbox.observe(
-                lambda change, idx=index: self._update_config(idx, "carbon_paste", change["new"]),
+                lambda change, idx=index, k=key: self._update_config(idx, k, change["new"]),
                 names="value",
             )
             checkbox_controls.append(checkbox)
@@ -599,7 +439,13 @@ class MinimalistExperimentBuilder:
         if index < len(self.current_sequence):
             self.current_sequence[index]["process"] = new_process_type
 
-            # Reset config when changing process type
+            # Reset config when changing process type. Deliberately NOT every process
+            # type with a config_defaults entry (Co-Evaporation/Ink Recycling are also
+            # configurable but were never in this reset list either, even before this
+            # migration) - preserved exactly as it already was, not generalized, since
+            # each numeric control's own value=config.get(key, min_val) fallback already
+            # covers the "config missing" case, so widening this list isn't required for
+            # correctness and isn't this migration's call to make.
             if new_process_type in [
                 "Spin Coating",
                 "Cleaning O2-Plasma",
@@ -607,6 +453,7 @@ class MinimalistExperimentBuilder:
                 "Inkjet Printing",
                 "Slot Die Coating",
                 "Blade Coating",
+                "Screen Printing",
             ]:
                 self.current_sequence[index]["config"] = self._get_default_config(new_process_type)
             else:
@@ -615,36 +462,10 @@ class MinimalistExperimentBuilder:
             self._update_process_display()
 
     def _get_default_config(self, process_name):
-        """Get default configuration for a process"""
-        defaults = {
-            "Spin Coating": {
-                "solvents": 1,
-                "solutes": 1,
-                "spinsteps": 1,
-                "antisolvent": False,
-                "gasquenching": False,
-                "vacuumquenching": False,
-            },
-            "Blade Coating": {
-                "solvents": 1,
-                "solutes": 1,
-                "gasquenching": False,
-                "vacuumquenching": False,
-            },
-            "Cleaning O2-Plasma": {"solvents": 2},
-            "Cleaning UV-Ozone": {"solvents": 2},
-            "Inkjet Printing": {"solvents": 1, "solutes": 1, "annealing": False, "gavd": False},
-            "Slot Die Coating": {
-                "solvents": 1,
-                "solutes": 1,
-                "gasquenching": False,
-                "vacuumquenching": False,
-            },
-            "Co-Evaporation": {"materials": 2},
-            "Ink Recycling": {"solvents": 1, "solutes": 1, "precursors": 1},
-            "Evaporation": {"carbon_paste": False},
-        }
-        return defaults.get(process_name, {})
+        """Get default configuration for a process - shared/hysprint_utils/
+        process_specs.py is the single source of truth (see also data_manager.py's
+        DEFAULT_CONFIG_BY_PROCESS_TYPE, derived from the same function)."""
+        return build_default_config_by_process_type().get(process_name, {})
 
     def _update_config(self, process_index, key, value):
         """Update configuration for a process"""
