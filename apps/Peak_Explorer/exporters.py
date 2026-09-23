@@ -1,26 +1,26 @@
 # exporters.py
 """Export utilities for analysis results"""
-import pandas as pd
-import numpy as np
+
+import json
 import os
 from datetime import datetime
-import json
+
+import numpy as np
+import pandas as pd
 from utils import debug_print
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.express as px
+
 
 class ResultExporter:
     """Class to handle export of fitting results and analysis"""
-    
+
     def __init__(self):
         debug_print("ResultExporter initialized", "Exporter")
         # self.export_formats = ['xlsx', 'csv', 'json', 'hdf5']
-        
+
     def export_to_excel(self, fitting_results, timestamps, filename=None):
         """
         Export fitting results to Excel file with multiple sheets
-        
+
         Parameters:
         -----------
         fitting_results : dict
@@ -29,31 +29,33 @@ class ResultExporter:
             Time values
         filename : str, optional
             Output filename
-            
+
         Returns:
         --------
         str: Path to exported file
         """
         if filename is None:
             filename = f"peak_fitting_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            
+
         # Create Excel writer
-        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        with pd.ExcelWriter(filename, engine="openpyxl") as writer:
             # Sheet 1: Peak parameters (main data)
             peak_params_df, stderr_df = self._create_peak_parameters_dataframe(fitting_results)
-            peak_params_df.to_excel(writer, sheet_name='Peak_Parameters', index=False)
-            
+            peak_params_df.to_excel(writer, sheet_name="Peak_Parameters", index=False)
+
             # Sheet 2: Standard errors
             if not stderr_df.empty:
-                stderr_df.to_excel(writer, sheet_name='Standard_Errors', index=False)
-            
+                stderr_df.to_excel(writer, sheet_name="Standard_Errors", index=False)
+
             # Sheet 3: Fitting quality metrics
             quality_df = self._create_quality_metrics_dataframe(fitting_results)
-            quality_df.to_excel(writer, sheet_name='Fitting_Quality', index=False)
-            
+            quality_df.to_excel(writer, sheet_name="Fitting_Quality", index=False)
+
         return filename
 
-    def export_to_isa_h5(self, fitting_results, h5_path, time_unit='s', h5_mode=None, wavelength_unit='nm'):
+    def export_to_isa_h5(
+        self, fitting_results, h5_path, time_unit="s", h5_mode=None, wavelength_unit="nm"
+    ):
         """
         Export fitting results into the existing HDF5 file.
 
@@ -81,84 +83,104 @@ class ResultExporter:
         combined_df = peak_params_df.copy()
         for df in (stderr_df, quality_df):
             new_cols = [c for c in df.columns if c not in combined_df.columns]
-            combined_df = combined_df.join(df[new_cols], how='outer') if new_cols else combined_df
+            combined_df = combined_df.join(df[new_cols], how="outer") if new_cols else combined_df
 
         # Build peak_id -> {name, model_type} mapping from the first successful result
         peak_info_map = {}
         for result in fitting_results.values():
-            if result and result.get('success'):
-                for i, pm in enumerate(result.get('peak_models', [])):
-                    pid = f'p{i}'
+            if result and result.get("success"):
+                for i, pm in enumerate(result.get("peak_models", [])):
+                    pid = f"p{i}"
                     peak_info_map[pid] = {
-                        'name': pm.get('name', pid),
-                        'model_type': pm.get('type', 'Unknown')
+                        "name": pm.get("name", pid),
+                        "model_type": pm.get("type", "Unknown"),
                     }
                 break
 
         debug_print("Peak info map: " + str(peak_info_map), "Exporter")
 
         # Time and index range from the merged df
-        min_time  = float(combined_df['Time'].min())       if 'Time'       in combined_df.columns else float('nan')
-        max_time  = float(combined_df['Time'].max())       if 'Time'       in combined_df.columns else float('nan')
-        min_index = int(combined_df['Time_Index'].min())   if 'Time_Index' in combined_df.columns else -1
-        max_index = int(combined_df['Time_Index'].max())   if 'Time_Index' in combined_df.columns else -1
+        min_time = (
+            float(combined_df["Time"].min()) if "Time" in combined_df.columns else float("nan")
+        )
+        max_time = (
+            float(combined_df["Time"].max()) if "Time" in combined_df.columns else float("nan")
+        )
+        min_index = (
+            int(combined_df["Time_Index"].min()) if "Time_Index" in combined_df.columns else -1
+        )
+        max_index = (
+            int(combined_df["Time_Index"].max()) if "Time_Index" in combined_df.columns else -1
+        )
 
         now = datetime.now()
-        group_name = now.strftime('fit_%Y%m%d_%H_%M_%S')
+        group_name = now.strftime("fit_%Y%m%d_%H_%M_%S")
 
-        with h5py.File(h5_path, 'a') as h5f:
-            grp = h5f.require_group(f'fitting_results/{group_name}')
+        with h5py.File(h5_path, "a") as h5f:
+            grp = h5f.require_group(f"fitting_results/{group_name}")
 
             # Group-level attributes
-            grp.attrs['min_time']    = min_time
-            grp.attrs['max_time']    = max_time
-            grp.attrs['min_index']   = min_index
-            grp.attrs['max_index']   = max_index
-            grp.attrs['h5_mode']     = h5_mode if h5_mode is not None else 'N/A'
-            grp.attrs['created_at']  = now.isoformat()
+            grp.attrs["min_time"] = min_time
+            grp.attrs["max_time"] = max_time
+            grp.attrs["min_index"] = min_index
+            grp.attrs["max_index"] = max_index
+            grp.attrs["h5_mode"] = h5_mode if h5_mode is not None else "N/A"
+            grp.attrs["created_at"] = now.isoformat()
             # todo possibly at more parameters here
 
             # Parameters whose unit equals the x-axis (wavelength / q) unit
-            position_params = {'center', 'sigma', 'gamma', 'fwhm',
-                               'width', 'width_10pct', 'width_50pct'}
+            position_params = {
+                "center",
+                "sigma",
+                "gamma",
+                "fwhm",
+                "width",
+                "width_10pct",
+                "width_50pct",
+            }
             # Parameters that carry intensity (arbitrary units → '-')
-            intensity_params = {'amplitude', 'height', 'area'}
+            intensity_params = {"amplitude", "height", "area"}
 
             # One dataset per column
             for col in combined_df.columns:
                 import pandas as pd
-                series = pd.to_numeric(combined_df[col], errors='coerce')
+
+                series = pd.to_numeric(combined_df[col], errors="coerce")
                 data = series.values.astype(float)
                 if col in grp:
                     del grp[col]
                 ds = grp.create_dataset(col, data=data)
 
                 # Store time_unit as attribute on the Time dataset
-                if col == 'Time':
-                    ds.attrs['time_unit'] = time_unit
+                if col == "Time":
+                    ds.attrs["time_unit"] = time_unit
 
                 # Resolve peak_id from column name (e.g. "p0_center" -> "p0")
-                parts = col.split('_')
-                peak_id = parts[0] if len(parts) > 1 and parts[0].startswith('p') and parts[0][1:].isdigit() else None
+                parts = col.split("_")
+                peak_id = (
+                    parts[0]
+                    if len(parts) > 1 and parts[0].startswith("p") and parts[0][1:].isdigit()
+                    else None
+                )
 
                 # Only store peak_name and model_type if dataset starts with 'p' and contains no strings
                 if peak_id is not None and not any(isinstance(v, str) for v in data):
                     info = peak_info_map.get(peak_id, {})
-                    ds.attrs['peak_name']   = info.get('name', 'N/A')
-                    ds.attrs['model_type']  = info.get('model_type', 'N/A')
+                    ds.attrs["peak_name"] = info.get("name", "N/A")
+                    ds.attrs["model_type"] = info.get("model_type", "N/A")
 
                     # Determine unit from base parameter name (strip _stderr suffix)
-                    base_param = col[len(peak_id) + 1:]          # e.g. "center" or "center_stderr"
-                    base_param = base_param.removesuffix('_stderr')
+                    base_param = col[len(peak_id) + 1 :]  # e.g. "center" or "center_stderr"
+                    base_param = base_param.removesuffix("_stderr")
                     if base_param in position_params:
-                        ds.attrs['unit'] = wavelength_unit
+                        ds.attrs["unit"] = wavelength_unit
                     elif base_param in intensity_params:
-                        ds.attrs['unit'] = '-'
+                        ds.attrs["unit"] = "-"
 
-        debug_print(f"Saved fitting results to {h5_path} under /fitting_results/{group_name}", "Exporter")
+        debug_print(
+            f"Saved fitting results to {h5_path} under /fitting_results/{group_name}", "Exporter"
+        )
 
-
-        
     def _create_peak_parameters_dataframe(self, fitting_results):
         """Create comprehensive peak parameters dataframe and separate stderr dataframe"""
         param_data = []
@@ -166,32 +188,31 @@ class ResultExporter:
         renamed_to_area = set()  # peak_ids whose amplitude column was renamed to area
 
         # debug_print("Fitting_results: " + str(fitting_results), "Exporter")
-        
+
         for idx, result in fitting_results.items():
-            if result is None or not result.get('success', False):
+            if result is None or not result.get("success", False):
                 continue
-                
-            base_row = {
-                'Time_Index': result['index'],
-                'Time': result['time']
-            }
-            
+
+            base_row = {"Time_Index": result["index"], "Time": result["time"]}
+
             # Extract peak parameters
-            parameters = result.get('parameters', {})
+            parameters = result.get("parameters", {})
 
             # debug_print("Raw Parameters: " + str(parameters), "Exporter")
-            
+
             # Group parameters by peak
             peak_params = {}
             for param_name, param_data_item in parameters.items():
-                if param_name.startswith('p') and '_' in param_name:
-                    peak_id = param_name.split('_')[0]
-                    param_type = '_'.join(param_name.split('_')[1:])
-                    
+                if param_name.startswith("p") and "_" in param_name:
+                    peak_id = param_name.split("_")[0]
+                    param_type = "_".join(param_name.split("_")[1:])
+
                     if peak_id not in peak_params:
                         peak_params[peak_id] = {}
-                    peak_params[peak_id][param_type] = param_data_item['value']
-                    peak_params[peak_id][f'{param_type}_stderr'] = param_data_item.get('stderr', np.nan)
+                    peak_params[peak_id][param_type] = param_data_item["value"]
+                    peak_params[peak_id][f"{param_type}_stderr"] = param_data_item.get(
+                        "stderr", np.nan
+                    )
 
             # debug_print("Peak Parameters" + str(peak_params), "Exporter")
 
@@ -199,162 +220,172 @@ class ResultExporter:
             if peak_params:
                 row = base_row.copy()
                 stderr_row = base_row.copy()
-                
+
                 # Sort peaks by ID for consistent ordering
                 sorted_peaks = sorted(peak_params.keys(), key=lambda x: int(x[1:]))
-                
-                peak_models = result.get('peak_models', [])
+
+                peak_models = result.get("peak_models", [])
                 for peak_id in sorted_peaks:
                     params = peak_params[peak_id]
                     peak_index = int(peak_id[1:])
-                    peak_type = peak_models[peak_index]['type'] if peak_index < len(peak_models) else 'Unknown'
-                    row[f'{peak_id}_model_type'] = peak_type
+                    peak_type = (
+                        peak_models[peak_index]["type"]
+                        if peak_index < len(peak_models)
+                        else "Unknown"
+                    )
+                    row[f"{peak_id}_model_type"] = peak_type
 
                     # debug_print(f"Processing {peak_id} with model {peak_type}", "Exporter")
                     # debug_print("params: " + str(params), "Exporter")
-                    
+
                     # Add main parameters with peak_id prefix
                     for param_type, value in params.items():
-                        if not param_type.endswith('_stderr'):
+                        if not param_type.endswith("_stderr"):
                             # Handle special naming cases
-                            if param_type == 'amplitude':
-                                col_name = f'{peak_id}_amplitude'
-                            elif param_type == 'center':
-                                col_name = f'{peak_id}_center'
-                            elif param_type == 'sigma':
-                                col_name = f'{peak_id}_sigma'
-                            elif param_type == 'gamma':  # For Voigt profiles
-                                col_name = f'{peak_id}_gamma'
+                            if param_type == "amplitude":
+                                col_name = f"{peak_id}_amplitude"
+                            elif param_type == "center":
+                                col_name = f"{peak_id}_center"
+                            elif param_type == "sigma":
+                                col_name = f"{peak_id}_sigma"
+                            elif param_type == "gamma":  # For Voigt profiles
+                                col_name = f"{peak_id}_gamma"
                             else:
-                                col_name = f'{peak_id}_{param_type}'
-                            
+                                col_name = f"{peak_id}_{param_type}"
+
                             row[col_name] = value
-                            
+
                             # Add stderr to separate dataframe
-                            stderr_key = f'{param_type}_stderr'
+                            stderr_key = f"{param_type}_stderr"
                             if stderr_key in params:
-                                stderr_row[f'{col_name}_stderr'] = params[stderr_key]
+                                stderr_row[f"{col_name}_stderr"] = params[stderr_key]
 
                     # Calculate derived parameters
                     # todo for Edgar: Check if all the calculations make sense. Quite happy with the current verion (18.05.2026)
 
                     # Rename amplitude -> area for peak types where lmfit's `amplitude`
                     # is the integrated area under the curve.
-                    if peak_type in ("Gaussian", "Voigt", "Lorentzian", "Skewed Gaussian", "Skewed Voigt"):
-                        amplitude = params['amplitude']
-                        amplitude_stderr = params.get('amplitude_stderr')
+                    if peak_type in (
+                        "Gaussian",
+                        "Voigt",
+                        "Lorentzian",
+                        "Skewed Gaussian",
+                        "Skewed Voigt",
+                    ):
+                        amplitude = params["amplitude"]
+                        amplitude_stderr = params.get("amplitude_stderr")
                         amplitude_stderr = np.nan if amplitude_stderr is None else amplitude_stderr
-                        row[f'{peak_id}_area'] = amplitude
-                        stderr_row[f'{peak_id}_area_stderr'] = amplitude_stderr
+                        row[f"{peak_id}_area"] = amplitude
+                        stderr_row[f"{peak_id}_area_stderr"] = amplitude_stderr
                         renamed_to_area.add(peak_id)
 
                     if peak_type == "Gaussian":
-                        sigma = params['sigma']
-                        sigma_stderr = params.get('sigma_stderr')
+                        sigma = params["sigma"]
+                        sigma_stderr = params.get("sigma_stderr")
                         sigma_stderr = np.nan if sigma_stderr is None else sigma_stderr
 
                         # Calculate peak width at different heights
-                        row[f'{peak_id}_width_10pct'] = 4.29 * sigma
-                        stderr_row[f'{peak_id}_width_10pct_stderr'] = 4.29 * sigma_stderr
-                
+                        row[f"{peak_id}_width_10pct"] = 4.29 * sigma
+                        stderr_row[f"{peak_id}_width_10pct_stderr"] = 4.29 * sigma_stderr
+
                 # Add R_squared as the last column
-                row['R_Squared'] = result.get('r_squared', np.nan)
-                stderr_row['R_Squared'] = np.nan  # R_squared doesn't have stderr
-                
+                row["R_Squared"] = result.get("r_squared", np.nan)
+                stderr_row["R_Squared"] = np.nan  # R_squared doesn't have stderr
+
                 param_data.append(row)
                 stderr_data.append(stderr_row)
-                
-        main_df = pd.DataFrame(param_data).sort_values('Time_Index').reset_index(drop=True)
-        stderr_df = pd.DataFrame(stderr_data).sort_values('Time_Index').reset_index(drop=True)
+
+        main_df = pd.DataFrame(param_data).sort_values("Time_Index").reset_index(drop=True)
+        stderr_df = pd.DataFrame(stderr_data).sort_values("Time_Index").reset_index(drop=True)
         # Only drop amplitude columns for peaks where we renamed amplitude -> area;
         # peak types without that rename keep their amplitude column.
-        amplitude_cols = [f'{pid}_amplitude' for pid in renamed_to_area]
-        amplitude_stderr_cols = [f'{pid}_amplitude_stderr' for pid in renamed_to_area]
-        main_df = main_df.drop(columns=amplitude_cols, errors='ignore')
-        stderr_df = stderr_df.drop(columns=amplitude_stderr_cols, errors='ignore')
-        
+        amplitude_cols = [f"{pid}_amplitude" for pid in renamed_to_area]
+        amplitude_stderr_cols = [f"{pid}_amplitude_stderr" for pid in renamed_to_area]
+        main_df = main_df.drop(columns=amplitude_cols, errors="ignore")
+        stderr_df = stderr_df.drop(columns=amplitude_stderr_cols, errors="ignore")
+
         return main_df, stderr_df
-        
+
     def _create_quality_metrics_dataframe(self, fitting_results):
         """Create fitting quality metrics dataframe"""
         quality_data = []
-        
+
         for idx, result in fitting_results.items():
             if result is None:
                 continue
-                
+
             row = {
-                'Time_Index': result['index'],
-                'Time': result['time'],
-                'Success': result.get('success', False),
-                'R_Squared': result.get('r_squared', np.nan),
-                'Chi_Squared': result.get('chi_squared', np.nan),
-                'Reduced_Chi_Squared': result.get('reduced_chi_squared', np.nan),
-                'AIC': result.get('aic', np.nan),
-                'BIC': result.get('bic', np.nan)
+                "Time_Index": result["index"],
+                "Time": result["time"],
+                "Success": result.get("success", False),
+                "R_Squared": result.get("r_squared", np.nan),
+                "Chi_Squared": result.get("chi_squared", np.nan),
+                "Reduced_Chi_Squared": result.get("reduced_chi_squared", np.nan),
+                "AIC": result.get("aic", np.nan),
+                "BIC": result.get("bic", np.nan),
             }
-            
+
             # Calculate additional metrics if residuals are available
-            if result.get('residuals') is not None:
-                residuals = result['residuals']
-                row['RMSE'] = np.sqrt(np.mean(residuals**2))
-                row['MAE'] = np.mean(np.abs(residuals))
-                row['Max_Residual'] = np.max(np.abs(residuals))
-                
+            if result.get("residuals") is not None:
+                residuals = result["residuals"]
+                row["RMSE"] = np.sqrt(np.mean(residuals**2))
+                row["MAE"] = np.mean(np.abs(residuals))
+                row["Max_Residual"] = np.max(np.abs(residuals))
+
             quality_data.append(row)
-            
+
         return pd.DataFrame(quality_data)
-        
+
     def export_to_csv(self, fitting_results, output_dir=None):
         """Export fitting results to CSV files"""
         if output_dir is None:
             output_dir = f"peak_analysis_csv_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Export different data types to separate CSV files
         peak_params_df, _ = self._create_peak_parameters_dataframe(fitting_results)
-        peak_params_df.to_csv(os.path.join(output_dir, 'peak_parameters.csv'), index=False)
-        
+        peak_params_df.to_csv(os.path.join(output_dir, "peak_parameters.csv"), index=False)
+
         quality_df = self._create_quality_metrics_dataframe(fitting_results)
-        quality_df.to_csv(os.path.join(output_dir, 'fitting_quality.csv'), index=False)
-        
+        quality_df.to_csv(os.path.join(output_dir, "fitting_quality.csv"), index=False)
+
         return output_dir
-        
+
     def export_to_json(self, fitting_results, filename=None):
         """Export fitting results to JSON format"""
         if filename is None:
             filename = f"peak_fitting_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            
+
         # Convert numpy arrays to lists for JSON serialization
         json_data = {}
-        
+
         for idx, result in fitting_results.items():
             if result is None:
                 continue
-                
+
             json_result = {
-                'index': result['index'],
-                'time': result['time'],
-                'success': result.get('success', False),
-                'r_squared': result.get('r_squared'),
-                'chi_squared': result.get('chi_squared'),
-                'aic': result.get('aic'),
-                'bic': result.get('bic'),
-                'parameters': result.get('parameters', {})
+                "index": result["index"],
+                "time": result["time"],
+                "success": result.get("success", False),
+                "r_squared": result.get("r_squared"),
+                "chi_squared": result.get("chi_squared"),
+                "aic": result.get("aic"),
+                "bic": result.get("bic"),
+                "parameters": result.get("parameters", {}),
             }
-            
+
             # Convert fitted curve and residuals to lists
-            if result.get('fitted_curve') is not None:
-                json_result['fitted_curve'] = result['fitted_curve'].tolist()
-            if result.get('residuals') is not None:
-                json_result['residuals'] = result['residuals'].tolist()
-                
+            if result.get("fitted_curve") is not None:
+                json_result["fitted_curve"] = result["fitted_curve"].tolist()
+            if result.get("residuals") is not None:
+                json_result["residuals"] = result["residuals"].tolist()
+
             json_data[str(idx)] = json_result
-            
-        with open(filename, 'w') as f:
+
+        with open(filename, "w") as f:
             json.dump(json_data, f, indent=2, default=str)
-            
+
         return filename
 
     # def _create_centers_plot(self, df, output_dir):

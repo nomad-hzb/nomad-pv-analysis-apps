@@ -3,459 +3,435 @@
 GUI components for Photoluminescence Analysis App
 Creates all individual widgets
 """
-import ipywidgets as widgets
+
 import config
-from utils import debug_print
+import ipywidgets as widgets
 from ipyvuetify.extra import FileInput
+from utils import debug_print
 
 
 class GUIComponents:
     """Factory class for creating GUI widgets"""
-    
+
     def __init__(self, h5_available=False):
         self.h5_available = h5_available
         self.widgets = {}
-        
+
     def create_file_upload_widgets(self):
         """Create file upload related widgets"""
         if self.h5_available:
             # H5 filename label
-            self.widgets['h5_filename_label'] = widgets.HTML(
-                value="",
-                layout=widgets.Layout(width='100%')
+            self.widgets["h5_filename_label"] = widgets.HTML(
+                value="", layout=widgets.Layout(width="100%")
             )
             # H5 mode dropdown (keep as is)
             mode_options = [(v, k) for k, v in config.H5_MODES.items()]
-            self.widgets['mode_dropdown'] = widgets.Dropdown(
+            self.widgets["mode_dropdown"] = widgets.Dropdown(
                 options=mode_options,
                 value=config.DEFAULT_H5_MODE,
-                description='Measurement:',
-                style={'description_width': 'initial'}
+                description="Measurement:",
+                style={"description_width": "initial"},
             )
             debug_print("Created H5 mode dropdown", "GUI")
         else:
             # REPLACE ipywidgets.FileUpload with ipyvuetify FileInput
-            self.widgets['file_upload'] = FileInput(
-                multiple=False,
-                accept='.csv',
-                label='Click to upload CSV file',
-                v_model=[]
+            self.widgets["file_upload"] = FileInput(
+                multiple=False, accept=".csv", label="Click to upload CSV file", v_model=[]
             )
             debug_print("Created ipyvuetify file upload widget", "GUI")
-        
+
         # Status output (keep as is)
-        self.widgets['status_output'] = widgets.Output()
-    
+        self.widgets["status_output"] = widgets.Output()
+
         # Energy conversion button (keep as is)
-        self.widgets['convert_energy_btn'] = widgets.Button(
-            description='🔄 nm ↔ eV',
-            button_style='info',
-            tooltip='Convert between wavelength (nm) and energy (eV)',
-            layout=widgets.Layout(width='120px'),
-            disabled=True
+        self.widgets["convert_energy_btn"] = widgets.Button(
+            description="🔄 nm ↔ eV",
+            button_style="info",
+            tooltip="Convert between wavelength (nm) and energy (eV)",
+            layout=widgets.Layout(width="120px"),
+            disabled=True,
         )
-        
+
         # Energy unit display (keep as is)
-        self.widgets['energy_unit_display'] = widgets.Label(value="No data loaded")
-        
+        self.widgets["energy_unit_display"] = widgets.Label(value="No data loaded")
+
         debug_print("Created energy conversion widgets", "GUI")
-        
+
         return self.widgets
-    
+
     def create_time_control_widgets(self):
         """Create time control widgets"""
         # Time slider
-        self.widgets['time_slider'] = widgets.IntSlider(
+        self.widgets["time_slider"] = widgets.IntSlider(
             value=0,
             min=0,
             max=100,
             step=1,
-            description='',
+            description="",
             disabled=True,
             continuous_update=False,
-            layout=widgets.Layout(width=config.TIME_SLIDER_WIDTH)
+            layout=widgets.Layout(width=config.TIME_SLIDER_WIDTH),
         )
-        
+
         # Time input
-        self.widgets['time_input'] = widgets.BoundedIntText(
+        self.widgets["time_input"] = widgets.BoundedIntText(
             value=0,
             min=0,
             max=100,
             step=1,
-            description='Time Index:',
+            description="Time Index:",
             disabled=True,
-            layout=widgets.Layout(width=config.TIME_INPUT_WIDTH)
+            layout=widgets.Layout(width=config.TIME_INPUT_WIDTH),
         )
-        
+
         # Time display label
-        self.widgets['time_display'] = widgets.Label(value="Time: Not loaded")
-        
+        self.widgets["time_display"] = widgets.Label(value="Time: Not loaded")
+
         debug_print("Created time control widgets", "GUI")
         return self.widgets
 
     def create_colorbar_widgets(self):
         """Create colorbar range control widgets"""
         # Range slider for intensity
-        self.widgets['colorbar_range_slider'] = widgets.FloatRangeSlider(
+        self.widgets["colorbar_range_slider"] = widgets.FloatRangeSlider(
             value=[0.0, 1000.0],
             min=0.0,
             max=10000.0,
             step=0.1,
-            description='Range:',
-            orientation='horizontal',
+            description="Range:",
+            orientation="horizontal",
             readout=True,
-            readout_format='.1f',
-            layout=widgets.Layout(width='350px'),
-            disabled=True
+            readout_format=".1f",
+            layout=widgets.Layout(width="350px"),
+            disabled=True,
         )
-        
+
         # Apply button
-        self.widgets['colorbar_apply_btn'] = widgets.Button(
-            description='Apply',
-            button_style='primary',
-            tooltip='Apply colorbar range',
-            layout=widgets.Layout(width='80px'),
-            disabled=True
+        self.widgets["colorbar_apply_btn"] = widgets.Button(
+            description="Apply",
+            button_style="primary",
+            tooltip="Apply colorbar range",
+            layout=widgets.Layout(width="80px"),
+            disabled=True,
         )
-        
+
         debug_print("Created colorbar widgets", "GUI")
         return self.widgets
-    
+
     def create_peak_detection_widgets(self):
         """Create peak detection widgets"""
-        self.widgets['auto_detect_btn'] = widgets.Button(
-            description='🔍 Auto-Detect Peaks',
-            button_style='primary',
-            tooltip='Automatically detect peaks in current spectrum',
-            layout=widgets.Layout(width='180px')
+        self.widgets["auto_detect_btn"] = widgets.Button(
+            description="🔍 Auto-Detect Peaks",
+            button_style="primary",
+            tooltip="Automatically detect peaks in current spectrum",
+            layout=widgets.Layout(width="180px"),
         )
-        
+
         # Detection parameters in 2-row layout
-        self.widgets['peak_height_threshold'] = widgets.FloatText(
-            value=0,
-            description='',
-            disabled=True,
-            layout=widgets.Layout(width='100px')
+        self.widgets["peak_height_threshold"] = widgets.FloatText(
+            value=0, description="", disabled=True, layout=widgets.Layout(width="100px")
         )
-        
-        self.widgets['peak_prominence'] = widgets.FloatText(
-            value=0,
-            description='',
-            disabled=True,
-            layout=widgets.Layout(width='100px')
+
+        self.widgets["peak_prominence"] = widgets.FloatText(
+            value=0, description="", disabled=True, layout=widgets.Layout(width="100px")
         )
-        
-        self.widgets['peak_distance'] = widgets.IntText(
-            value=5,
-            description='',
-            disabled=True,
-            layout=widgets.Layout(width='100px')
+
+        self.widgets["peak_distance"] = widgets.IntText(
+            value=5, description="", disabled=True, layout=widgets.Layout(width="100px")
         )
-        
+
         debug_print("Created peak detection widgets", "GUI")
         return self.widgets
-    
+
     def create_peak_model_widgets(self):
         """Create peak model configuration widgets"""
         # Add peak button
-        self.widgets['add_peak_btn'] = widgets.Button(
-            description='➕ Add Model',  # Changed from '➕ Add Peak'
-            button_style='success',
-            tooltip='Add a new model to the fit',  # Changed tooltip
-            layout=widgets.Layout(width='120px')
+        self.widgets["add_peak_btn"] = widgets.Button(
+            description="➕ Add Model",  # Changed from '➕ Add Peak'
+            button_style="success",
+            tooltip="Add a new model to the fit",  # Changed tooltip
+            layout=widgets.Layout(width="120px"),
         )
-        
+
         # Peak list container
-        self.widgets['peak_list_container'] = widgets.VBox([])
-        
+        self.widgets["peak_list_container"] = widgets.VBox([])
+
         debug_print("Created peak model widgets", "GUI")
         return self.widgets
-    
+
     def create_background_handling_widgets(self):
         """Create unified background handling widgets"""
         # Main dropdown
-        self.widgets['background_method'] = widgets.Dropdown(
+        self.widgets["background_method"] = widgets.Dropdown(
             options=config.BACKGROUND_OPTIONS,
             value=config.DEFAULT_BACKGROUND_METHOD,
-            description='Method:',
-            style={'description_width': 'initial'}
+            description="Method:",
+            style={"description_width": "initial"},
         )
-        
+
         # Manual method widgets
-        self.widgets['bg_manual_start'] = widgets.BoundedIntText(
+        self.widgets["bg_manual_start"] = widgets.BoundedIntText(
             value=config.DEFAULT_BACKGROUND_START_IDX,
             min=0,
             max=100,
-            description='Start Index:',
+            description="Start Index:",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
-        self.widgets['bg_manual_num'] = widgets.BoundedIntText(
+
+        self.widgets["bg_manual_num"] = widgets.BoundedIntText(
             value=config.DEFAULT_BACKGROUND_NUM_CURVES,
             min=1,
             max=50,
-            description='# Curves:',
+            description="# Curves:",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-    
-        self.widgets['bg_manual_description'] = widgets.HTML(
+
+        self.widgets["bg_manual_description"] = widgets.HTML(
             value="<i>Select starting time index and number of curves to average and subtract from all spectra</i>",
-            layout=widgets.Layout(width='380px', margin='5px 0px 10px 0px')
+            layout=widgets.Layout(width="380px", margin="5px 0px 10px 0px"),
         )
-        
+
         # Linear method widgets
-        self.widgets['bg_linear_slope'] = widgets.FloatText(
-            value=0.0,
-            description='Slope:',
-            disabled=True,
-            layout=widgets.Layout(width='180px')
+        self.widgets["bg_linear_slope"] = widgets.FloatText(
+            value=0.0, description="Slope:", disabled=True, layout=widgets.Layout(width="180px")
         )
-        
-        self.widgets['bg_linear_intercept'] = widgets.FloatText(
-            value=0.0,
-            description='Intercept:',
-            disabled=True,
-            layout=widgets.Layout(width='180px')
+
+        self.widgets["bg_linear_intercept"] = widgets.FloatText(
+            value=0.0, description="Intercept:", disabled=True, layout=widgets.Layout(width="180px")
         )
-        
+
         # Polynomial method widgets
-        self.widgets['bg_poly_degree'] = widgets.IntText(
+        self.widgets["bg_poly_degree"] = widgets.IntText(
             value=config.DEFAULT_POLY_DEGREE,
             min=1,
             max=10,
-            description='Degree:',
+            description="Degree:",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
-        self.widgets['bg_poly_coeffs'] = widgets.Textarea(
-            value='',
-            description='Coefficients:',
-            placeholder='Will show after auto-fit',
-            disabled=True,
-            layout=widgets.Layout(width='350px', height='60px')
-        )
-        
-        # Exponential method widgets
-        self.widgets['bg_exp_amplitude'] = widgets.FloatText(
-            value=1000.0,
-            description='Amplitude:',
-            disabled=True,
-            layout=widgets.Layout(width='180px')
-        )
-        
-        self.widgets['bg_exp_decay'] = widgets.FloatText(
-            value=0.001,
-            description='Decay:',
-            disabled=True,
-            layout=widgets.Layout(width='180px')
-        )
-        
-        self.widgets['bg_exp_offset'] = widgets.FloatText(
-            value=0.0,
-            description='Offset:',
-            disabled=True,
-            layout=widgets.Layout(width='180px')
-        )
-        
-        # Custom background widgets
-        self.widgets['bg_custom_description'] = widgets.HTML(
-            value="<i>Upload a 2-column file (wavelength, intensity) to use as background</i>",
-            layout=widgets.Layout(width='380px', margin='5px 0px 10px 0px')
-        )
-        
-        self.widgets['bg_custom_upload'] = widgets.FileUpload(
-            accept='.txt,.csv,.dat',
-            multiple=False,
-            description='Upload BG:',
-            disabled=True,
-            layout=widgets.Layout(width='380px'),
-            style={'description_width': '80px'}
-        )
-        
-        self.widgets['bg_custom_status'] = widgets.HTML(
+
+        self.widgets["bg_poly_coeffs"] = widgets.Textarea(
             value="",
-            layout=widgets.Layout(width='380px')
+            description="Coefficients:",
+            placeholder="Will show after auto-fit",
+            disabled=True,
+            layout=widgets.Layout(width="350px", height="60px"),
         )
-        
+
+        # Exponential method widgets
+        self.widgets["bg_exp_amplitude"] = widgets.FloatText(
+            value=1000.0,
+            description="Amplitude:",
+            disabled=True,
+            layout=widgets.Layout(width="180px"),
+        )
+
+        self.widgets["bg_exp_decay"] = widgets.FloatText(
+            value=0.001, description="Decay:", disabled=True, layout=widgets.Layout(width="180px")
+        )
+
+        self.widgets["bg_exp_offset"] = widgets.FloatText(
+            value=0.0, description="Offset:", disabled=True, layout=widgets.Layout(width="180px")
+        )
+
+        # Custom background widgets
+        self.widgets["bg_custom_description"] = widgets.HTML(
+            value="<i>Upload a 2-column file (wavelength, intensity) to use as background</i>",
+            layout=widgets.Layout(width="380px", margin="5px 0px 10px 0px"),
+        )
+
+        self.widgets["bg_custom_upload"] = widgets.FileUpload(
+            accept=".txt,.csv,.dat",
+            multiple=False,
+            description="Upload BG:",
+            disabled=True,
+            layout=widgets.Layout(width="380px"),
+            style={"description_width": "80px"},
+        )
+
+        self.widgets["bg_custom_status"] = widgets.HTML(
+            value="", layout=widgets.Layout(width="380px")
+        )
+
         # Action buttons
-        self.widgets['bg_autofit_btn'] = widgets.Button(
-            description='Auto-Fit Background',
-            button_style='info',
+        self.widgets["bg_autofit_btn"] = widgets.Button(
+            description="Auto-Fit Background",
+            button_style="info",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
-        self.widgets['bg_apply_btn'] = widgets.Button(
-            description='Apply Background',
-            button_style='warning',
+
+        self.widgets["bg_apply_btn"] = widgets.Button(
+            description="Apply Background",
+            button_style="warning",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
-        self.widgets['bg_remove_btn'] = widgets.Button(
-            description='Remove Background',
-            button_style='danger',
+
+        self.widgets["bg_remove_btn"] = widgets.Button(
+            description="Remove Background",
+            button_style="danger",
             disabled=True,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
+
         debug_print("Created background handling widgets", "GUI")
         return self.widgets
-    
+
     def create_fitting_action_widgets(self):
         """Create fitting action buttons"""
-        self.widgets['fit_current_btn'] = widgets.Button(
-            description='🎯 Fit Current',
-            button_style='primary',
-            tooltip='Fit the current spectrum',
-            layout=widgets.Layout(width='160px')
+        self.widgets["fit_current_btn"] = widgets.Button(
+            description="🎯 Fit Current",
+            button_style="primary",
+            tooltip="Fit the current spectrum",
+            layout=widgets.Layout(width="160px"),
         )
-        
-        self.widgets['update_params_btn'] = widgets.Button(
-            description='🔄 Update from Fit',
-            button_style='',
-            tooltip='Update initial parameters from current fit',
-            layout=widgets.Layout(width='160px')
+
+        self.widgets["update_params_btn"] = widgets.Button(
+            description="🔄 Update from Fit",
+            button_style="",
+            tooltip="Update initial parameters from current fit",
+            layout=widgets.Layout(width="160px"),
         )
-        
-        self.widgets['r_squared_display'] = widgets.HTML(
-            value="<b>R²:</b> Not fitted yet"
-        )
-        
+
+        self.widgets["r_squared_display"] = widgets.HTML(value="<b>R²:</b> Not fitted yet")
+
         debug_print("Created fitting action widgets", "GUI")
         return self.widgets
 
     def create_wavelength_range_widgets(self):
         """Create wavelength range selection widgets"""
-        self.widgets['wavelength_range_slider'] = widgets.FloatRangeSlider(
+        self.widgets["wavelength_range_slider"] = widgets.FloatRangeSlider(
             value=[400, 800],
             min=300,
             max=1000,
             step=0.001,
-            description='λ Range (nm):',
+            description="λ Range (nm):",
             disabled=True,
             continuous_update=False,
-            orientation='horizontal',
+            orientation="horizontal",
             readout=True,
-            readout_format='.3f',
-            layout=widgets.Layout(width='400px'),
-            style={'description_width': 'initial'}
+            readout_format=".3f",
+            layout=widgets.Layout(width="400px"),
+            style={"description_width": "initial"},
         )
-        
+
         debug_print("Created wavelength range widgets", "GUI")
         return self.widgets
-    
+
     def create_batch_fitting_widgets(self):
         """Create batch fitting widgets"""
-        self.widgets['fit_sequential_checkbox'] = widgets.Checkbox(
+        self.widgets["fit_sequential_checkbox"] = widgets.Checkbox(
             value=False,
-            description='Fit sequential (slower — uses previous result as start values)',
-            style={'description_width': 'initial'},
-            layout=widgets.Layout(width='100%')
+            description="Fit sequential (slower, uses previous result as start values)",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="100%"),
         )
 
-        self.widgets['center_bound_input'] = widgets.FloatText(
+        self.widgets["center_bound_input"] = widgets.FloatText(
             value=config.DEFAULT_CENTER_BOUND,
-            description='Center bound:',
-            style={'description_width': 'initial'},
+            description="Center bound:",
+            style={"description_width": "initial"},
             step=0.01,
-            layout=widgets.Layout(width='220px')
+            layout=widgets.Layout(width="220px"),
         )
 
-        self.widgets['fit_all_btn'] = widgets.Button(
-            description='▶️ Fit All Spectra',
-            button_style='warning',
-            tooltip='Fit all spectra in dataset',
-            layout=widgets.Layout(width='160px')
+        self.widgets["fit_all_btn"] = widgets.Button(
+            description="▶️ Fit All Spectra",
+            button_style="warning",
+            tooltip="Fit all spectra in dataset",
+            layout=widgets.Layout(width="160px"),
         )
-        
-        self.widgets['fit_all_range_btn'] = widgets.Button(
-            description='📊 Fit Range',
-            button_style='warning',
-            tooltip='Fit spectra in selected range',
-            layout=widgets.Layout(width='160px')
+
+        self.widgets["fit_all_range_btn"] = widgets.Button(
+            description="📊 Fit Range",
+            button_style="warning",
+            tooltip="Fit spectra in selected range",
+            layout=widgets.Layout(width="160px"),
         )
-        
+
         # Range selection
-        self.widgets['fit_start_idx'] = widgets.BoundedIntText(
+        self.widgets["fit_start_idx"] = widgets.BoundedIntText(
             value=0,
             min=0,
             max=100,
-            description='Start:',
-            style={'description_width': '50px'},
-            layout=widgets.Layout(width='140px')
+            description="Start:",
+            style={"description_width": "50px"},
+            layout=widgets.Layout(width="140px"),
         )
-        
-        self.widgets['fit_end_idx'] = widgets.BoundedIntText(
+
+        self.widgets["fit_end_idx"] = widgets.BoundedIntText(
             value=100,
             min=0,
             max=100,
-            description='End:',
-            style={'description_width': '50px'},
-            layout=widgets.Layout(width='140px')
+            description="End:",
+            style={"description_width": "50px"},
+            layout=widgets.Layout(width="140px"),
         )
-        
+
         # Progress bar
-        self.widgets['fit_progress'] = widgets.IntProgress(
+        self.widgets["fit_progress"] = widgets.IntProgress(
             value=0,
             min=0,
             max=100,
-            description='Progress:',
-            bar_style='info',
-            orientation='horizontal',
-            layout=widgets.Layout(width='350px', visibility='hidden')
+            description="Progress:",
+            bar_style="info",
+            orientation="horizontal",
+            layout=widgets.Layout(width="350px", visibility="hidden"),
         )
-        
+
         debug_print("Created batch fitting widgets", "GUI")
         return self.widgets
-    
+
     def create_export_widgets(self):
         """Create export widgets"""
-        self.widgets['export_btn'] = widgets.Button(
-            description='💾 Export Results',
-            button_style='success',
-            tooltip='Export fitting results to Excel',
-            layout=widgets.Layout(width='160px')
+        self.widgets["export_btn"] = widgets.Button(
+            description="💾 Export Results",
+            button_style="success",
+            tooltip="Export fitting results to Excel",
+            layout=widgets.Layout(width="160px"),
         )
 
-        self.widgets['save_h5_btn'] = widgets.Button(
-            description='💾 Save into h5',
-            button_style='success',
-            tooltip='Save fitting results into the h5 file',
-            layout=widgets.Layout(width='160px', display='none')
+        self.widgets["save_h5_btn"] = widgets.Button(
+            description="💾 Save into h5",
+            button_style="success",
+            tooltip="Save fitting results into the h5 file",
+            layout=widgets.Layout(width="160px", display="none"),
         )
 
-        self.widgets['export_output'] = widgets.Output()
-        
+        self.widgets["export_output"] = widgets.Output()
+
         debug_print("Created export widgets", "GUI")
         return self.widgets
-    
+
     def create_output_widgets(self):
         """Create output display widgets"""
-        self.widgets['heatmap_output'] = widgets.Output()
-        self.widgets['spectrum_output'] = widgets.Output()
-        self.widgets['time_series_output'] = widgets.Output()
-        self.widgets['fit_vis_output'] = widgets.Output()
-        self.widgets['fit_vis_slider'] = widgets.IntSlider(
-            value=0, min=0, max=0, step=1,
-            description='Spectrum:',
+        self.widgets["heatmap_output"] = widgets.Output()
+        self.widgets["spectrum_output"] = widgets.Output()
+        self.widgets["time_series_output"] = widgets.Output()
+        self.widgets["fit_vis_output"] = widgets.Output()
+        self.widgets["fit_vis_slider"] = widgets.IntSlider(
+            value=0,
+            min=0,
+            max=0,
+            step=1,
+            description="Spectrum:",
             disabled=True,
-            layout=widgets.Layout(width='350px')
+            layout=widgets.Layout(width="350px"),
         )
-        self.widgets['fit_vis_label'] = widgets.Label(value='No fit results available')
-        self.widgets['fit_vis_show_components'] = widgets.Checkbox(
+        self.widgets["fit_vis_label"] = widgets.Label(value="No fit results available")
+        self.widgets["fit_vis_show_components"] = widgets.Checkbox(
             value=False,
-            description='Show individual fits',
+            description="Show individual fits",
             indent=False,
-            layout=widgets.Layout(width='180px')
+            layout=widgets.Layout(width="180px"),
         )
-        
+
         debug_print("Created output widgets", "GUI")
         return self.widgets
-    
+
     def create_all_widgets(self):
         """Create all GUI widgets"""
         self.create_file_upload_widgets()
@@ -469,142 +445,167 @@ class GUIComponents:
         self.create_export_widgets()
         self.create_output_widgets()
         self.create_colorbar_widgets()
-        
+
         debug_print("Created all GUI widgets", "GUI")
         return self.widgets
-    
+
     def create_peak_row_widget(self, peak_idx, peak_info):
         """
         Create a widget row for a single peak/model with 2-row layout
-        
+
         Parameters:
         -----------
         peak_idx : int
             Peak index
         peak_info : dict
             Peak information (center, height, sigma, type)
-            
+
         Returns:
         --------
         widgets.VBox: Peak row widget
         """
         # Peak type dropdown
         peak_type = widgets.Dropdown(
-            options=['Gaussian', 'Voigt', 'Lorentzian', 'Skewed Gaussian', 'Skewed Voigt', 'Linear', 'Polynomial'],
-            value=peak_info.get('type', config.DEFAULT_PEAK_MODEL),
-            description='',
-            layout=widgets.Layout(width='105px')
+            options=[
+                "Gaussian",
+                "Voigt",
+                "Lorentzian",
+                "Skewed Gaussian",
+                "Skewed Voigt",
+                "Linear",
+                "Polynomial",
+            ],
+            value=peak_info.get("type", config.DEFAULT_PEAK_MODEL),
+            description="",
+            layout=widgets.Layout(width="105px"),
         )
-        
+
         # Remove button
         remove_btn = widgets.Button(
-            description='❌',
-            button_style='danger',
-            tooltip=f'Remove model {peak_idx}',
-            layout=widgets.Layout(width='40px')
+            description="❌",
+            button_style="danger",
+            tooltip=f"Remove model {peak_idx}",
+            layout=widgets.Layout(width="40px"),
         )
-        
+
         # For Gaussian/Lorentzian/Voigt/Skewed models
-        label_center = widgets.Label('Center:', layout=widgets.Layout(width='100px'))
-        label_height = widgets.Label('Height:', layout=widgets.Layout(width='100px'))
-        label_sigma = widgets.Label('Sigma:', layout=widgets.Layout(width='100px'))
-        label_gamma = widgets.Label('Gamma:', layout=widgets.Layout(width='100px'))
-        
+        label_center = widgets.Label("Center:", layout=widgets.Layout(width="100px"))
+        label_height = widgets.Label("Height:", layout=widgets.Layout(width="100px"))
+        label_sigma = widgets.Label("Sigma:", layout=widgets.Layout(width="100px"))
+        label_gamma = widgets.Label("Gamma:", layout=widgets.Layout(width="100px"))
+
         center_input = widgets.FloatText(
-            value=peak_info.get('center', 700),
-            description='',
+            value=peak_info.get("center", 700),
+            description="",
             step=0.001,
-            layout=widgets.Layout(width='100px')
+            layout=widgets.Layout(width="100px"),
         )
         height_input = widgets.FloatText(
-            value=peak_info.get('height', 1000),
-            description='',
+            value=peak_info.get("height", 1000),
+            description="",
             step=0.001,
-            layout=widgets.Layout(width='100px')
+            layout=widgets.Layout(width="100px"),
         )
         sigma_input = widgets.FloatText(
-            value=peak_info.get('sigma', 10),
-            description='',
+            value=peak_info.get("sigma", 10),
+            description="",
             step=0.001,
-            layout=widgets.Layout(width='100px')
+            layout=widgets.Layout(width="100px"),
         )
         gamma_input = widgets.FloatText(
-            value=peak_info.get('gamma', 0.0),
-            description='',
+            value=peak_info.get("gamma", 0.0),
+            description="",
             step=0.001,
-            layout=widgets.Layout(width='100px')
+            layout=widgets.Layout(width="100px"),
         )
-        
-        fix_center_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
-        fix_height_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
-        fix_sigma_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
-        fix_gamma_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
+
+        fix_center_cb = widgets.Checkbox(
+            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        )
+        fix_height_cb = widgets.Checkbox(
+            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        )
+        fix_sigma_cb = widgets.Checkbox(
+            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        )
+        fix_gamma_cb = widgets.Checkbox(
+            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        )
 
         # Bounds toggle button
         bounds_toggle = widgets.ToggleButton(
             value=False,
-            description='⚙ Bounds',
-            button_style='',
-            tooltip='Show/hide parameter bounds',
-            layout=widgets.Layout(width='75px', height='28px')
+            description="⚙ Bounds",
+            button_style="",
+            tooltip="Show/hide parameter bounds",
+            layout=widgets.Layout(width="75px", height="28px"),
         )
 
         # Min/max bounds inputs (empty string = no bound)
-        center_min = widgets.Text(value='', placeholder='-∞', layout=widgets.Layout(width='90px'))
-        center_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
-        height_min = widgets.Text(value='', placeholder='0', layout=widgets.Layout(width='90px'))
-        height_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
-        sigma_min = widgets.Text(value='', placeholder='0', layout=widgets.Layout(width='90px'))
-        sigma_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
-        gamma_min = widgets.Text(value='', placeholder='-∞', layout=widgets.Layout(width='90px'))
-        gamma_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
+        center_min = widgets.Text(value="", placeholder="-∞", layout=widgets.Layout(width="90px"))
+        center_max = widgets.Text(value="", placeholder="+∞", layout=widgets.Layout(width="90px"))
+        height_min = widgets.Text(value="", placeholder="0", layout=widgets.Layout(width="90px"))
+        height_max = widgets.Text(value="", placeholder="+∞", layout=widgets.Layout(width="90px"))
+        sigma_min = widgets.Text(value="", placeholder="0", layout=widgets.Layout(width="90px"))
+        sigma_max = widgets.Text(value="", placeholder="+∞", layout=widgets.Layout(width="90px"))
+        gamma_min = widgets.Text(value="", placeholder="-∞", layout=widgets.Layout(width="90px"))
+        gamma_max = widgets.Text(value="", placeholder="+∞", layout=widgets.Layout(width="90px"))
 
         # Basic peak params (Gaussian, Lorentzian)
         peak_labels_basic = widgets.HBox([label_center, label_height, label_sigma])
         peak_values_basic = widgets.HBox([center_input, height_input, sigma_input])
         peak_fixes_basic = widgets.HBox([fix_center_cb, fix_height_cb, fix_sigma_cb])
         peak_params_basic = widgets.VBox([peak_labels_basic, peak_values_basic, peak_fixes_basic])
-        
+
         # Extended params with gamma (Voigt, Skewed models)
         peak_labels_gamma = widgets.HBox([label_center, label_height, label_sigma, label_gamma])
         peak_values_gamma = widgets.HBox([center_input, height_input, sigma_input, gamma_input])
         peak_fixes_gamma = widgets.HBox([fix_center_cb, fix_height_cb, fix_sigma_cb, fix_gamma_cb])
         peak_params_gamma = widgets.VBox([peak_labels_gamma, peak_values_gamma, peak_fixes_gamma])
-        
+
         # For Linear
-        label_slope = widgets.Label('Slope:', layout=widgets.Layout(width='120px'))
-        label_intercept = widgets.Label('Intercept:', layout=widgets.Layout(width='120px'))
-        
-        slope_input = widgets.FloatText(value=0.0, description='', step=0.001, layout=widgets.Layout(width='120px'))
-        intercept_input = widgets.FloatText(value=0.0, description='', step=0.001, layout=widgets.Layout(width='120px'))
-        
+        label_slope = widgets.Label("Slope:", layout=widgets.Layout(width="120px"))
+        label_intercept = widgets.Label("Intercept:", layout=widgets.Layout(width="120px"))
+
+        slope_input = widgets.FloatText(
+            value=0.0, description="", step=0.001, layout=widgets.Layout(width="120px")
+        )
+        intercept_input = widgets.FloatText(
+            value=0.0, description="", step=0.001, layout=widgets.Layout(width="120px")
+        )
+
         linear_labels = widgets.HBox([label_slope, label_intercept])
         linear_values = widgets.HBox([slope_input, intercept_input])
         linear_params = widgets.VBox([linear_labels, linear_values])
-        
+
         # For Polynomial
-        label_degree = widgets.Label('Degree:', layout=widgets.Layout(width='100px'))
-        poly_degree_input = widgets.IntText(value=2, min=1, max=5, description='', layout=widgets.Layout(width='100px'))
-        
+        label_degree = widgets.Label("Degree:", layout=widgets.Layout(width="100px"))
+        poly_degree_input = widgets.IntText(
+            value=2, min=1, max=5, description="", layout=widgets.Layout(width="100px")
+        )
+
         poly_labels = widgets.HBox([label_degree])
         poly_values = widgets.HBox([poly_degree_input])
         poly_params = widgets.VBox([poly_labels, poly_values])
-        
+
         # Combine all parameter sets in a way that they overlay
         # Only one will be visible at a time
-        params_area = widgets.VBox([peak_params_basic, peak_params_gamma, linear_params, poly_params], layout=widgets.Layout(
-            min_height='100px'  # Fixed height to prevent jumping
-        ))
+        params_area = widgets.VBox(
+            [peak_params_basic, peak_params_gamma, linear_params, poly_params],
+            layout=widgets.Layout(
+                min_height="100px"  # Fixed height to prevent jumping
+            ),
+        )
 
-        # Bounds container — single set of widget instances; the Min/Max HBox
+        # Bounds container: single set of widget instances; the Min/Max HBox
         # children are swapped between basic and gamma column sets when the peak
         # type changes. (Placing the same widget in two persistent parents causes
         # view-rendering issues in ipywidgets and silently drops user input.)
         def _lbl(text):
-            return widgets.Label(text, layout=widgets.Layout(width='35px'))
+            return widgets.Label(text, layout=widgets.Layout(width="35px"))
 
-        min_label = _lbl('Min:')
-        max_label = _lbl('Max:')
+        min_label = _lbl("Min:")
+        max_label = _lbl("Max:")
 
         bounds_min_row = widgets.HBox([min_label, center_min, height_min, sigma_min])
         bounds_max_row = widgets.HBox([max_label, center_max, height_max, sigma_max])
@@ -612,11 +613,11 @@ class GUIComponents:
         bounds_container = widgets.VBox(
             [bounds_min_row, bounds_max_row],
             layout=widgets.Layout(
-                display='none',
-                visibility='hidden',
-                padding='2px 0px 0px 35px',
-                border_top='1px dashed #aaa'
-            )
+                display="none",
+                visibility="hidden",
+                padding="2px 0px 0px 35px",
+                border_top="1px dashed #aaa",
+            ),
         )
 
         def _set_bounds_layout(is_gamma):
@@ -629,51 +630,51 @@ class GUIComponents:
 
         # Callback to switch between parameter sets
         def on_peak_type_change(change):
-            peak_type_val = change['new']
+            peak_type_val = change["new"]
             debug_print(f"Peak {peak_idx} type changed to {peak_type_val}", "GUI")
-            
+
             # Hide all
-            peak_params_basic.layout.visibility = 'hidden'
-            peak_params_basic.layout.display = 'none'
-            peak_params_gamma.layout.visibility = 'hidden'
-            peak_params_gamma.layout.display = 'none'
-            linear_params.layout.visibility = 'hidden'
-            linear_params.layout.display = 'none'
-            poly_params.layout.visibility = 'hidden'
-            poly_params.layout.display = 'none'
-            
+            peak_params_basic.layout.visibility = "hidden"
+            peak_params_basic.layout.display = "none"
+            peak_params_gamma.layout.visibility = "hidden"
+            peak_params_gamma.layout.display = "none"
+            linear_params.layout.visibility = "hidden"
+            linear_params.layout.display = "none"
+            poly_params.layout.visibility = "hidden"
+            poly_params.layout.display = "none"
+
             # Show only the relevant one
-            if peak_type_val == 'Linear':
-                linear_params.layout.visibility = 'visible'
-                linear_params.layout.display = 'flex'
-            elif peak_type_val == 'Polynomial':
-                poly_params.layout.visibility = 'visible'
-                poly_params.layout.display = 'flex'
-            elif peak_type_val in ['Voigt', 'Skewed Gaussian', 'Skewed Voigt']:
-                peak_params_gamma.layout.visibility = 'visible'
-                peak_params_gamma.layout.display = 'flex'
+            if peak_type_val == "Linear":
+                linear_params.layout.visibility = "visible"
+                linear_params.layout.display = "flex"
+            elif peak_type_val == "Polynomial":
+                poly_params.layout.visibility = "visible"
+                poly_params.layout.display = "flex"
+            elif peak_type_val in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
+                peak_params_gamma.layout.visibility = "visible"
+                peak_params_gamma.layout.display = "flex"
             else:  # Gaussian, Lorentzian
-                peak_params_basic.layout.visibility = 'visible'
-                peak_params_basic.layout.display = 'flex'
+                peak_params_basic.layout.visibility = "visible"
+                peak_params_basic.layout.display = "flex"
 
             # Switch bounds row columns to match type
-            is_gamma = peak_type_val in ['Voigt', 'Skewed Gaussian', 'Skewed Voigt']
+            is_gamma = peak_type_val in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]
             _set_bounds_layout(is_gamma)
 
         def on_bounds_toggle(change):
-            if change['new']:
-                bounds_container.layout.display = 'flex'
-                bounds_container.layout.visibility = 'visible'
-                bounds_toggle.button_style = 'info'
+            if change["new"]:
+                bounds_container.layout.display = "flex"
+                bounds_container.layout.visibility = "visible"
+                bounds_toggle.button_style = "info"
             else:
-                bounds_container.layout.display = 'none'
-                bounds_container.layout.visibility = 'hidden'
-                bounds_toggle.button_style = ''
+                bounds_container.layout.display = "none"
+                bounds_container.layout.visibility = "hidden"
+                bounds_toggle.button_style = ""
 
-        peak_type.observe(on_peak_type_change, names='value')
-        on_peak_type_change({'new': peak_type.value})
-        bounds_toggle.observe(on_bounds_toggle, names='value')
-        
+        peak_type.observe(on_peak_type_change, names="value")
+        on_peak_type_change({"new": peak_type.value})
+        bounds_toggle.observe(on_bounds_toggle, names="value")
+
         # Store references
         peak_type._peak_idx = peak_idx
         center_input._peak_idx = peak_idx
@@ -683,70 +684,77 @@ class GUIComponents:
         intercept_input._peak_idx = peak_idx
         poly_degree_input._peak_idx = peak_idx
         remove_btn._peak_idx = peak_idx
-        
+
         # Peak name input (editable, defaults to p{peak_idx})
         name_input = widgets.Text(
-            value=peak_info.get('name', f'p{peak_idx}'),
-            description='',
-            placeholder='Peak name',
-            layout=widgets.Layout(width='65px')
+            value=peak_info.get("name", f"p{peak_idx}"),
+            description="",
+            placeholder="Peak name",
+            layout=widgets.Layout(width="65px"),
         )
 
         # Row 1: Model label, type selector, name input, bounds toggle, remove button
-        row1 = widgets.HBox([
-            widgets.HTML(value=f"<b>Model {peak_idx + 1}:</b>", layout=widgets.Layout(width='70px')),
-            peak_type,
-            name_input,
-            bounds_toggle,
-            remove_btn
-        ])
+        row1 = widgets.HBox(
+            [
+                widgets.HTML(
+                    value=f"<b>Model {peak_idx + 1}:</b>", layout=widgets.Layout(width="70px")
+                ),
+                peak_type,
+                name_input,
+                bounds_toggle,
+                remove_btn,
+            ]
+        )
 
         # Final layout with minimal spacing
-        peak_row = widgets.VBox([row1, params_area, bounds_container], layout=widgets.Layout(
-            margin='2px 0px 2px 0px',
-            padding='5px',
-            #border='1px solid #ddd'
-        ))
-        
+        peak_row = widgets.VBox(
+            [row1, params_area, bounds_container],
+            layout=widgets.Layout(
+                margin="2px 0px 2px 0px",
+                padding="5px",
+                # border='1px solid #ddd'
+            ),
+        )
+
         peak_row._peak_idx = peak_idx
         peak_row._widgets = {
-            'type': peak_type,
-            'name': name_input,
-            'center': center_input,
-            'height': height_input,
-            'sigma': sigma_input,
-            'gamma': gamma_input,
-            'slope': slope_input,
-            'intercept': intercept_input,
-            'poly_degree': poly_degree_input,
-            'fix_center': fix_center_cb,
-            'fix_height': fix_height_cb,
-            'fix_sigma': fix_sigma_cb,
-            'fix_gamma': fix_gamma_cb,
-            'center_min': center_min,
-            'center_max': center_max,
-            'height_min': height_min,
-            'height_max': height_max,
-            'sigma_min': sigma_min,
-            'sigma_max': sigma_max,
-            'gamma_min': gamma_min,
-            'gamma_max': gamma_max,
-            'remove': remove_btn
+            "type": peak_type,
+            "name": name_input,
+            "center": center_input,
+            "height": height_input,
+            "sigma": sigma_input,
+            "gamma": gamma_input,
+            "slope": slope_input,
+            "intercept": intercept_input,
+            "poly_degree": poly_degree_input,
+            "fix_center": fix_center_cb,
+            "fix_height": fix_height_cb,
+            "fix_sigma": fix_sigma_cb,
+            "fix_gamma": fix_gamma_cb,
+            "center_min": center_min,
+            "center_max": center_max,
+            "height_min": height_min,
+            "height_max": height_max,
+            "sigma_min": sigma_min,
+            "sigma_max": sigma_max,
+            "gamma_min": gamma_min,
+            "gamma_max": gamma_max,
+            "remove": remove_btn,
         }
-        
+
         return peak_row
-    
+
     def create_collapsible_section(self, title, children):
         """
         Create a collapsible accordion section
-        
+
         Parameters:
         -----------
         title : str
             Section title
         children : list
             List of child widgets
-            
+
         Returns:
         --------
         widgets.Accordion: Collapsible section
@@ -755,13 +763,13 @@ class GUIComponents:
         accordion = widgets.Accordion(children=[content])
         accordion.set_title(0, title)
         accordion.selected_index = 0  # Start expanded
-        
+
         return accordion
-    
+
     def get_widget(self, name):
         """Get a widget by name"""
         return self.widgets.get(name, None)
-    
+
     def get_all_widgets(self):
         """Get all widgets dictionary"""
         return self.widgets
