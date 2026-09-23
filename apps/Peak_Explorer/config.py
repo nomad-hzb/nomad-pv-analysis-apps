@@ -50,6 +50,18 @@ PEAK_DETECTION_DEFAULTS = {
 DEFAULT_BACKGROUND_MODEL = 'Linear'
 DEFAULT_PEAK_MODEL = 'Gaussian'
 
+# Default half-width of the center parameter search window (in the current x-axis unit).
+# Increase if peaks shift by more than this between the initial guess and the fit.
+DEFAULT_CENTER_BOUND = 50
+
+# Mode-specific center bound defaults (applied when loading H5 data)
+CENTER_BOUND_DEFAULTS = {
+    'giwaxs': 0.25,
+    'absorbance': 300,
+    'transmission': 300,
+    'default': 50,
+}
+
 # Background handling
 BACKGROUND_OPTIONS = ['None', 'Manual', 'Linear', 'Polynomial', 'Exponential', 'Custom']
 DEFAULT_BACKGROUND_METHOD = 'None'
@@ -84,8 +96,11 @@ H5_MODES = {
     'pl_raw': 'PL raw',
     'pl_binned': 'PL binned & bgs',
     'giwaxs': 'GIWAXS',
+    'giwaxs_diamond': 'GIWAXS Diamond integration',
     'transmission_raw': 'Transmission raw',
-    'transmission_binned': 'Transmission binned & bgs'
+    'transmission_binned': 'Transmission binned & bgs',
+    'absorbance_raw': 'Absorbance raw',
+    'absorbance_binned': 'Absorbance binned & bgs'
 }
 DEFAULT_H5_MODE = 'giwaxs'
 
@@ -105,6 +120,11 @@ H5_PATHS = {
         'data': '/diffractogram/i_values',
         'wavelengths': '/diffractogram/q_values'
     },
+    'giwaxs_diamond': {
+        'timestamps': '/beamline_logging/Time',
+        'data': '/diffractogram/i_values_diamond',
+        'wavelengths': '/diffractogram/q_values_diamond'
+    },
     'transmission_raw': {
         'timestamps': '/raw_optical_measurements/raw_transmission_measurements/raw_transmission_Time',
         'data': '/raw_optical_measurements/raw_transmission_measurements/raw_transmission_data',
@@ -115,6 +135,10 @@ H5_PATHS = {
         'data': '/binned_optical_measurements/binned_transmission_measurements_bg'
     }
 }
+
+# Absorbance modes compute A = -ln(T / T_ref), where T_ref is the mean transmission
+# spectrum over this time window (inclusive, in seconds).
+ABSORBANCE_REFERENCE_WINDOW = (1, 6)
 
 # =============================================================================
 # FILE UPLOAD SETTINGS

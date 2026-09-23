@@ -19,6 +19,11 @@ class GUIComponents:
     def create_file_upload_widgets(self):
         """Create file upload related widgets"""
         if self.h5_available:
+            # H5 filename label
+            self.widgets['h5_filename_label'] = widgets.HTML(
+                value="",
+                layout=widgets.Layout(width='100%')
+            )
             # H5 mode dropdown (keep as is)
             mode_options = [(v, k) for k, v in config.H5_MODES.items()]
             self.widgets['mode_dropdown'] = widgets.Dropdown(
@@ -345,6 +350,21 @@ class GUIComponents:
     
     def create_batch_fitting_widgets(self):
         """Create batch fitting widgets"""
+        self.widgets['fit_sequential_checkbox'] = widgets.Checkbox(
+            value=False,
+            description='Fit sequential (slower — uses previous result as start values)',
+            style={'description_width': 'initial'},
+            layout=widgets.Layout(width='100%')
+        )
+
+        self.widgets['center_bound_input'] = widgets.FloatText(
+            value=config.DEFAULT_CENTER_BOUND,
+            description='Center bound:',
+            style={'description_width': 'initial'},
+            step=0.01,
+            layout=widgets.Layout(width='220px')
+        )
+
         self.widgets['fit_all_btn'] = widgets.Button(
             description='▶️ Fit All Spectra',
             button_style='warning',
@@ -400,7 +420,14 @@ class GUIComponents:
             tooltip='Export fitting results to Excel',
             layout=widgets.Layout(width='160px')
         )
-        
+
+        self.widgets['save_h5_btn'] = widgets.Button(
+            description='💾 Save into h5',
+            button_style='success',
+            tooltip='Save fitting results into the h5 file',
+            layout=widgets.Layout(width='160px', display='none')
+        )
+
         self.widgets['export_output'] = widgets.Output()
         
         debug_print("Created export widgets", "GUI")
@@ -411,6 +438,20 @@ class GUIComponents:
         self.widgets['heatmap_output'] = widgets.Output()
         self.widgets['spectrum_output'] = widgets.Output()
         self.widgets['time_series_output'] = widgets.Output()
+        self.widgets['fit_vis_output'] = widgets.Output()
+        self.widgets['fit_vis_slider'] = widgets.IntSlider(
+            value=0, min=0, max=0, step=1,
+            description='Spectrum:',
+            disabled=True,
+            layout=widgets.Layout(width='350px')
+        )
+        self.widgets['fit_vis_label'] = widgets.Label(value='No fit results available')
+        self.widgets['fit_vis_show_components'] = widgets.Checkbox(
+            value=False,
+            description='Show individual fits',
+            indent=False,
+            layout=widgets.Layout(width='180px')
+        )
         
         debug_print("Created output widgets", "GUI")
         return self.widgets
@@ -452,7 +493,7 @@ class GUIComponents:
             options=['Gaussian', 'Voigt', 'Lorentzian', 'Skewed Gaussian', 'Skewed Voigt', 'Linear', 'Polynomial'],
             value=peak_info.get('type', config.DEFAULT_PEAK_MODEL),
             description='',
-            layout=widgets.Layout(width='120px')
+            layout=widgets.Layout(width='105px')
         )
         
         # Remove button
@@ -498,7 +539,26 @@ class GUIComponents:
         fix_height_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
         fix_sigma_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
         fix_gamma_cb = widgets.Checkbox(value=False, description='Fix', indent=False, layout=widgets.Layout(width='100px'))
-        
+
+        # Bounds toggle button
+        bounds_toggle = widgets.ToggleButton(
+            value=False,
+            description='⚙ Bounds',
+            button_style='',
+            tooltip='Show/hide parameter bounds',
+            layout=widgets.Layout(width='75px', height='28px')
+        )
+
+        # Min/max bounds inputs (empty string = no bound)
+        center_min = widgets.Text(value='', placeholder='-∞', layout=widgets.Layout(width='90px'))
+        center_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
+        height_min = widgets.Text(value='', placeholder='0', layout=widgets.Layout(width='90px'))
+        height_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
+        sigma_min = widgets.Text(value='', placeholder='0', layout=widgets.Layout(width='90px'))
+        sigma_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
+        gamma_min = widgets.Text(value='', placeholder='-∞', layout=widgets.Layout(width='90px'))
+        gamma_max = widgets.Text(value='', placeholder='+∞', layout=widgets.Layout(width='90px'))
+
         # Basic peak params (Gaussian, Lorentzian)
         peak_labels_basic = widgets.HBox([label_center, label_height, label_sigma])
         peak_values_basic = widgets.HBox([center_input, height_input, sigma_input])
@@ -535,7 +595,38 @@ class GUIComponents:
         params_area = widgets.VBox([peak_params_basic, peak_params_gamma, linear_params, poly_params], layout=widgets.Layout(
             min_height='100px'  # Fixed height to prevent jumping
         ))
-        
+
+        # Bounds container — single set of widget instances; the Min/Max HBox
+        # children are swapped between basic and gamma column sets when the peak
+        # type changes. (Placing the same widget in two persistent parents causes
+        # view-rendering issues in ipywidgets and silently drops user input.)
+        def _lbl(text):
+            return widgets.Label(text, layout=widgets.Layout(width='35px'))
+
+        min_label = _lbl('Min:')
+        max_label = _lbl('Max:')
+
+        bounds_min_row = widgets.HBox([min_label, center_min, height_min, sigma_min])
+        bounds_max_row = widgets.HBox([max_label, center_max, height_max, sigma_max])
+
+        bounds_container = widgets.VBox(
+            [bounds_min_row, bounds_max_row],
+            layout=widgets.Layout(
+                display='none',
+                visibility='hidden',
+                padding='2px 0px 0px 35px',
+                border_top='1px dashed #aaa'
+            )
+        )
+
+        def _set_bounds_layout(is_gamma):
+            if is_gamma:
+                bounds_min_row.children = (min_label, center_min, height_min, sigma_min, gamma_min)
+                bounds_max_row.children = (max_label, center_max, height_max, sigma_max, gamma_max)
+            else:
+                bounds_min_row.children = (min_label, center_min, height_min, sigma_min)
+                bounds_max_row.children = (max_label, center_max, height_max, sigma_max)
+
         # Callback to switch between parameter sets
         def on_peak_type_change(change):
             peak_type_val = change['new']
@@ -564,9 +655,24 @@ class GUIComponents:
             else:  # Gaussian, Lorentzian
                 peak_params_basic.layout.visibility = 'visible'
                 peak_params_basic.layout.display = 'flex'
-        
+
+            # Switch bounds row columns to match type
+            is_gamma = peak_type_val in ['Voigt', 'Skewed Gaussian', 'Skewed Voigt']
+            _set_bounds_layout(is_gamma)
+
+        def on_bounds_toggle(change):
+            if change['new']:
+                bounds_container.layout.display = 'flex'
+                bounds_container.layout.visibility = 'visible'
+                bounds_toggle.button_style = 'info'
+            else:
+                bounds_container.layout.display = 'none'
+                bounds_container.layout.visibility = 'hidden'
+                bounds_toggle.button_style = ''
+
         peak_type.observe(on_peak_type_change, names='value')
         on_peak_type_change({'new': peak_type.value})
+        bounds_toggle.observe(on_bounds_toggle, names='value')
         
         # Store references
         peak_type._peak_idx = peak_idx
@@ -578,15 +684,25 @@ class GUIComponents:
         poly_degree_input._peak_idx = peak_idx
         remove_btn._peak_idx = peak_idx
         
-        # Row 1: Model label, type selector, remove button
+        # Peak name input (editable, defaults to p{peak_idx})
+        name_input = widgets.Text(
+            value=peak_info.get('name', f'p{peak_idx}'),
+            description='',
+            placeholder='Peak name',
+            layout=widgets.Layout(width='65px')
+        )
+
+        # Row 1: Model label, type selector, name input, bounds toggle, remove button
         row1 = widgets.HBox([
             widgets.HTML(value=f"<b>Model {peak_idx + 1}:</b>", layout=widgets.Layout(width='70px')),
             peak_type,
+            name_input,
+            bounds_toggle,
             remove_btn
         ])
-        
+
         # Final layout with minimal spacing
-        peak_row = widgets.VBox([row1, params_area], layout=widgets.Layout(
+        peak_row = widgets.VBox([row1, params_area, bounds_container], layout=widgets.Layout(
             margin='2px 0px 2px 0px',
             padding='5px',
             #border='1px solid #ddd'
@@ -595,6 +711,7 @@ class GUIComponents:
         peak_row._peak_idx = peak_idx
         peak_row._widgets = {
             'type': peak_type,
+            'name': name_input,
             'center': center_input,
             'height': height_input,
             'sigma': sigma_input,
@@ -606,6 +723,14 @@ class GUIComponents:
             'fix_height': fix_height_cb,
             'fix_sigma': fix_sigma_cb,
             'fix_gamma': fix_gamma_cb,
+            'center_min': center_min,
+            'center_max': center_max,
+            'height_min': height_min,
+            'height_max': height_max,
+            'sigma_min': sigma_min,
+            'sigma_max': sigma_max,
+            'gamma_min': gamma_min,
+            'gamma_max': gamma_max,
             'remove': remove_btn
         }
         
