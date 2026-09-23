@@ -330,6 +330,9 @@ class CSVDataLoader:
         self.data_matrix = intensity_array.T
         debug_print(f"Final data_matrix shape: {self.data_matrix.shape}", "DATA")
 
+        # TODO: NaN/inf are replaced with 0 here, so they never reach the fitting
+        # engine's non-finite masking and get fitted as real zero-intensity points.
+        # Keep them as NaN instead once the display/detection paths handle NaN.
         # Sanitize infinity and NaN values
         num_inf = np.sum(np.isinf(self.data_matrix))
         num_nan = np.sum(np.isnan(self.data_matrix))
@@ -392,6 +395,8 @@ class CSVDataLoader:
                 timestamps_list.append(timestamp)
 
                 # Get intensities (should match number of wavelengths)
+                # TODO: empty cells and missing trailing values become 0.0 rather
+                # than NaN; see the sanitize TODO below.
                 intensities = [float(x) if x else 0.0 for x in parts[1 : len(self.wavelengths) + 1]]
 
                 # Pad if necessary
@@ -425,6 +430,9 @@ class CSVDataLoader:
         self.data_matrix = np.array(intensity_matrix)
         debug_print(f"Data matrix shape: {self.data_matrix.shape}", "DATA")
 
+        # TODO: NaN/inf are replaced with 0 here, so they never reach the fitting
+        # engine's non-finite masking and get fitted as real zero-intensity points.
+        # Keep them as NaN instead once the display/detection paths handle NaN.
         # Sanitize infinity and NaN values
         num_inf = np.sum(np.isinf(self.data_matrix))
         num_nan = np.sum(np.isnan(self.data_matrix))
@@ -612,7 +620,7 @@ class H5DataLoader:
                 time_unit = "s"
                 ref_start, ref_end = config.ABSORBANCE_REFERENCE_WINDOW
                 ref_mask = (timestamps >= ref_start) & (timestamps <= ref_end)
-                t_ref = data_matrix[ref_mask, :].mean(axis=0, keepdims=True)
+                t_ref = np.nanmean(data_matrix[ref_mask, :], axis=0, keepdims=True)
                 data_matrix = -np.log(data_matrix / t_ref)
 
             elif mode == "absorbance_binned":
@@ -623,7 +631,7 @@ class H5DataLoader:
                 time_unit = "s"
                 ref_start, ref_end = config.ABSORBANCE_REFERENCE_WINDOW
                 ref_mask = (timestamps >= ref_start) & (timestamps <= ref_end)
-                t_ref = data_matrix[ref_mask, :].mean(axis=0, keepdims=True)
+                t_ref = np.nanmean(data_matrix[ref_mask, :], axis=0, keepdims=True)
                 data_matrix = -np.log(data_matrix / t_ref)
 
             else:

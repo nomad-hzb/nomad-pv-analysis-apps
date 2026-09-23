@@ -1082,14 +1082,17 @@ class PLAnalysisApp:
                 spectrum_detect = current_spectrum
                 debug_print("Detecting peaks in full range", "APP")
 
-            # Get detection parameters from UI
+            # Get detection parameters from UI. Defaults are computed from finite
+            # points only; a single NaN/inf would otherwise make them NaN/inf and
+            # silently suppress every peak.
+            finite_spectrum = spectrum_detect[np.isfinite(spectrum_detect)]
             min_height = self.widgets["peak_height_threshold"].value
-            if min_height == 0:
-                min_height = np.max(spectrum_detect) * 0.05
+            if min_height == 0 and finite_spectrum.size:
+                min_height = np.max(finite_spectrum) * 0.05
 
             min_prominence = self.widgets["peak_prominence"].value
-            if min_prominence == 0:
-                min_prominence = np.std(spectrum_detect) * 2
+            if min_prominence == 0 and finite_spectrum.size:
+                min_prominence = np.std(finite_spectrum) * 2
 
             min_distance = self.widgets["peak_distance"].value
 
@@ -2468,7 +2471,7 @@ class PLAnalysisApp:
                 end_idx = min(start_idx + num_curves, len(self.data_manager.timestamps))
 
                 # Calculate average background
-                background = np.mean(self.original_data_matrix[start_idx:end_idx, :], axis=0)
+                background = np.nanmean(self.original_data_matrix[start_idx:end_idx, :], axis=0)
 
             elif method == "Linear":
                 slope = self.widgets["bg_linear_slope"].value
@@ -2646,7 +2649,7 @@ class PLAnalysisApp:
 
             # Calculate background (average of selected time range)
             background_spectra = self.data_manager.data_matrix[start_idx:end_idx, :]
-            background_average = np.mean(background_spectra, axis=0)
+            background_average = np.nanmean(background_spectra, axis=0)
 
             # Store original data if not already stored
             if self.original_data_matrix is None:

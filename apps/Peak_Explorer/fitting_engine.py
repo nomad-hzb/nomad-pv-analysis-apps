@@ -64,6 +64,16 @@ class PeakDetector:
         # Merge default parameters with user input
         params = {**self.default_params, **kwargs}
 
+        # Detect on finite points only. Indices below refer to these compacted
+        # arrays, so centers stay correct; `distance` counts samples and can span
+        # across a removed hole.
+        finite_mask = np.isfinite(intensities)
+        wavelengths = np.asarray(wavelengths)[finite_mask]
+        intensities = np.asarray(intensities)[finite_mask]
+        if len(intensities) == 0:
+            debug_print("Peak detection skipped: no finite data points", "FITTING")
+            return []
+
         # Find peaks
         peaks, properties = find_peaks(intensities, **params)
 
@@ -113,7 +123,7 @@ class PeakDetector:
             try:
                 left_idx = max(0, peak_idx - int(peak_data["width"]))
                 right_idx = min(len(intensities), peak_idx + int(peak_data["width"]))
-                peak_data["area"] = np.trapz(
+                peak_data["area"] = np.trapezoid(
                     intensities[left_idx:right_idx], wavelengths[left_idx:right_idx]
                 )
             except Exception:
@@ -219,7 +229,7 @@ class PeakDetector:
         peak_data["sigma"] = width_nm / 2.355  # Gaussian approximation
 
         # Calculate area
-        peak_data["area"] = np.trapz(
+        peak_data["area"] = np.trapezoid(
             intensities[left_base_idx : right_base_idx + 1],
             wavelengths[left_base_idx : right_base_idx + 1],
         )
