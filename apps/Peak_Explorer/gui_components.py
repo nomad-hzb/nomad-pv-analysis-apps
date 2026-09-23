@@ -123,21 +123,53 @@ class GUIComponents:
         self.widgets["auto_detect_btn"] = widgets.Button(
             description="🔍 Auto-Detect Peaks",
             button_style="primary",
-            tooltip="Automatically detect peaks in current spectrum",
+            tooltip=(
+                "Detect peaks in the current spectrum, within the selected wavelength range, "
+                "and replace the peak models with them"
+            ),
             layout=widgets.Layout(width="180px"),
         )
 
-        # Detection parameters in 2-row layout
+        # Detection parameters in 2-row layout. The automatic values for 0 are computed in
+        # gui_layouts.on_auto_detect_peaks; keep these tooltips in step with it.
         self.widgets["peak_height_threshold"] = widgets.FloatText(
-            value=0, description="", disabled=True, layout=widgets.Layout(width="100px")
+            value=0,
+            description="",
+            tooltip=(
+                "Minimum peak height, in the data's intensity units. Any other value: "
+                "peaks whose maximum is below it are ignored. It is an absolute level, "
+                "baseline included, so with a background of 1000 a value of 500 filters "
+                "nothing. 0 = automatic: 5% of the spectrum's maximum in the selected range"
+            ),
+            disabled=True,
+            layout=widgets.Layout(width="100px"),
         )
 
         self.widgets["peak_prominence"] = widgets.FloatText(
-            value=0, description="", disabled=True, layout=widgets.Layout(width="100px")
+            value=0,
+            description="",
+            tooltip=(
+                "How far a peak must rise above its surroundings, in intensity units. "
+                "Any other value: peaks rising less than that above the higher of their "
+                "two surrounding minima are ignored; independent of the baseline level. "
+                "0 = automatic: 2 x the spectrum's standard deviation in the selected range"
+            ),
+            disabled=True,
+            layout=widgets.Layout(width="100px"),
         )
 
-        self.widgets["peak_distance"] = widgets.IntText(
-            value=5, description="", disabled=True, layout=widgets.Layout(width="100px")
+        # scipy's find_peaks counts distance in samples and requires >= 1
+        self.widgets["peak_distance"] = widgets.BoundedIntText(
+            value=5,
+            min=1,
+            max=10000,
+            description="",
+            tooltip=(
+                "Minimum distance between detected peaks, in data points (not nm or eV). "
+                "Of two peaks closer than this, only the higher one is kept"
+            ),
+            disabled=True,
+            layout=widgets.Layout(width="100px"),
         )
 
         debug_print("Created peak detection widgets", "GUI")
@@ -203,7 +235,7 @@ class GUIComponents:
         )
 
         # Polynomial method widgets
-        self.widgets["bg_poly_degree"] = widgets.IntText(
+        self.widgets["bg_poly_degree"] = widgets.BoundedIntText(
             value=config.DEFAULT_POLY_DEGREE,
             min=1,
             max=10,
@@ -248,7 +280,6 @@ class GUIComponents:
             description="Upload BG:",
             disabled=True,
             layout=widgets.Layout(width="380px"),
-            style={"description_width": "80px"},
         )
 
         self.widgets["bg_custom_status"] = widgets.HTML(
@@ -580,7 +611,7 @@ class GUIComponents:
 
         # For Polynomial
         label_degree = widgets.Label("Degree:", layout=widgets.Layout(width="100px"))
-        poly_degree_input = widgets.IntText(
+        poly_degree_input = widgets.BoundedIntText(
             value=2, min=1, max=5, description="", layout=widgets.Layout(width="100px")
         )
 

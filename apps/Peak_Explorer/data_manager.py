@@ -637,10 +637,12 @@ class H5DataLoader:
             else:
                 raise ValueError(f"Unknown H5 mode: {mode}")
 
-        # Clean up NaN values in timestamps
+        # Beamline logging can end with a NaN time entry; its data row exists too, so drop
+        # both to keep one timestamp per data row
         if np.isnan(timestamps[-1]):
-            debug_print("Removing NaN from last timestamp entry", "H5")
+            debug_print("Removing NaN last timestamp entry and its data row", "H5")
             timestamps = timestamps[:-1]
+            data_matrix = data_matrix[:-1]
 
         debug_print(
             f"Loaded H5 data: {data_matrix.shape}, {len(y_values)} y-axes values, {len(timestamps)} times",
@@ -766,9 +768,13 @@ class DataManager:
         if not self.is_data_loaded():
             return {"status": "No data loaded"}
 
-        # Use sanitize_float for min/max values
-        data_min = sanitize_float(self.data_matrix.min(), default=0.0)
-        data_max = sanitize_float(self.data_matrix.max(), default=1000.0)
+        # Range of the finite values only: plain min()/max() turn into NaN/inf from a
+        # single NaN/inf (common in absorbance), which fell back to 0 to 1000.
+        finite = self.data_matrix[np.isfinite(self.data_matrix)]
+        if finite.size:
+            data_min, data_max = float(finite.min()), float(finite.max())
+        else:
+            data_min, data_max = 0.0, 1000.0
 
         return {
             "status": "Data loaded",

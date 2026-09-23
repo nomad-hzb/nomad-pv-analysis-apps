@@ -9,7 +9,7 @@ import config
 import ipywidgets as widgets
 
 debug_output = widgets.Output(
-    layout=widgets.Layout(max_height="300px", overflow_y="auto", width="100%")
+    layout=widgets.Layout(max_height="300px", overflow="auto", width="100%")
 )
 
 

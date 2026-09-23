@@ -10,7 +10,7 @@ import warnings
 import config
 import ipywidgets as widgets
 import numpy as np
-from data_manager import DataManager, sanitize_float
+from data_manager import DataManager
 from exporters import ResultExporter
 from fitting_engine import FittingEngine
 from gui_components import GUIComponents
@@ -37,6 +37,15 @@ try:
     print("✅ ipyvuetify FileInput initialized")
 except Exception as e:
     print(f"⚠️ ipyvuetify initialization warning: {e}")
+
+
+def _slider_step(span, steps=1000):
+    """Round step (a power of ten) giving about `steps` steps across `span`, and the
+    number of decimals needed to show it: span 2 -> (0.001, 3), span 5000 -> (1, 0)."""
+    if not np.isfinite(span) or span <= 0:
+        return 0.1, 1
+    exponent = int(np.floor(np.log10(span / steps)))
+    return 10.0**exponent, max(0, -exponent)
 
 
 # =============================================================================
@@ -212,7 +221,7 @@ class GUILayouts:
             [
                 widgets.Label("Height:", layout=widgets.Layout(width="100px")),
                 widgets.Label("Prominence:", layout=widgets.Layout(width="100px")),
-                widgets.Label("Distance:", layout=widgets.Layout(width="100px")),
+                widgets.Label("Distance (pts):", layout=widgets.Layout(width="100px")),
             ]
         )
 
@@ -442,9 +451,10 @@ class PLAnalysisApp:
                 z_min, z_max = change["new"]
                 self.update_heatmap_colorbar(z_min, z_max)
 
+                fmt = self.widgets["colorbar_range_slider"].readout_format
                 with self.widgets["status_output"]:
                     self.widgets["status_output"].clear_output()
-                    print(f"✅ Colorbar range: {z_min:.1f} - {z_max:.1f}")
+                    print(f"✅ Colorbar range: {z_min:{fmt}} - {z_max:{fmt}}")
 
         self.widgets["colorbar_range_slider"].observe(on_colorbar_slider_change, names="value")
 
@@ -879,13 +889,18 @@ class PLAnalysisApp:
             ].description = f"λ Range ({self.wavelength_unit})"
         self.widgets["wavelength_range_slider"].disabled = False
 
-        # Enable colorbar controls
-        data_min = sanitize_float(self.data_manager.data_matrix.min(), default=0.0)
-        data_max = sanitize_float(self.data_manager.data_matrix.max(), default=1000.0)
+        # Enable colorbar controls (range from finite values, see get_data_info)
+        data_min, data_max = self.data_manager.get_data_info()["intensity_range"]
 
         # Ensure min < max
         if data_min >= data_max:
             data_max = data_min + 1000.0
+
+        # Step and shown decimals follow the data: about 1000 steps across the range,
+        # so absorbance (~0 to 2) gets 0.001 steps and PL counts (~1e4) whole numbers
+        step, decimals = _slider_step(data_max - data_min)
+        self.widgets["colorbar_range_slider"].step = step
+        self.widgets["colorbar_range_slider"].readout_format = f".{decimals}f"
 
         # Set colorbar range
         # Set max first if increasing range
@@ -1277,8 +1292,9 @@ class PLAnalysisApp:
 
             with self.widgets["status_output"]:
                 self.widgets["status_output"].clear_output()
+                fmt = self.widgets["colorbar_range_slider"].readout_format
                 print("✅ Colorbar range applied")
-                print(f"   Range: {z_min:.1f} - {z_max:.1f}")
+                print(f"   Range: {z_min:{fmt}} - {z_max:{fmt}}")
 
             debug_print(f"Colorbar range applied: {z_min:.1f} - {z_max:.1f}", "APP")
 
