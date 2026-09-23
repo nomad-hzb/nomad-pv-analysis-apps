@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 from utils import debug_print
 
-# Units of fitted peak parameters. Intensities are arbitrary and written as "-",
-# so an area (intensity x x-axis) carries the x-axis unit. lmfit's `amplitude` is
-# the peak area for every peak model this app offers.
+# Units of fitted peak parameters. Intensities are arbitrary units, written as "-";
+# the area (lmfit's `amplitude`) is too. Its value does depend on whether the fit ran
+# in nm or eV, which the fit group's `x_unit` attribute records.
 _X_UNIT_PARAMS = {
     "center",
     "position",
@@ -22,10 +22,8 @@ _X_UNIT_PARAMS = {
     "width",
     "width_10pct",
     "width_50pct",
-    "amplitude",
-    "area",
 }
-_UNITLESS_PARAMS = {"height", "skew"}
+_UNITLESS_PARAMS = {"height", "amplitude", "area", "skew"}
 
 
 def parameter_unit(param, model_type, x_unit):

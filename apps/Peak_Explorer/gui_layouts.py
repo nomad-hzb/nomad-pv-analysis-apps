@@ -1723,16 +1723,14 @@ class PLAnalysisApp:
                             print(f"  Model {i + 1} gamma: {fitted_params[gamma_param].value:.3f}")
                             updated_count += 1
 
-                    # Update height (converted from amplitude)
-                    amplitude_param = f"{prefix}amplitude"
-                    if amplitude_param in fitted_params and sigma_param in fitted_params:
-                        amplitude = fitted_params[amplitude_param].value
-                        sigma = fitted_params[sigma_param].value
-                        if sigma > 0:
-                            height = amplitude / (sigma * np.sqrt(2 * np.pi))
-                            model._widgets["height"].value = round(height, 3)
-                            print(f"  Model {i + 1} height: {height:.3f}")
-                            updated_count += 1
+                    # Update height: a fitted parameter for every peak type (see
+                    # FittingModels._set_height), so no conversion from the area
+                    height_param = f"{prefix}height"
+                    if height_param in fitted_params:
+                        height = fitted_params[height_param].value
+                        model._widgets["height"].value = round(height, 3)
+                        print(f"  Model {i + 1} height: {height:.3f}")
+                        updated_count += 1
 
                 elif model_type == "Linear":
                     # Update slope and intercept

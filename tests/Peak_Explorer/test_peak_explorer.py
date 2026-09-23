@@ -31,6 +31,29 @@ def BUG(reason):  # noqa: N802
 # =============================================================================
 
 
+PEAK_TYPES = ["Gaussian", "Lorentzian", "Voigt", "Skewed Gaussian", "Skewed Voigt"]
+
+_SHAPES = {
+    "Gaussian": lambda x, v: gaussian(x, v["amplitude"], v["center"], v["sigma"]),
+    "Lorentzian": lambda x, v: lorentzian(x, v["amplitude"], v["center"], v["sigma"]),
+    "Voigt": lambda x, v: voigt(x, v["amplitude"], v["center"], v["sigma"], v["gamma"]),
+    "Skewed Gaussian": lambda x, v: skewed_gaussian(
+        x, v["amplitude"], v["center"], v["sigma"], v["gamma"]
+    ),
+    "Skewed Voigt": lambda x, v: skewed_voigt(
+        x, v["amplitude"], v["center"], v["sigma"], v["gamma"], v["skew"]
+    ),
+}
+
+
+def _curve_max(peak_type, values):
+    """Maximum of a peak with these parameter values, on a very fine grid: an
+    independent check of the height, not using the app's own height functions."""
+    width = values["sigma"] + abs(values.get("gamma", 0.0))
+    x = np.linspace(values["center"] - 30 * width, values["center"] + 30 * width, 600_001)
+    return float(_SHAPES[peak_type](x, values).max())
+
+
 def _fit_params(peaks, background="None", center_bound=50):
     return {
         "background_model": background,
@@ -221,10 +244,11 @@ def test_sequential_and_parallel_agree(fe, x_nm, app_modules_importable):
             )
 
 
-@pytest.mark.parametrize("peak_type", ["Gaussian", "Lorentzian", "Voigt", "Skewed Gaussian"])
-def test_sequential_seed_starts_from_previous_amplitude(fe, x_nm, peak_type):
-    """The seed converts amplitude to height and back; both directions must use the same
-    factor (the bug: Lorentzians restarted at 1.25x the previous amplitude)."""
+@pytest.mark.parametrize("peak_type", PEAK_TYPES)
+def test_sequential_seed_starts_from_previous_height(fe, x_nm, peak_type):
+    """The next frame starts at the previous fitted height, unconverted, and its area at
+    the matching value (an old amplitude->height->amplitude round trip restarted
+    Lorentzians at 1.25x the previous amplitude)."""
     models = fe.FittingModels()
     peak = {"type": peak_type, "center": 600, "height": 30, "sigma": 8, "gamma": 1.0}
     fit_params = _fit_params([peak])
@@ -232,14 +256,16 @@ def test_sequential_seed_starts_from_previous_amplitude(fe, x_nm, peak_type):
         "index": 0,
         "time": 0.0,
         "parameters": {
-            "p0_amplitude": {"value": 1000.0},
+            "p0_height": {"value": 42.0},
             "p0_sigma": {"value": 10.0},
             "p0_center": {"value": 601.0},
         },
     }
     _, params = models.create_composite_model(models._apply_smart_init(fit_params, previous))
-    assert params["p0_amplitude"].value == pytest.approx(1000.0)
+    assert params["p0_height"].value == pytest.approx(42.0)
     assert params["p0_center"].value == pytest.approx(601.0)
+    values = {name[3:]: p.value for name, p in params.items() if name.startswith("p0_")}
+    assert _curve_max(peak_type, values) == pytest.approx(42.0, rel=1e-6)
 
 
 def test_batch_settings_are_the_batch_fits_not_a_later_single_fit(fe, x_nm):
@@ -352,8 +378,8 @@ def test_area_is_integral_and_width_10pct_matches_definition(fe, ex, x_nm):
     [
         ("center", "Gaussian", "nm"),
         ("position", "Skewed Gaussian", "nm"),
-        ("area", "Voigt", "nm"),
-        ("amplitude", "Lorentzian", "nm"),
+        ("area", "Voigt", "-"),
+        ("amplitude", "Lorentzian", "-"),
         ("height", "Gaussian", "-"),
         ("gamma", "Voigt", "nm"),
         ("gamma", "Skewed Voigt", "nm"),
@@ -401,7 +427,7 @@ def test_h5_export_writes_metadata_and_units(fe, ex, x_nm, tmp_path):
     assert attrs["background_model"] == "None"
     assert attrs["center_bound"] == 50
     assert units["p0_gamma"] == "nm" and units["p1_gamma"] == "-"
-    assert units["p0_area"] == "nm" and units["p1_position"] == "nm"
+    assert units["p0_area"] == "-" and units["p1_position"] == "nm"
     assert units["p0_height"] == "-"
 
 
@@ -797,3 +823,83 @@ def test_peak_detection_fields_explain_themselves(gl):
     assert "data points" in widgets["peak_distance"].tooltip
     for key in ("peak_height_threshold", "peak_prominence"):
         assert "0 = automatic" in widgets[key].tooltip
+
+
+# =============================================================================
+# Height: fitted directly, "Fix height", height bounds, "Update from Fit"
+# =============================================================================
+
+_TRUE = {
+    "Gaussian": {"amplitude": 1000, "center": 600, "sigma": 12},
+    "Lorentzian": {"amplitude": 1000, "center": 600, "sigma": 12},
+    "Voigt": {"amplitude": 1000, "center": 600, "sigma": 6, "gamma": 8},
+    "Skewed Gaussian": {"amplitude": 1000, "center": 600, "sigma": 12, "gamma": 3},
+    "Skewed Voigt": {"amplitude": 1000, "center": 600, "sigma": 6, "gamma": 8, "skew": 2},
+}
+
+
+def _start_peak(peak_type, **extra):
+    gamma = 3.0 if "Voigt" in peak_type else 0.0
+    return {"type": peak_type, "center": 600, "height": 30, "sigma": 8, "gamma": gamma, **extra}
+
+
+def _fit_one(fe, x, peak_type, noise=0.0, **extra):
+    y = _SHAPES[peak_type](x, _TRUE[peak_type])
+    if noise:
+        y = y + np.random.default_rng(0).normal(0, noise, x.size)
+    return fe.FittingModels().fit_spectrum(x, y, _fit_params([_start_peak(peak_type, **extra)]))
+
+
+def _values(result):
+    return {name[3:]: p.value for name, p in result.params.items() if name.startswith("p0_")}
+
+
+@pytest.mark.parametrize("peak_type", PEAK_TYPES)
+def test_fitted_height_is_the_peak_maximum(fe, x_nm, peak_type):
+    result = _fit_one(fe, x_nm, peak_type)
+    expected = _curve_max(peak_type, _TRUE[peak_type])
+    assert result.params["p0_height"].value == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("peak_type", PEAK_TYPES)
+def test_fix_height_keeps_the_typed_height(fe, x_nm, peak_type):
+    """ "Fix" freezes the value in the field above it. It used to freeze the area, so the
+    height still moved with the width: 26.9 to 43.2 instead of the typed 30."""
+    result = _fit_one(fe, x_nm, peak_type, fix_height=True)
+    assert not result.params["p0_height"].vary
+    assert result.params["p0_height"].value == 30
+    assert _curve_max(peak_type, _values(result)) == pytest.approx(30, rel=1e-5)
+
+
+@pytest.mark.parametrize("peak_type", PEAK_TYPES)
+def test_height_bounds_apply_to_the_height(fe, x_nm, peak_type):
+    """Every true height here is above 20, so the fit ends on the bound."""
+    result = _fit_one(fe, x_nm, peak_type, height_max=20.0)
+    assert result.params["p0_height"].value <= 20.0 + 1e-9
+    assert _curve_max(peak_type, _values(result)) <= 20.0 * (1 + 1e-5)
+
+
+@pytest.mark.parametrize("peak_type", PEAK_TYPES)
+def test_height_has_an_error_bar_on_noisy_data(fe, x_nm, peak_type):
+    result = _fit_one(fe, x_nm, peak_type, noise=0.3)
+    assert result.params["p0_height"].stderr is not None
+    assert 0 < result.params["p0_height"].stderr < 1
+
+
+@pytest.mark.parametrize("peak_type", ["Lorentzian", "Skewed Voigt"])
+def test_update_from_fit_writes_the_real_height(app, x_nm, peak_type):
+    """The Height field used to get a Gaussian-formula height for every peak type."""
+    application = app([_SHAPES[peak_type](x_nm, _TRUE[peak_type])], x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(peak_info=_start_peak(peak_type))
+    application.on_fit_current(None)  # fills the fields itself when R2 > 0.5
+    height_field = application.peak_models[0]._widgets["height"].value
+    assert height_field == pytest.approx(_curve_max(peak_type, _TRUE[peak_type]), abs=2e-3)
+
+
+def test_every_fix_checkbox_explains_what_it_fixes(gl):
+    application = gl.PLAnalysisApp()
+    application.add_peak_model(peak_info=_start_peak("Voigt"))
+    fields = application.peak_models[-1]._widgets
+    for key in ("fix_center", "fix_height", "fix_sigma", "fix_gamma"):
+        assert "value above" in fields[key].tooltip, key

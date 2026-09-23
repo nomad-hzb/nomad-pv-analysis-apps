@@ -21,19 +21,77 @@ from lmfit.models import (
     SkewedVoigtModel,
     VoigtModel,
 )
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize_scalar
 from scipy.signal import find_peaks, peak_prominences, peak_widths
+from scipy.special import wofz
 from utils import debug_print
 
 SKEWED_PEAK_TYPES = ("Skewed Gaussian", "Skewed Voigt")
 
+# =============================================================================
+# PEAK HEIGHT <-> AREA
+# =============================================================================
+# lmfit's peak models are parameterised by `amplitude`, which is the peak area. The
+# GUI's Height field is the peak height (its maximum), so each peak gets a free
+# `p{i}_height` parameter, and amplitude is tied to it by the constraint
+# amplitude = height / unit_height(...), where unit_height is the maximum of the same
+# shape with area 1. "Fix height" and the height bounds then act on the real height.
 
-def amplitude_factor(peak_type):
-    """Factor between a start height and lmfit's amplitude: amplitude = height *
-    sigma * factor. Exact peak height for Gaussian and Lorentzian, an
-    approximation for the others. Used in both directions (model setup and
-    sequential seeding) so a seeded amplitude round-trips exactly."""
-    return np.pi if peak_type == "Lorentzian" else np.sqrt(2 * np.pi)
+
+def _tiny(value):
+    return max(value, 1e-15)
+
+
+def unit_height_gaussian(sigma):
+    return 1.0 / (_tiny(sigma) * np.sqrt(2 * np.pi))
+
+
+def unit_height_lorentzian(sigma):
+    return 1.0 / (np.pi * _tiny(sigma))
+
+
+def unit_height_voigt(sigma, gamma):
+    # lmfit's own Voigt height expression, for amplitude 1
+    return float(np.real(wofz(1j * gamma / (_tiny(sigma) * np.sqrt(2))))) / (
+        _tiny(sigma) * np.sqrt(2 * np.pi)
+    )
+
+
+def _shape_maximum(shape, width):
+    """(position, value) of the maximum of a single-peaked shape centred near 0: a
+    coarse grid finds the neighbourhood, a bounded scalar search refines it."""
+    x = np.linspace(-10 * width, 10 * width, 401)
+    y = shape(x)
+    i = int(np.argmax(y))
+    lo, hi = x[max(i - 1, 0)], x[min(i + 1, x.size - 1)]
+    found = minimize_scalar(
+        lambda t: -shape(np.array([t]))[0],
+        bounds=(lo, hi),
+        method="bounded",
+        options={"xatol": 1e-9 * width},
+    )
+    return float(found.x), float(-found.fun)
+
+
+def unit_height_skewed_gaussian(sigma, gamma):
+    # gamma is the skewness here; there is no closed form for the maximum
+    return _shape_maximum(lambda x: skewed_gaussian(x, 1.0, 0.0, sigma, gamma), _tiny(sigma))[1]
+
+
+def unit_height_skewed_voigt(sigma, gamma, skew):
+    return _shape_maximum(
+        lambda x: skewed_voigt(x, 1.0, 0.0, sigma, gamma, skew), _tiny(sigma) + gamma
+    )[1]
+
+
+# Peak type -> (unit-height function, the parameters it takes, in order)
+UNIT_HEIGHT = {
+    "Gaussian": (unit_height_gaussian, ("sigma",)),
+    "Lorentzian": (unit_height_lorentzian, ("sigma",)),
+    "Voigt": (unit_height_voigt, ("sigma", "gamma")),
+    "Skewed Gaussian": (unit_height_skewed_gaussian, ("sigma", "gamma")),
+    "Skewed Voigt": (unit_height_skewed_voigt, ("sigma", "gamma", "skew")),
+}
 
 
 def skewed_peak_shape(peak_type, values, n_points=20001):
@@ -542,14 +600,7 @@ class FittingModels:
             # Set initial parameters
             peak_params = peak_model.make_params()
 
-            # Set initial values based on UI input
-
-            def _amp_kwargs(h, s, factor):
-                """Convert user height bounds to lmfit amplitude bounds."""
-                kw = {"value": h * s * factor, "min": peak_info.get("height_min", 0) * s * factor}
-                if "height_max" in peak_info:
-                    kw["max"] = peak_info["height_max"] * s * factor
-                return kw
+            # Set initial values based on UI input (the height: see _set_height)
 
             def _bounds(key_min, key_max, default_min, default_max, floor=1e-9):
                 """Resolve (min, max) honoring user-provided bounds. If only one
@@ -585,11 +636,6 @@ class FittingModels:
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
-                peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(
-                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
-                    )
-                )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.00001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
             elif peak_info["type"] == "Polynomial":
@@ -619,11 +665,6 @@ class FittingModels:
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
-                peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(
-                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
-                    )
-                )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.00001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
             elif peak_info["type"] == "Voigt":
@@ -636,11 +677,6 @@ class FittingModels:
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
-                peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(
-                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
-                    )
-                )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
                 g_lo, g_hi = _bounds("gamma_min", "gamma_max", 0.001, 100, floor=1e-9)
@@ -663,11 +699,6 @@ class FittingModels:
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
-                peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(
-                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
-                    )
-                )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
                 g_lo, g_hi = _bounds("gamma_min", "gamma_max", -10, 10, floor=-float("inf"))
@@ -684,11 +715,6 @@ class FittingModels:
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
-                peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(
-                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
-                    )
-                )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
                 # Here gamma is the Lorentzian width (the skew is `skew`), so it
@@ -703,19 +729,25 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_skew"].set(value=peak_info.get("skew", 0.0), min=-10, max=10)
 
+            params.update(peak_params)
+
+            if peak_type in UNIT_HEIGHT:
+                h_lo, h_hi = _bounds("height_min", "height_max", 0.0, np.inf, floor=0.0)
+                self._set_height(params, i, peak_type, peak_info["height"], h_lo, h_hi)
+
             # Log resolved bounds per parameter, marking USER vs AUTO defaults
             _bound_keymap = {
                 "center": ("center_min", "center_max"),
                 "sigma": ("sigma_min", "sigma_max"),
                 "gamma": ("gamma_min", "gamma_max"),
-                "amplitude": ("height_min", "height_max"),
+                "height": ("height_min", "height_max"),
             }
             _log_parts = []
             for _pname, (_kmin, _kmax) in _bound_keymap.items():
                 _pkey = f"p{i}_{_pname}"
-                if _pkey not in peak_params:
+                if _pkey not in params or params[_pkey].expr:
                     continue
-                _p = peak_params[_pkey]
+                _p = params[_pkey]
                 _umin = "(USER)" if peak_info.get(_kmin) is not None else ""
                 _umax = "(USER)" if peak_info.get(_kmax) is not None else ""
                 _log_parts.append(
@@ -724,18 +756,37 @@ class FittingModels:
             if _log_parts:
                 debug_print(f"p{i} ({peak_info['type']}) " + "  ".join(_log_parts), "FITTING")
 
-            params.update(peak_params)
-
+            # Each Fix checkbox freezes exactly the value in the GUI field above it
             if peak_info.get("fix_center") and f"p{i}_center" in params:
                 params[f"p{i}_center"].set(vary=False)
-            if peak_info.get("fix_height") and f"p{i}_amplitude" in params:
-                params[f"p{i}_amplitude"].set(vary=False)
+            if peak_info.get("fix_height") and f"p{i}_height" in params:
+                params[f"p{i}_height"].set(vary=False)
             if peak_info.get("fix_sigma") and f"p{i}_sigma" in params:
                 params[f"p{i}_sigma"].set(vary=False)
             if peak_info.get("fix_gamma") and f"p{i}_gamma" in params:
                 params[f"p{i}_gamma"].set(vary=False)
 
         return model, params
+
+    @staticmethod
+    def _set_height(params, i, peak_type, height, lo, hi):
+        """Make p{i}_height the fitted parameter and tie lmfit's amplitude (the area) to
+        it: amplitude = height / unit_height(shape parameters). Gaussian, Lorentzian and
+        Voigt already carry a derived `height`; it is freed from its expression here.
+        """
+        prefix = f"p{i}_"
+        function, names = UNIT_HEIGHT[peak_type]
+        # Constraint expressions can only call functions registered with lmfit's evaluator
+        params._asteval.symtable[function.__name__] = function
+
+        name = f"{prefix}height"
+        if name in params:
+            params[name].set(expr="")
+            params[name].set(value=height, min=lo, max=hi, vary=True)
+        else:
+            params.add(name, value=height, min=lo, max=hi)
+        arguments = ", ".join(f"{prefix}{n}" for n in names)
+        params[f"{prefix}amplitude"].set(expr=f"{name} / {function.__name__}({arguments})")
 
     def fit_spectrum(self, wavelengths, intensities, fit_params):
         """
@@ -883,14 +934,10 @@ class FittingModels:
             if sigma_key in fitted_params:
                 peak_model["sigma"] = fitted_params[sigma_key]["value"]
 
-            amplitude_key = f"{prefix}amplitude"
-            if amplitude_key in fitted_params and sigma_key in fitted_params:
-                amplitude = fitted_params[amplitude_key]["value"]
-                sigma = fitted_params[sigma_key]["value"]
-                if sigma > 0:
-                    peak_model["height"] = amplitude / (
-                        sigma * amplitude_factor(peak_model.get("type"))
-                    )
+            # Height is a fitted parameter for every peak model, so it seeds directly
+            height_key = f"{prefix}height"
+            if height_key in fitted_params:
+                peak_model["height"] = fitted_params[height_key]["value"]
 
         debug_print(
             f"Smart init: seeded from idx={previous_result.get('index')} t={previous_result.get('time', 0):.3f}",
@@ -953,8 +1000,9 @@ class FittingModels:
                     "max": param.max,
                 }
 
-            # Skewed models: add the real maximum position, height and FWHM.
-            # TODO: error bars for position/height/fwhm (exported as NaN for now).
+            # Skewed models: add the real maximum position and FWHM (height is a fitted
+            # parameter, see _set_height).
+            # TODO: error bars for position/fwhm (exported as NaN for now).
             # The covariance needed is available right here, before `result` is
             # discarded: `result.covar`, indexed by `result.var_names`. Needed:
             #   - numerical Jacobian J of skewed_peak_shape() with respect to this
@@ -977,7 +1025,11 @@ class FittingModels:
                     for name, p in result.params.items()
                     if name.startswith(prefix)
                 }
-                for key, value in skewed_peak_shape(peak_model["type"], values).items():
+                shape = skewed_peak_shape(peak_model["type"], values)
+                # Only position and fwhm: height is already a fitted parameter (with its
+                # own stderr), so the grid estimate of it is not needed
+                for key in ("position", "fwhm"):
+                    value = shape[key]
                     fit_summary["parameters"][f"{prefix}{key}"] = {
                         "value": value,
                         "stderr": None,

@@ -535,6 +535,10 @@ class GUIComponents:
             value=peak_info.get("height", 1000),
             description="",
             step=0.001,
+            tooltip=(
+                "Peak height: the maximum of the peak, in intensity units (not its area; "
+                "the area is exported as 'area')"
+            ),
             layout=widgets.Layout(width="100px"),
         )
         sigma_input = widgets.FloatText(
@@ -550,17 +554,31 @@ class GUIComponents:
             layout=widgets.Layout(width="100px"),
         )
 
-        fix_center_cb = widgets.Checkbox(
-            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        # Each Fix checkbox keeps exactly the value in the field above it
+        def _fix_checkbox(tooltip):
+            return widgets.Checkbox(
+                value=False,
+                description="Fix",
+                indent=False,
+                tooltip=tooltip,
+                layout=widgets.Layout(width="100px"),
+            )
+
+        fix_center_cb = _fix_checkbox(
+            "Keep the center at the value above. For skewed peaks this is the fit's "
+            "location parameter, not the position of the maximum"
         )
-        fix_height_cb = widgets.Checkbox(
-            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        fix_height_cb = _fix_checkbox(
+            "Keep the peak height (maximum) at the value above; width and shape are still "
+            "fitted, so the area follows"
         )
-        fix_sigma_cb = widgets.Checkbox(
-            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        fix_sigma_cb = _fix_checkbox(
+            "Keep sigma at the value above: the Gaussian width (standard deviation), "
+            "or the half width for Lorentzian"
         )
-        fix_gamma_cb = widgets.Checkbox(
-            value=False, description="Fix", indent=False, layout=widgets.Layout(width="100px")
+        fix_gamma_cb = _fix_checkbox(
+            "Keep gamma at the value above: the Lorentzian half width for Voigt and "
+            "Skewed Voigt, the skewness for Skewed Gaussian"
         )
 
         # Bounds toggle button
