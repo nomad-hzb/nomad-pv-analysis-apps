@@ -7,7 +7,7 @@ Contains Plotly figure creation and plot management
 import config
 import numpy as np
 import plotly.graph_objects as go
-from exporters import ResultExporter
+from exporters import ResultExporter, parameter_unit
 from packaging import version
 from plotly.subplots import make_subplots
 from utils import debug_print
@@ -576,15 +576,16 @@ class PlotManager:
         if name_map is None:
             name_map = {}
 
-        # Determine y-axis unit from column suffix
-        if column_suffix in ("center", "fwhm", "sigma"):
-            y_unit = wavelength_unit
-        else:
-            y_unit = "-"
+        # Determine y-axis unit from column suffix (same rules as the H5 export)
+        y_unit = parameter_unit(column_suffix, None, wavelength_unit) or "-"
 
         fig = go.Figure()
         for i, peak_id in enumerate(peak_ids):
             selected_column = f"{peak_id}_{column_suffix}"
+            # Skewed models: `center` is only a location parameter; plot where
+            # the maximum actually is.
+            if column_suffix == "center" and f"{peak_id}_position" in df.columns:
+                selected_column = f"{peak_id}_position"
 
             if selected_column in df.columns:
                 display_name = name_map.get(peak_id, peak_id)
@@ -617,10 +618,7 @@ class PlotManager:
         else:
             title_suffix = column_suffix
 
-        if title_suffix in ("center", "fwhm", "sigma"):
-            y_axis_title = f"{title_suffix} ({wavelength_unit})"
-        else:
-            y_axis_title = title_suffix + " (-)"
+        y_axis_title = f"{title_suffix} ({y_unit})"
 
         fig.update_layout(
             title=f"{title_suffix} vs Time",
@@ -803,19 +801,10 @@ class PlotManager:
             # Extract peak parameters
             for param_name, param_data in result.get("parameters", {}).items():
                 if param_name.startswith("p"):
-                    # Store the parameter value
+                    # Every peak model carries its own `height`: lmfit's derived
+                    # parameter for symmetric models, the fitting worker's for
+                    # skewed ones. No Gaussian-only recomputation here.
                     row[param_name] = param_data["value"]
-
-                    # Calculate height from amplitude and sigma if needed
-                    if "amplitude" in param_name:
-                        peak_id = param_name.split("_")[0]
-                        sigma_key = f"{peak_id}_sigma"
-                        if sigma_key in result["parameters"]:
-                            amplitude = param_data["value"]
-                            sigma = result["parameters"][sigma_key]["value"]
-                            if sigma > 0:
-                                height = amplitude / (sigma * np.sqrt(2 * np.pi))
-                                row[f"{peak_id}_height"] = height
 
             data_rows.append(row)
 

@@ -2093,6 +2093,7 @@ class PLAnalysisApp:
                 time_unit=time_unit,
                 h5_mode=h5_mode,
                 wavelength_unit=self.wavelength_unit,
+                fit_settings=self.fitting_engine.batch_settings,
             )
             with self.widgets["status_output"]:
                 self.widgets["status_output"].clear_output()

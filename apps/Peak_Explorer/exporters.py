@@ -5,9 +5,42 @@ import json
 import os
 from datetime import datetime
 
+import config
+import lmfit
 import numpy as np
 import pandas as pd
 from utils import debug_print
+
+# Units of fitted peak parameters. Intensities are arbitrary and written as "-",
+# so an area (intensity x x-axis) carries the x-axis unit. lmfit's `amplitude` is
+# the peak area for every peak model this app offers.
+_X_UNIT_PARAMS = {
+    "center",
+    "position",
+    "sigma",
+    "fwhm",
+    "width",
+    "width_10pct",
+    "width_50pct",
+    "amplitude",
+    "area",
+}
+_UNITLESS_PARAMS = {"height", "skew"}
+
+
+def parameter_unit(param, model_type, x_unit):
+    """Unit of a fitted peak parameter, or None if unknown (e.g. polynomial terms).
+
+    `gamma` depends on the model: the Lorentzian half width for Voigt and Skewed
+    Voigt, but a dimensionless skewness for Skewed Gaussian.
+    """
+    if param == "gamma":
+        return "-" if model_type == "Skewed Gaussian" else x_unit
+    if param in _X_UNIT_PARAMS:
+        return x_unit
+    if param in _UNITLESS_PARAMS:
+        return "-"
+    return None
 
 
 class ResultExporter:
@@ -54,7 +87,13 @@ class ResultExporter:
         return filename
 
     def export_to_isa_h5(
-        self, fitting_results, h5_path, time_unit="s", h5_mode=None, wavelength_unit="nm"
+        self,
+        fitting_results,
+        h5_path,
+        time_unit="s",
+        h5_mode=None,
+        wavelength_unit="nm",
+        fit_settings=None,
     ):
         """
         Export fitting results into the existing HDF5 file.
@@ -71,6 +110,9 @@ class ResultExporter:
         fitting_results : dict
             Dictionary of fitting results from batch fitting
         h5_path : str
+        fit_settings : dict, optional
+            Settings behind these results (FittingEngine.batch_settings), each
+            written as a group attribute; None values are skipped
         """
         import h5py
 
@@ -85,10 +127,20 @@ class ResultExporter:
             new_cols = [c for c in df.columns if c not in combined_df.columns]
             combined_df = combined_df.join(df[new_cols], how="outer") if new_cols else combined_df
 
+        # Batch fits run in one mode; "mixed" would mean results were merged
+        modes = {
+            "sequential" if r.get("smart_init_used") else "parallel"
+            for r in fitting_results.values()
+            if r
+        }
+        fit_mode = modes.pop() if len(modes) == 1 else ("mixed" if modes else "N/A")
+
         # Build peak_id -> {name, model_type} mapping from the first successful result
         peak_info_map = {}
+        peak_models = []
         for result in fitting_results.values():
             if result and result.get("success"):
+                peak_models = result.get("peak_models", [])
                 for i, pm in enumerate(result.get("peak_models", [])):
                     pid = f"p{i}"
                     peak_info_map[pid] = {
@@ -126,20 +178,16 @@ class ResultExporter:
             grp.attrs["max_index"] = max_index
             grp.attrs["h5_mode"] = h5_mode if h5_mode is not None else "N/A"
             grp.attrs["created_at"] = now.isoformat()
-            # todo possibly at more parameters here
-
-            # Parameters whose unit equals the x-axis (wavelength / q) unit
-            position_params = {
-                "center",
-                "sigma",
-                "gamma",
-                "fwhm",
-                "width",
-                "width_10pct",
-                "width_50pct",
-            }
-            # Parameters that carry intensity (arbitrary units → '-')
-            intensity_params = {"amplitude", "height", "area"}
+            grp.attrs["peak_explorer_version"] = config.APP_VERSION
+            grp.attrs["lmfit_version"] = lmfit.__version__
+            grp.attrs["x_unit"] = wavelength_unit
+            grp.attrs["fit_mode"] = fit_mode
+            # Full fit setup: start values, user bounds, Fix flags and names
+            grp.attrs["peak_models"] = json.dumps(peak_models, default=float)
+            # background_model, poly_degree, center_bound, fit_x_min/max (in x_unit)
+            for key, value in (fit_settings or {}).items():
+                if value is not None:
+                    grp.attrs[key] = value
 
             # One dataset per column
             for col in combined_df.columns:
@@ -172,10 +220,9 @@ class ResultExporter:
                     # Determine unit from base parameter name (strip _stderr suffix)
                     base_param = col[len(peak_id) + 1 :]  # e.g. "center" or "center_stderr"
                     base_param = base_param.removesuffix("_stderr")
-                    if base_param in position_params:
-                        ds.attrs["unit"] = wavelength_unit
-                    elif base_param in intensity_params:
-                        ds.attrs["unit"] = "-"
+                    unit = parameter_unit(base_param, info.get("model_type"), wavelength_unit)
+                    if unit is not None:
+                        ds.attrs["unit"] = unit
 
         debug_print(
             f"Saved fitting results to {h5_path} under /fitting_results/{group_name}", "Exporter"
@@ -260,8 +307,8 @@ class ResultExporter:
                             if stderr_key in params:
                                 stderr_row[f"{col_name}_stderr"] = params[stderr_key]
 
-                    # Calculate derived parameters
-                    # todo for Edgar: Check if all the calculations make sense. Quite happy with the current verion (18.05.2026)
+                    # Calculate derived parameters. Checked numerically against
+                    # lmfit's model definitions (#21): area, height, fwhm, width_10pct.
 
                     # Rename amplitude -> area for peak types where lmfit's `amplitude`
                     # is the integrated area under the curve.

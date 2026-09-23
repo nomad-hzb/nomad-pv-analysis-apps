@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import config
 import numpy as np
 from lmfit import Parameters
+from lmfit.lineshapes import skewed_gaussian, skewed_voigt
 from lmfit.models import (
     ExponentialModel,
     GaussianModel,
@@ -23,6 +24,60 @@ from lmfit.models import (
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks, peak_prominences, peak_widths
 from utils import debug_print
+
+SKEWED_PEAK_TYPES = ("Skewed Gaussian", "Skewed Voigt")
+
+
+def skewed_peak_shape(peak_type, values, n_points=20001):
+    """Actual maximum position, height and FWHM of a fitted skewed peak.
+
+    For the skewed lmfit models `center` is a location parameter, not the
+    position of the maximum, and lmfit provides no height or FWHM for them.
+    The shape is evaluated on a fine grid around `center` instead.
+
+    Parameters:
+    -----------
+    peak_type : str
+        "Skewed Gaussian" or "Skewed Voigt"
+    values : dict
+        Fitted parameter values without the peak prefix
+        (amplitude, center, sigma, gamma and, for Skewed Voigt, skew)
+
+    Returns:
+    --------
+    dict: position, height, fwhm (fwhm is NaN if a half-maximum crossing
+    falls outside the grid)
+    """
+    amp, cen, sig, gam = (values[k] for k in ("amplitude", "center", "sigma", "gamma"))
+    if peak_type == "Skewed Gaussian":
+        # gamma is the skewness here; the peak spreads over a few sigma
+        half_range = 10 * sig
+        x = np.linspace(cen - half_range, cen + half_range, n_points)
+        y = skewed_gaussian(x, amp, cen, sig, gam)
+    else:
+        # gamma is the Lorentzian half width, whose tails reach further out
+        half_range = 10 * (sig + gam)
+        x = np.linspace(cen - half_range, cen + half_range, n_points)
+        y = skewed_voigt(x, amp, cen, sig, gam, values["skew"])
+
+    i_max = int(np.argmax(y))
+    height = float(y[i_max])
+    half = height / 2
+
+    below_left = np.nonzero(y[:i_max] < half)[0]
+    below_right = np.nonzero(y[i_max:] < half)[0]
+    if height <= 0 or below_left.size == 0 or below_right.size == 0:
+        fwhm = np.nan
+    else:
+        # Linear interpolation of the half-maximum crossing on each side
+        lo = below_left[-1]
+        x_left = np.interp(half, [y[lo], y[lo + 1]], [x[lo], x[lo + 1]])
+        hi = i_max + below_right[0]
+        x_right = np.interp(half, [y[hi], y[hi - 1]], [x[hi], x[hi - 1]])
+        fwhm = float(x_right - x_left)
+
+    return {"position": float(x[i_max]), "height": height, "fwhm": fwhm}
+
 
 # =============================================================================
 # PEAK DETECTION
@@ -503,6 +558,15 @@ class FittingModels:
                     hi = float("inf")
                 return lo, hi
 
+            def _gamma_start(value, lo, hi):
+                """Keep a free Voigt gamma off its lower bound. lmfit's bound
+                transform is flat at the bound, so a start value there (a typed or
+                default 0 is clipped to it, and "Update from Fit" writes it back
+                for mostly-Gaussian peaks) gives no gradient and can stall the fit."""
+                if value > lo:
+                    return value
+                return min(lo + max(0.1 * peak_info["sigma"], 9 * lo), (lo + hi) / 2)
+
             if peak_info["type"] == "Gaussian":
                 c = peak_info["center"]
                 c_lo, c_hi = _bounds(
@@ -566,7 +630,15 @@ class FittingModels:
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
                 g_lo, g_hi = _bounds("gamma_min", "gamma_max", 0.001, 100, floor=1e-9)
-                peak_params[f"p{i}_gamma"].set(value=peak_info["gamma"], min=g_lo, max=g_hi)
+                # lmfit ties Voigt gamma to sigma by default; setting a value drops
+                # that tie but leaves vary=False, so gamma would stay at its start
+                # value. The fix_gamma checkbox below can still freeze it.
+                peak_params[f"p{i}_gamma"].set(
+                    value=_gamma_start(peak_info["gamma"], g_lo, g_hi),
+                    min=g_lo,
+                    max=g_hi,
+                    vary=True,
+                )
             elif peak_info["type"] == "Skewed Gaussian":
                 c = peak_info["center"]
                 c_lo, c_hi = _bounds(
@@ -601,9 +673,15 @@ class FittingModels:
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
-                g_lo, g_hi = _bounds("gamma_min", "gamma_max", -10, 10, floor=-float("inf"))
+                # Here gamma is the Lorentzian width (the skew is `skew`), so it
+                # takes Voigt's width bounds and must be freed from lmfit's
+                # default gamma=sigma tie, as for Voigt above.
+                g_lo, g_hi = _bounds("gamma_min", "gamma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_gamma"].set(
-                    value=peak_info.get("gamma", 0.0), min=g_lo, max=g_hi
+                    value=_gamma_start(peak_info.get("gamma", 0.0), g_lo, g_hi),
+                    min=g_lo,
+                    max=g_hi,
+                    vary=True,
                 )
                 peak_params[f"p{i}_skew"].set(value=peak_info.get("skew", 0.0), min=-10, max=10)
 
@@ -855,6 +933,38 @@ class FittingModels:
                     "max": param.max,
                 }
 
+            # Skewed models: add the real maximum position, height and FWHM.
+            # TODO: error bars for position/height/fwhm (exported as NaN for now).
+            # The covariance needed is available right here, before `result` is
+            # discarded: `result.covar`, indexed by `result.var_names`. Needed:
+            #   - numerical Jacobian J of skewed_peak_shape() with respect to this
+            #     peak's varied parameters (central differences, step ~1e-4 * the
+            #     parameter's stderr or value), then stderr = sqrt(diag(J C J^T)),
+            #     with C the sub-matrix of result.covar for those parameters;
+            #   - parameters that were fixed (not in var_names) contribute nothing;
+            #   - result.covar is None when lmfit cannot estimate errors: keep NaN;
+            #   - the grid in skewed_peak_shape() limits position to ~0.001*sigma,
+            #     so the Jacobian step must be larger than that, or position must be
+            #     refined (e.g. parabola through the three points at the maximum).
+            # Monte Carlo (draw parameter sets from N(best fit, C), take the spread)
+            # is the simpler alternative if the Jacobian proves noisy.
+            for i, peak_model in enumerate(fit_params.get("peak_models", [])):
+                if peak_model.get("type") not in SKEWED_PEAK_TYPES:
+                    continue
+                prefix = f"p{i}_"
+                values = {
+                    name[len(prefix) :]: p.value
+                    for name, p in result.params.items()
+                    if name.startswith(prefix)
+                }
+                for key, value in skewed_peak_shape(peak_model["type"], values).items():
+                    fit_summary["parameters"][f"{prefix}{key}"] = {
+                        "value": value,
+                        "stderr": None,
+                        "min": -np.inf,
+                        "max": np.inf,
+                    }
+
             return fit_summary
 
         except Exception as e:
@@ -977,6 +1087,7 @@ class FittingEngine:
         self.fitting_results = {}
         self.current_fit_result = None
         self.fit_wavelengths = None  # Wavelengths used for last batch fit
+        self.batch_settings = None  # Fit settings behind self.fitting_results
 
     def detect_peaks(self, wavelengths, intensities, **detection_params):
         """
@@ -1025,7 +1136,8 @@ class FittingEngine:
             "peak_models": peak_models,
             "background_model": background_model,
             "poly_degree": poly_degree,
-            "center_bound": center_bound,
+            # Resolve the default here so fit_params never holds None
+            "center_bound": config.DEFAULT_CENTER_BOUND if center_bound is None else center_bound,
         }
 
         debug_print(
@@ -1139,6 +1251,17 @@ class FittingEngine:
             self.fitting_results = offset_results  # Replace, don't merge!
         else:
             self.fitting_results = results
+
+        # Snapshot the settings behind these results for the H5 export. Read from
+        # fit_params at save time instead, a later single-spectrum fit (which also
+        # calls create_fit_parameters) would pair these results with its settings.
+        self.batch_settings = {
+            "background_model": self.fit_params["background_model"],
+            "poly_degree": self.fit_params["poly_degree"],
+            "center_bound": self.fit_params["center_bound"],
+            "fit_x_min": float(np.min(wavelengths)),
+            "fit_x_max": float(np.max(wavelengths)),
+        }
 
         successful_fits = sum(1 for r in results.values() if r and r.get("success", False))
         debug_print(

@@ -886,6 +886,24 @@ class DataManager:
             "DATA",
         )
 
+        # TODO (needs a decision with Erik/Edgar before changing, it alters every eV
+        # result): only the x-axis is converted here, the intensities are not.
+        #   - A spectral density measured per wavelength interval (PL emission)
+        #     must be rescaled when moving to energy intervals:
+        #     I(E) = I(λ) · λ² / hc, with hc = 1239.84 eV·nm (Jacobian |dλ/dE|).
+        #     Without it, peak shapes are distorted (a Gaussian in nm is not a
+        #     Gaussian in eV, the red side is weighted too strongly), so fitted
+        #     centers, widths, heights and areas in eV are biased, most for broad
+        #     peaks. Reference: Mooney & Kambhampati, J. Phys. Chem. Lett. 4, 3316
+        #     (2013).
+        #   - Absorbance and transmission are ratios at each wavelength, not
+        #     densities per interval, and need no rescaling. So the correction
+        #     must depend on h5_mode (pl_* only); CSV/TXT data carries no mode,
+        #     so there it would need a user choice.
+        #   - convert_energy_to_wavelength() must apply the inverse factor
+        #     (· hc / λ²) so that nm -> eV -> nm round-trips exactly.
+        #   - 1239.8 should be 1239.84 (hc in eV·nm); also used for the
+        #     center-bound rescaling in gui_layouts.py (on_convert_energy).
         # E (eV) = 1239.8 / λ (nm)
         # Note: energy is inversely proportional, so order reverses
         self.wavelengths = 1239.8 / self.wavelengths
@@ -920,6 +938,8 @@ class DataManager:
             "DATA",
         )
 
+        # TODO: intensities are not rescaled here either; see the note in
+        # convert_wavelength_to_energy() before changing one of the two.
         # λ (nm) = 1239.8 / E (eV)
         self.wavelengths = 1239.8 / self.wavelengths
         # Reverse back to original order

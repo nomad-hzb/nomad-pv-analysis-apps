@@ -3,6 +3,32 @@
 Configuration settings for Photoluminescence Analysis App
 """
 
+import re
+from importlib import metadata
+from pathlib import Path
+
+
+def _read_app_version():
+    """Peak Explorer version. pyproject.toml next to this file is the single
+    source; the installed package metadata is the fallback."""
+    try:
+        text = (Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    try:
+        return metadata.version("peak-explorer")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+# =============================================================================
+# APP VERSION
+# =============================================================================
+APP_VERSION = _read_app_version()  # Written into every fit group saved to H5
+
 # =============================================================================
 # DEBUG SETTINGS
 # =============================================================================
