@@ -28,6 +28,14 @@ from utils import debug_print
 SKEWED_PEAK_TYPES = ("Skewed Gaussian", "Skewed Voigt")
 
 
+def amplitude_factor(peak_type):
+    """Factor between a start height and lmfit's amplitude: amplitude = height *
+    sigma * factor. Exact peak height for Gaussian and Lorentzian, an
+    approximation for the others. Used in both directions (model setup and
+    sequential seeding) so a seeded amplitude round-trips exactly."""
+    return np.pi if peak_type == "Lorentzian" else np.sqrt(2 * np.pi)
+
+
 def skewed_peak_shape(peak_type, values, n_points=20001):
     """Actual maximum position, height and FWHM of a fitted skewed peak.
 
@@ -578,7 +586,9 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
                 peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(peak_info["height"], peak_info["sigma"], np.sqrt(2 * np.pi))
+                    **_amp_kwargs(
+                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
+                    )
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.00001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
@@ -610,7 +620,9 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
                 peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(peak_info["height"], peak_info["sigma"], np.pi)
+                    **_amp_kwargs(
+                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
+                    )
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.00001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
@@ -625,7 +637,9 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
                 peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(peak_info["height"], peak_info["sigma"], np.sqrt(2 * np.pi))
+                    **_amp_kwargs(
+                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
+                    )
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
@@ -650,7 +664,9 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
                 peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(peak_info["height"], peak_info["sigma"], np.sqrt(2 * np.pi))
+                    **_amp_kwargs(
+                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
+                    )
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
@@ -669,7 +685,9 @@ class FittingModels:
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
                 peak_params[f"p{i}_amplitude"].set(
-                    **_amp_kwargs(peak_info["height"], peak_info["sigma"], np.sqrt(2 * np.pi))
+                    **_amp_kwargs(
+                        peak_info["height"], peak_info["sigma"], amplitude_factor(peak_info["type"])
+                    )
                 )
                 s_lo, s_hi = _bounds("sigma_min", "sigma_max", 0.001, 100, floor=1e-9)
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
@@ -870,7 +888,9 @@ class FittingModels:
                 amplitude = fitted_params[amplitude_key]["value"]
                 sigma = fitted_params[sigma_key]["value"]
                 if sigma > 0:
-                    peak_model["height"] = amplitude / (sigma * np.sqrt(2 * np.pi))
+                    peak_model["height"] = amplitude / (
+                        sigma * amplitude_factor(peak_model.get("type"))
+                    )
 
         debug_print(
             f"Smart init: seeded from idx={previous_result.get('index')} t={previous_result.get('time', 0):.3f}",
