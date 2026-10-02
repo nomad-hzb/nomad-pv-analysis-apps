@@ -240,6 +240,12 @@ NOISE_LEVEL_BOUNDS = (1e-6, 1e1)
 LOO_R2_POOR = 0.2
 
 
+def is_measured_parameter(col: str, measured_names) -> bool:
+    """True if col is one of measured_names, or one with the process-type
+    suffix the merge adds ("<name>_<process type>")."""
+    return any(col == name or col.startswith(f"{name}_") for name in measured_names)
+
+
 def detect_integer_columns(df: pd.DataFrame, cols: list) -> list:
     """Columns of df whose non-null values are all whole numbers with at most
     MAX_INTEGER_LEVELS distinct levels - the default "integer" setting for the

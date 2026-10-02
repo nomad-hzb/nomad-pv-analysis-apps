@@ -9,6 +9,7 @@ from data_manager import (
     MeasurementRow,
     aggregate_results_per_sample,
     apply_row_filters,
+    average_rows_per_sample,
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
@@ -32,6 +33,7 @@ from gui_components import GUIManager
 from ml_analysis import (
     detect_integer_columns,
     estimate_max_bo_steps,
+    is_measured_parameter,
     run_random_forest,
     suggest_next_experiments,
 )
@@ -1680,3 +1682,55 @@ def test_merge_results_per_sample_fills_column_groups_with_merged_names():
     assert groups["power"] == "MPP Tracking"
     assert groups["datetime_mpp_tracking"] == "MPP Tracking"
     assert set(groups) == set(merged.columns) - {"sample_id"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #48
+# ---------------------------------------------------------------------------
+
+
+def test_average_rows_per_sample_gives_one_row_per_sample():
+    df = pd.DataFrame(
+        {"sample_id": ["a", "a", "b"], "temp": [100, 100, 120], "pce": [10.0, 12.0, 15.0]}
+    )
+
+    out = average_rows_per_sample(df, ["temp", "pce"])
+
+    assert list(out["sample_id"]) == ["a", "b"]
+    assert list(out["pce"]) == [11.0, 15.0]
+
+
+def test_average_rows_per_sample_passes_through_when_nothing_repeats():
+    df = pd.DataFrame({"sample_id": ["a", "b"], "pce": [1.0, 2.0]})
+
+    assert average_rows_per_sample(df, ["pce"]) is df
+
+
+def test_is_measured_parameter_matches_base_name_and_merge_suffix():
+    measured = {"relative_humidity"}
+
+    assert is_measured_parameter("relative_humidity", measured)
+    assert is_measured_parameter("relative_humidity_Inkjet Printing", measured)
+    assert not is_measured_parameter("annealing_temperature", measured)
+
+
+def test_bo_search_space_row_for_measured_parameter_starts_fixed_at_median():
+    gui = GUIManager()
+    gui.set_bo_search_space(
+        [
+            {"col": "temp", "min": 100.0, "max": 150.0, "integer": False},
+            {
+                "col": "relative_humidity",
+                "min": 20.0,
+                "max": 40.0,
+                "integer": False,
+                "measured": True,
+                "median": 31.0,
+            },
+        ]
+    )
+
+    space = gui.get_bo_search_space()
+
+    assert space["temp"]["fixed"] is None
+    assert space["relative_humidity"]["fixed"] == 31.0

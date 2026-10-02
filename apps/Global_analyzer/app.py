@@ -28,6 +28,7 @@ import logging
 import traceback
 from typing import List, Optional
 
+import config
 import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
@@ -35,6 +36,7 @@ from data_loader import HySprintDataLoader
 from data_manager import (
     DataManager,
     apply_row_filters,
+    average_rows_per_sample,
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
@@ -244,7 +246,9 @@ class SampleDataExplorer:
     def _refresh_bo_search_space(self):
         """Rebuild the BO tab's search-space rows for the checked Process
         Metadata columns, defaulting each to its observed range and to integer
-        when every measured value is a whole number."""
+        when every measured value is a whole number. Columns listed in
+        config.MEASURED_PARAMETERS (logged conditions, not settings) start
+        fixed at their median."""
         if self.analysis_df is None or self.analysis_df.empty:
             self.gui.set_bo_search_space([])
             return
@@ -266,6 +270,8 @@ class SampleDataExplorer:
                     "min": float(values.min()),
                     "max": float(values.max()),
                     "integer": col in integer_cols,
+                    "measured": ml.is_measured_parameter(col, config.MEASURED_PARAMETERS),
+                    "median": float(values.median()),
                 }
             )
         self.gui.set_bo_search_space(defaults)
@@ -1528,11 +1534,22 @@ class SampleDataExplorer:
             min_unique = self.gui.correlation_min_unique.value
             plot_type = self.gui.correlation_plot_type.value
 
+            corr_source = self.analysis_df
+            if self.gui.correlation_per_sample.value:
+                corr_source = average_rows_per_sample(
+                    self.analysis_df, checked_results + checked_metadata
+                )
+                if len(corr_source) < len(self.analysis_df):
+                    print(
+                        f"ℹ️ Averaged {len(self.analysis_df)} rows into "
+                        f"{len(corr_source)} samples (one point per sample)."
+                    )
+
             try:
                 if plot_type == "Heatmap":
                     self.gui.correlation_scatter_output.clear_output()
                     results_used, metadata_used = self.plot_manager.create_metadata_results_heatmap(
-                        self.analysis_df, checked_results, checked_metadata, min_unique=min_unique
+                        corr_source, checked_results, checked_metadata, min_unique=min_unique
                     )
                     dropped_results = [c for c in checked_results if c not in results_used]
                     dropped_metadata = [c for c in checked_metadata if c not in metadata_used]
@@ -1562,7 +1579,7 @@ class SampleDataExplorer:
                                 f"  Excluded {len(excluded)} checked column(s) with <{min_unique + 1} "
                                 f"unique values: {', '.join(excluded)}"
                             )
-                        numeric_df = self.analysis_df.select_dtypes(include="number")
+                        numeric_df = corr_source.select_dtypes(include="number")
                         corr_df = (
                             pd.DataFrame(
                                 {
@@ -1586,7 +1603,7 @@ class SampleDataExplorer:
                     self.gui.correlation_widget.update_layout(
                         title='Switch "Format" to Heatmap to use this view'
                     )
-                    combined_df = self.analysis_df[checked_results + checked_metadata]
+                    combined_df = corr_source[checked_results + checked_metadata]
                     used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
                         combined_df, min_unique=min_unique
                     )

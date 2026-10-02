@@ -240,6 +240,19 @@ def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.D
     return grouped
 
 
+def average_rows_per_sample(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    """One row per sample_id: the mean of cols over that sample's rows.
+
+    For correlations under "All Points": a sample's pixels share every process
+    parameter, so correlating pixel rows weights each sample by its pixel count
+    and lets pixel-to-pixel scatter dilute the process-to-result relationship.
+    Returns df unchanged when it has no sample_id or no sample_id repeats.
+    """
+    if "sample_id" not in df.columns or not df["sample_id"].duplicated().any():
+        return df
+    return df.groupby("sample_id", as_index=False)[cols].mean(numeric_only=True)
+
+
 def merge_results_per_sample(
     results: Dict[str, pd.DataFrame],
     method: str = "Mean",

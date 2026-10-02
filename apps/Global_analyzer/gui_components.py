@@ -412,6 +412,17 @@ class GUIManager:
             layout={"width": "260px"},
         )
 
+        self.correlation_per_sample = widgets.Checkbox(
+            value=True,
+            description="One point per sample",
+            indent=False,
+            tooltip=(
+                "Average repeated rows of a sample (e.g. pixels under 'All Points') "
+                "before correlating, so each sample counts once"
+            ),
+            layout={"width": "170px"},
+        )
+
         self.correlation_plot_type = widgets.Dropdown(
             options=["Heatmap", "Scatter Matrix"],
             value="Heatmap",
@@ -1038,7 +1049,8 @@ class GUIManager:
 
         Args:
             defaults: list of {"col", "min", "max", "integer"} dicts (observed
-                range and detected integer-ness). A column already shown keeps
+                range and detected integer-ness), optionally with "measured"
+                (start fixed, at "median") for logged conditions. A column already shown keeps
                 whatever the user entered, matching set_analysis_columns'
                 preserve-or-default pattern.
         """
@@ -1048,7 +1060,10 @@ class GUIManager:
             if d["col"] in previous:
                 rows.append(previous[d["col"]])
                 continue
-            label = widgets.Label(d["col"], layout={"width": "220px"})
+            measured = d.get("measured", False)
+            label = widgets.Label(
+                d["col"] + (" (measured)" if measured else ""), layout={"width": "220px"}
+            )
             min_box = widgets.FloatText(
                 value=d["min"],
                 description="min",
@@ -1065,9 +1080,13 @@ class GUIManager:
                 value=d["integer"], description="integer", indent=False, layout={"width": "80px"}
             )
             fix_box = widgets.Checkbox(
-                value=False, description="fix at", indent=False, layout={"width": "65px"}
+                value=measured, description="fix at", indent=False, layout={"width": "65px"}
             )
-            fix_value = widgets.FloatText(value=d["min"], layout={"width": "90px"}, disabled=True)
+            fix_value = widgets.FloatText(
+                value=d.get("median", d["min"]) if measured else d["min"],
+                layout={"width": "90px"},
+                disabled=not measured,
+            )
             fix_box.observe(
                 lambda change, fv=fix_value: setattr(fv, "disabled", not change["new"]),
                 names="value",
@@ -1366,6 +1385,7 @@ class GUIManager:
                     [
                         self.correlation_min_unique,
                         self.correlation_plot_type,
+                        self.correlation_per_sample,
                         self.find_correlations_button,
                         self.correlation_download_button,
                     ]
