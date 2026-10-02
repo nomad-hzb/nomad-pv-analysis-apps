@@ -2,14 +2,21 @@
 """
 Utility functions for Photoluminescence Analysis App
 """
-import config
+
 from datetime import datetime
+
+import config
+import ipywidgets as widgets
+
+debug_output = widgets.Output(
+    layout=widgets.Layout(max_height="300px", overflow="auto", width="100%")
+)
 
 
 def debug_print(message, category="DEBUG"):
     """
     Print debug messages if DEBUG_MODE is enabled
-    
+
     Parameters:
     -----------
     message : str
@@ -19,18 +26,19 @@ def debug_print(message, category="DEBUG"):
     """
     if config.DEBUG_MODE:
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"[{timestamp}] [{category}] {message}")
+        with debug_output:
+            print(f"[{timestamp}] [{category}] {message}")
 
 
 def format_timestamp(timestamp_format=None):
     """
     Get formatted timestamp string
-    
+
     Parameters:
     -----------
     timestamp_format : str, optional
         Format string for datetime. If None, uses config default
-        
+
     Returns:
     --------
     str: Formatted timestamp
@@ -43,14 +51,14 @@ def format_timestamp(timestamp_format=None):
 def validate_time_index(time_idx, max_idx):
     """
     Validate and clip time index to valid range
-    
+
     Parameters:
     -----------
     time_idx : int
         Time index to validate
     max_idx : int
         Maximum valid index
-        
+
     Returns:
     --------
     int: Valid time index
@@ -61,7 +69,7 @@ def validate_time_index(time_idx, max_idx):
 def safe_divide(numerator, denominator, default=0.0):
     """
     Safely divide two numbers, returning default if division fails
-    
+
     Parameters:
     -----------
     numerator : float
@@ -70,7 +78,7 @@ def safe_divide(numerator, denominator, default=0.0):
         Denominator
     default : float, optional
         Default value if division fails
-        
+
     Returns:
     --------
     float: Result of division or default
@@ -79,14 +87,14 @@ def safe_divide(numerator, denominator, default=0.0):
         if denominator == 0:
             return default
         return numerator / denominator
-    except:
+    except Exception:
         return default
 
 
 def generate_output_filename(prefix, extension, include_timestamp=True):
     """
     Generate output filename with optional timestamp
-    
+
     Parameters:
     -----------
     prefix : str
@@ -95,14 +103,14 @@ def generate_output_filename(prefix, extension, include_timestamp=True):
         File extension (with or without dot)
     include_timestamp : bool, optional
         Whether to include timestamp in filename
-        
+
     Returns:
     --------
     str: Generated filename
     """
-    if not extension.startswith('.'):
-        extension = '.' + extension
-    
+    if not extension.startswith("."):
+        extension = "." + extension
+
     if include_timestamp:
         timestamp = format_timestamp()
         return f"{prefix}_{timestamp}{extension}"

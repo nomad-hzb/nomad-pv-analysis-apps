@@ -3,6 +3,32 @@
 Configuration settings for Photoluminescence Analysis App
 """
 
+import re
+from importlib import metadata
+from pathlib import Path
+
+
+def _read_app_version():
+    """Peak Explorer version. pyproject.toml next to this file is the single
+    source; the installed package metadata is the fallback."""
+    try:
+        text = (Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    try:
+        return metadata.version("peak-explorer")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+# =============================================================================
+# APP VERSION
+# =============================================================================
+APP_VERSION = _read_app_version()  # Written into every fit group saved to H5
+
 # =============================================================================
 # DEBUG SETTINGS
 # =============================================================================
@@ -12,9 +38,9 @@ DEBUG_MODE = False  # Set to True to enable debug output throughout the app
 # UI SETTINGS
 # =============================================================================
 # Widget dimensions
-CONTROL_PANEL_WIDTH = '420px'
-TIME_SLIDER_WIDTH = '300px'
-TIME_INPUT_WIDTH = '150px'
+CONTROL_PANEL_WIDTH = "420px"
+TIME_SLIDER_WIDTH = "300px"
+TIME_INPUT_WIDTH = "150px"
 
 # Plot dimensions
 HEATMAP_HEIGHT = 500
@@ -26,33 +52,45 @@ SPECTRUM_WIDTH = 800
 # VISUALIZATION SETTINGS
 # =============================================================================
 # Colorscales
-DEFAULT_COLORSCALE = 'Viridis'
+DEFAULT_COLORSCALE = "Viridis"
 
 # Plot rendering
-PLOT_RENDERER = 'jupyterlab'  # Options: 'svg', 'png', 'notebook'
+PLOT_RENDERER = "jupyterlab"  # Options: 'svg', 'png', 'notebook'
 
 # =============================================================================
 # FITTING SETTINGS
 # =============================================================================
 # Peak detection defaults
 PEAK_DETECTION_DEFAULTS = {
-    'height': None,
-    'threshold': None,
-    'distance': 5,
-    'prominence': None,
-    'width': None,
-    'wlen': None,
-    'rel_height': 0.5,
-    'plateau_size': None
+    "height": None,
+    "threshold": None,
+    "distance": 5,
+    "prominence": None,
+    "width": None,
+    "wlen": None,
+    "rel_height": 0.5,
+    "plateau_size": None,
 }
 
 # Fitting defaults
-DEFAULT_BACKGROUND_MODEL = 'Linear'
-DEFAULT_PEAK_MODEL = 'Gaussian'
+DEFAULT_BACKGROUND_MODEL = "Linear"
+DEFAULT_PEAK_MODEL = "Gaussian"
+
+# Default half-width of the center parameter search window (in the current x-axis unit).
+# Increase if peaks shift by more than this between the initial guess and the fit.
+DEFAULT_CENTER_BOUND = 50
+
+# Mode-specific center bound defaults (applied when loading H5 data)
+CENTER_BOUND_DEFAULTS = {
+    "giwaxs": 0.25,
+    "absorbance": 300,
+    "transmission": 300,
+    "default": 50,
+}
 
 # Background handling
-BACKGROUND_OPTIONS = ['None', 'Manual', 'Linear', 'Polynomial', 'Exponential', 'Custom']
-DEFAULT_BACKGROUND_METHOD = 'None'
+BACKGROUND_OPTIONS = ["None", "Manual", "Linear", "Polynomial", "Exponential", "Custom"]
+DEFAULT_BACKGROUND_METHOD = "None"
 DEFAULT_BACKGROUND_START_IDX = 0
 DEFAULT_BACKGROUND_NUM_CURVES = 10
 DEFAULT_POLY_DEGREE = 2
@@ -69,57 +107,69 @@ SMART_INIT_SEARCH_RADIUS = 5
 # EXPORT SETTINGS
 # =============================================================================
 # Default export formats
-EXPORT_FORMATS = ['xlsx', 'csv', 'json', 'hdf5']
-DEFAULT_EXPORT_FORMAT = 'xlsx'
+EXPORT_FORMATS = ["xlsx", "csv", "json", "hdf5"]
+DEFAULT_EXPORT_FORMAT = "xlsx"
 
 # Output directory naming
-OUTPUT_DIR_PREFIX = 'pl_analysis_results'
-TIMESTAMP_FORMAT = '%Y%m%d_%H%M%S'
+OUTPUT_DIR_PREFIX = "pl_analysis_results"
+TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
 # =============================================================================
 # H5 FILE SETTINGS
 # =============================================================================
 # H5 data modes
 H5_MODES = {
-    'pl_raw': 'PL raw',
-    'pl_binned': 'PL binned & bgs',
-    'giwaxs': 'GIWAXS',
-    'transmission_raw': 'Transmission raw',
-    'transmission_binned': 'Transmission binned & bgs'
+    "pl_raw": "PL raw",
+    "pl_binned": "PL binned & bgs",
+    "giwaxs": "GIWAXS",
+    "giwaxs_diamond": "GIWAXS Diamond integration",
+    "transmission_raw": "Transmission raw",
+    "transmission_binned": "Transmission binned & bgs",
+    "absorbance_raw": "Absorbance raw",
+    "absorbance_binned": "Absorbance binned & bgs",
 }
-DEFAULT_H5_MODE = 'giwaxs'
+DEFAULT_H5_MODE = "giwaxs"
 
 # H5 paths (dataset locations within H5 file)
 H5_PATHS = {
-    'pl_raw': {
-        'timestamps': '/raw_optical_measurements/raw_pl_measurements/raw_pl_Time',
-        'data': '/raw_optical_measurements/raw_pl_measurements/raw_pl_data',
-        'wavelengths': '/raw_optical_measurements/wavelengths_spectrometer/wavelengths_spectrometer_data'
+    "pl_raw": {
+        "timestamps": "/raw_optical_measurements/raw_pl_measurements/raw_pl_Time",
+        "data": "/raw_optical_measurements/raw_pl_measurements/raw_pl_data",
+        "wavelengths": "/raw_optical_measurements/wavelengths_spectrometer/wavelengths_spectrometer_data",
     },
-    'pl_binned': {
-        'extent': '/binned_optical_measurements/time_extent_for_binning',
-        'data': '/binned_optical_measurements/binned_pl_measurements_bg'
+    "pl_binned": {
+        "extent": "/binned_optical_measurements/time_extent_for_binning",
+        "data": "/binned_optical_measurements/binned_pl_measurements_bg",
     },
-    'giwaxs': {
-        'timestamps': '/beamline_logging/Time',
-        'data': '/diffractogram/i_values',
-        'wavelengths': '/diffractogram/q_values'
+    "giwaxs": {
+        "timestamps": "/beamline_logging/Time",
+        "data": "/diffractogram/i_values",
+        "wavelengths": "/diffractogram/q_values",
     },
-    'transmission_raw': {
-        'timestamps': '/raw_optical_measurements/raw_transmission_measurements/raw_transmission_Time',
-        'data': '/raw_optical_measurements/raw_transmission_measurements/raw_transmission_data',
-        'wavelengths': '/raw_optical_measurements/wavelengths_spectrometer/wavelengths_spectrometer_data'
+    "giwaxs_diamond": {
+        "timestamps": "/beamline_logging/Time",
+        "data": "/diffractogram/i_values_diamond",
+        "wavelengths": "/diffractogram/q_values_diamond",
     },
-    'transmission_binned': {
-        'extent': '/binned_optical_measurements/time_extent_for_binning',
-        'data': '/binned_optical_measurements/binned_transmission_measurements_bg'
-    }
+    "transmission_raw": {
+        "timestamps": "/raw_optical_measurements/raw_transmission_measurements/raw_transmission_Time",
+        "data": "/raw_optical_measurements/raw_transmission_measurements/raw_transmission_data",
+        "wavelengths": "/raw_optical_measurements/wavelengths_spectrometer/wavelengths_spectrometer_data",
+    },
+    "transmission_binned": {
+        "extent": "/binned_optical_measurements/time_extent_for_binning",
+        "data": "/binned_optical_measurements/binned_transmission_measurements_bg",
+    },
 }
+
+# Absorbance modes compute A = -ln(T / T_ref), where T_ref is the mean transmission
+# spectrum over this time window (inclusive, in seconds).
+ABSORBANCE_REFERENCE_WINDOW = (1, 6)
 
 # =============================================================================
 # FILE UPLOAD SETTINGS
 # =============================================================================
-ACCEPTED_FILE_TYPES = '.txt,.csv,.dat'
+ACCEPTED_FILE_TYPES = ".txt,.csv,.dat"
 ACCEPT_MULTIPLE_FILES = False
 
 # =============================================================================
