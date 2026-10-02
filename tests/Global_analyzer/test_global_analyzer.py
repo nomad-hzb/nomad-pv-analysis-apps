@@ -36,6 +36,7 @@ from ml_analysis import (
     is_measured_parameter,
     run_random_forest,
     suggest_next_experiments,
+    suggest_pareto_experiments,
 )
 from plot_manager import PlotManager, bin_numeric_column
 from pydantic import ValidationError
@@ -1734,3 +1735,220 @@ def test_bo_search_space_row_for_measured_parameter_starts_fixed_at_median():
 
     assert space["temp"]["fixed"] is None
     assert space["relative_humidity"]["fixed"] == 31.0
+
+
+def _categorical_dataset(seed=0, n=40):
+    rng = np.random.default_rng(seed)
+    material = rng.choice(["A", "B", "C"], n)
+    temp = rng.uniform(100, 200, n)
+    offset = pd.Series(material).map({"A": 0.0, "B": 5.0, "C": 1.0}).to_numpy()
+    pce = offset - ((temp - 150) / 25) ** 2 + rng.normal(0, 0.3, n)
+    return pd.DataFrame(
+        {"sample_id": [f"s{i}" for i in range(n)], "material": material, "temp": temp, "pce": pce}
+    )
+
+
+def test_run_random_forest_uses_categorical_parameter_and_its_partial_dependence():
+    result = run_random_forest(
+        _categorical_dataset(), "pce", ["temp"], categorical_cols=["material"]
+    )
+
+    assert result["importances"][0][0] == "material"
+    pd_material = next(p for p in result["partial_dependence"] if p["feature"] == "material")
+    assert pd_material["kind"] == "categorical"
+    best = pd_material["grid"][int(np.argmax(pd_material["average"]))]
+    assert best == "B"
+
+
+def test_run_random_forest_drops_single_level_categorical_with_a_note():
+    df = _categorical_dataset()
+    df["lab"] = "HZB"
+
+    result = run_random_forest(df, "pce", ["temp"], categorical_cols=["lab"])
+
+    assert [name for name, _, _ in result["importances"]] == ["temp"]
+    assert any("'lab' has a single value" in w for w in result["warnings"])
+
+
+def test_run_random_forest_numeric_partial_dependence_follows_the_effect():
+    result = run_random_forest(_rf_dataset(), "pce", ["temp", "noise_param"])
+
+    temp_pd = next(p for p in result["partial_dependence"] if p["feature"] == "temp")
+    assert temp_pd["kind"] == "numeric"
+    assert temp_pd["average"][-1] > temp_pd["average"][0]
+
+
+def test_run_random_forest_flags_strongly_correlated_parameters():
+    df = _rf_dataset()
+    df["temp_copy"] = df["temp"] * 2 + 1
+
+    result = run_random_forest(df, "pce", ["temp", "temp_copy", "noise_param"])
+
+    assert ("temp", "temp_copy") == result["correlated_pairs"][0][:2]
+    assert any("Strongly correlated" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_picks_the_best_categorical_level():
+    result = suggest_next_experiments(
+        _categorical_dataset(),
+        "pce",
+        feature_cols=["temp"],
+        categorical_cols=["material"],
+        n_suggestions=1,
+    )
+
+    s = result["suggestions"]
+    assert s.loc[0, "material"] == "B"
+    assert 125 < s.loc[0, "temp"] < 175
+    assert "material" in result["length_scales"]
+
+
+def test_suggest_next_experiments_respects_fixed_categorical_level():
+    result = suggest_next_experiments(
+        _categorical_dataset(),
+        "pce",
+        feature_cols=["temp"],
+        categorical_cols=["material"],
+        fixed={"material": "A"},
+        n_suggestions=3,
+    )
+
+    assert (result["suggestions"]["material"] == "A").all()
+
+
+def test_suggest_next_experiments_rejects_unknown_fixed_level():
+    with pytest.raises(ValueError, match="not a level"):
+        suggest_next_experiments(
+            _categorical_dataset(),
+            "pce",
+            feature_cols=["temp"],
+            categorical_cols=["material"],
+            fixed={"material": "Z"},
+        )
+
+
+def _batch_dataset(seed=0):
+    # Four batches with large offsets on top of a smooth temp effect.
+    rng = np.random.default_rng(seed)
+    rows = []
+    for b, offset in enumerate([0.0, 4.0, -3.0, 2.0]):
+        for _ in range(8):
+            temp = rng.uniform(100, 200)
+            pce = 10 + offset - ((temp - 150) / 25) ** 2 + rng.normal(0, 0.2)
+            rows.append({"batch": f"b{b}", "temp": temp, "pce": pce})
+    df = pd.DataFrame(rows)
+    df.insert(0, "sample_id", [f"s{i}" for i in range(len(df))])
+    return df
+
+
+def test_suggest_next_experiments_models_batch_offsets():
+    df = _batch_dataset()
+
+    with_batch = suggest_next_experiments(
+        df, "pce", feature_cols=["temp"], batch_col="batch", n_suggestions=1
+    )
+    without = suggest_next_experiments(df, "pce", feature_cols=["temp"], n_suggestions=1)
+
+    assert with_batch["n_batches"] == 4
+    assert 1.5 < with_batch["batch_offset_sd"] < 6
+    assert with_batch["loo_r2"] > without["loo_r2"]
+    # The batch-free noise estimate is far below the batch-to-batch scatter.
+    assert with_batch["noise_sd"] < without["noise_sd"]
+    assert 135 < with_batch["suggestions"].loc[0, "temp"] < 165
+
+
+def test_suggest_next_experiments_single_batch_is_not_modelled():
+    df = _batch_dataset()
+    df["batch"] = "only"
+
+    result = suggest_next_experiments(df, "pce", feature_cols=["temp"], batch_col="batch")
+
+    assert result["batch_col"] is None
+    assert any("one 'batch' value" in w for w in result["warnings"])
+
+
+def _constraint_dataset(seed=0, n=40):
+    rng = np.random.default_rng(seed)
+    x1, x2 = rng.uniform(0, 1, n), rng.uniform(0, 1, n)
+    return pd.DataFrame(
+        {
+            "sample_id": [f"s{i}" for i in range(n)],
+            "x1": x1,
+            "x2": x2,
+            "y": x1 + 0.2 * x2,
+            "dark": x1 + x2 + rng.normal(0, 0.02, n),
+        }
+    )
+
+
+def test_suggest_next_experiments_constraint_keeps_suggestions_feasible():
+    result = suggest_next_experiments(
+        _constraint_dataset(),
+        "y",
+        feature_cols=["x1", "x2"],
+        n_suggestions=3,
+        constraints=[{"col": "dark", "op": "<=", "value": 1.0}],
+    )
+
+    s = result["suggestions"]
+    # Constrained optima sit on the boundary, so picks land close to it.
+    assert (s["x1"] + s["x2"] < 1.15).all()
+    # Later picks in the batch can be weakly motivated (near-zero score); the
+    # first is the real constrained-BO choice.
+    assert s.loc[0, "probability_feasible"] > 0.5
+    # Unconstrained, the best is at x1 = x2 = 1 (dark ~2).
+    assert s.loc[0, "x1"] > 0.6
+
+
+def test_suggest_next_experiments_without_feasible_sample_aims_at_feasibility():
+    result = suggest_next_experiments(
+        _constraint_dataset(),
+        "y",
+        feature_cols=["x1", "x2"],
+        n_suggestions=1,
+        constraints=[{"col": "dark", "op": "<=", "value": -0.5}],
+    )
+
+    assert result["incumbent"] is None
+    assert any("meet the constraints" in w for w in result["warnings"])
+    s = result["suggestions"]
+    assert s.loc[0, "x1"] + s.loc[0, "x2"] < 0.3
+
+
+def test_suggest_next_experiments_rejects_constraint_on_target():
+    with pytest.raises(ValueError, match="target itself"):
+        suggest_next_experiments(
+            _constraint_dataset(),
+            "y",
+            feature_cols=["x1"],
+            constraints=[{"col": "y", "op": "<=", "value": 1}],
+        )
+
+
+def test_suggest_pareto_experiments_spreads_along_the_trade_off():
+    # a prefers high x, b prefers low x: every x is Pareto-optimal.
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0, 1, 25)
+    df = pd.DataFrame({"sample_id": [f"s{i}" for i in range(25)], "x": x, "a": x, "b": 1 - x**2})
+
+    result = suggest_pareto_experiments(
+        df,
+        [("a", "maximize"), ("b", "maximize")],
+        n_suggestions=5,
+        feature_cols=["x"],
+    )
+
+    s = result["suggestions"]
+    assert len(s) == 5
+    assert s["x"].max() - s["x"].min() > 0.4
+    assert {"predicted_a", "predicted_b", "weight_a", "weight_b"} <= set(s.columns)
+    # Picks that favour a (high weight_a) sit at higher x.
+    assert s.sort_values("weight_a")["x"].iloc[-1] > s.sort_values("weight_a")["x"].iloc[0]
+
+
+def test_suggest_pareto_experiments_needs_two_distinct_objectives():
+    df = _bo_dataset()
+    with pytest.raises(ValueError):
+        suggest_pareto_experiments(df, [("y", "maximize")], feature_cols=["x1"])
+    with pytest.raises(ValueError):
+        suggest_pareto_experiments(df, [("y", "maximize"), ("y", "minimize")], feature_cols=["x1"])
