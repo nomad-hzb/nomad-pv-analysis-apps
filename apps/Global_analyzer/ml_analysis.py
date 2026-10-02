@@ -738,7 +738,8 @@ def suggest_next_experiments(
     length_scale_upper (the bound; at it = no detectable effect), bounds,
     integer_cols, categorical_cols, batch_col, n_batches, batch_offset_sd
     (target or log10 units), constraints, fixed, n_rows_with_target,
-    missing_by_column, warnings (data and fit diagnostics, list of str), loo_r2
+    missing_by_column, warnings (data and fit diagnostics, list of str), fit_warnings (the
+    fit-diagnostic subset of warnings), loo_r2
     (leave-one-sample-out R², model units), loo_df (sample_id, observed,
     predicted, predicted_low, predicted_high per row; the range is ±1 SD for a
     single measurement), suggestions (DataFrame: feature_cols +
@@ -908,7 +909,8 @@ def suggest_next_experiments(
             "predicted_high": to_target_units(loo_mean + loo_std),
         }
     )
-    warnings_list += _fit_warnings(parts["signal_variance"], noise_level, length_scales, loo_r2)
+    fit_warnings = _fit_warnings(parts["signal_variance"], noise_level, length_scales, loo_r2)
+    warnings_list += fit_warnings
 
     # ---- Candidates ----------------------------------------------------------
     rng = np.random.default_rng(random_state)
@@ -1099,6 +1101,7 @@ def suggest_next_experiments(
         "n_rows_with_target": n_rows_with_target,
         "missing_by_column": missing,
         "warnings": warnings_list,
+        "fit_warnings": fit_warnings,
         "loo_r2": loo_r2,
         "loo_df": loo_df,
         "suggestions": suggestions,
@@ -1145,7 +1148,7 @@ def suggest_pareto_experiments(
     kwargs: passed through to suggest_next_experiments (feature_cols, bounds,
     fixed, categorical_cols, batch_col, constraints, ...).
 
-    Returns a dict: objectives, n_samples, weights, warnings (union over picks,
+    Returns a dict: objectives, n_samples, weights, warnings (data warnings, union over picks,
     first-seen order), suggestions (feature columns + weight_<col> per
     objective + predicted_<col> for each objective from its own GP).
     """
@@ -1185,7 +1188,11 @@ def suggest_pareto_experiments(
             **kwargs,
         )
         n_samples = result["n_samples"]
+        # Fit diagnostics describe the internal combined score, not either
+        # objective, so only the data warnings are passed on.
         for w in result["warnings"]:
+            if w in result["fit_warnings"]:
+                continue
             if w not in warnings_seen:
                 warnings_seen.append(w)
         pick = result["suggestions"]

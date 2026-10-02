@@ -1952,3 +1952,34 @@ def test_suggest_pareto_experiments_needs_two_distinct_objectives():
         suggest_pareto_experiments(df, [("y", "maximize")], feature_cols=["x1"])
     with pytest.raises(ValueError):
         suggest_pareto_experiments(df, [("y", "maximize"), ("y", "minimize")], feature_cols=["x1"])
+
+
+def test_categorical_checklist_defaults_unticked_and_keeps_choices():
+    gui = GUIManager()
+    gui.set_analysis_columns(["pce"], ["temp"], ["material", "batch"])
+    assert gui.get_checked_categorical_columns() == []
+
+    gui.categorical_checklist_box.children[0].value = True
+    gui.set_analysis_columns(["pce"], ["temp"], ["material", "batch", "solvent"])
+
+    assert gui.get_checked_categorical_columns() == ["material"]
+
+
+def test_bo_search_space_categorical_row_returns_chosen_level():
+    gui = GUIManager()
+    gui.set_bo_search_space([{"col": "material", "levels": ["A", "B"]}])
+    assert gui.get_bo_search_space()["material"] == {"categorical": True, "fixed": None}
+
+    gui.bo_search_space_box.children[0]._bo_widgets[0].value = "B"
+
+    assert gui.get_bo_search_space()["material"]["fixed"] == "B"
+
+
+def test_bo_constraints_only_returns_enabled_rows():
+    gui = GUIManager()
+    for _, column, _, _ in gui.bo_constraint_rows:
+        column.options = ["jsc", "voc"]
+    enable, column, op, value = gui.bo_constraint_rows[1]
+    enable.value, column.value, op.value, value.value = True, "voc", ">=", 1.1
+
+    assert gui.get_bo_constraints() == [{"col": "voc", "op": ">=", "value": 1.1}]
