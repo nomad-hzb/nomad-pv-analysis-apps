@@ -500,6 +500,17 @@ class GUIManager:
             layout={"width": "170px"},
         )
 
+        self.bo_log_target = widgets.Checkbox(
+            value=False,
+            description="Log scale target",
+            indent=False,
+            tooltip=(
+                "Model log10 of the target - for targets spanning decades "
+                "(currents, resistances). Needs every value > 0."
+            ),
+            layout={"width": "140px"},
+        )
+
         self.suggest_experiments_button = widgets.Button(
             description="Suggest Next Experiments",
             button_style="success",
@@ -545,6 +556,14 @@ class GUIManager:
             height=450,
             template="plotly_white",
             title='Pick a target and click "Suggest Next Experiments"',
+        )
+
+        # Leave-one-sample-out check of the GP: predicted vs observed.
+        self.bo_loo_widget = go.FigureWidget()
+        self.bo_loo_widget.update_layout(
+            height=450,
+            template="plotly_white",
+            title="Model check (appears after running)",
         )
 
         # ====================================================================
@@ -1297,6 +1316,17 @@ class GUIManager:
                     "<p style='color:#666;'>Fits a Random Forest to predict the chosen "
                     "target (a Results column) from the checked Process Metadata columns "
                     "in the Analysis Data tab, and reports which parameters matter most.</p>"
+                    "<p style='color:#666;'><b>How it is checked:</b> the model is "
+                    "trained on part of the samples and tested on the rest, five times "
+                    "over with different splits, repeated three times (cross-"
+                    "validation). All pixels of one sample stay on the same side, so "
+                    "the model can't predict a pixel from its neighbours. R² is measured "
+                    "only on the held-out samples: 1 is perfect, 0 is no better than "
+                    "guessing the average, below 0 is worse. <b>Importance</b> is how "
+                    "much that held-out R² drops when one parameter's values are "
+                    "shuffled (permutation importance). Around 0 means the parameter "
+                    "does not help the prediction. Two strongly correlated parameters "
+                    "share their importance, so both can look small.</p>"
                     "<p style='color:#444;'><b>Why it helps:</b> tells you which process "
                     "parameters matter most for your outcome - useful for deciding what to "
                     "control tightly during fabrication and what to deprioritize.</p>"
@@ -1333,8 +1363,8 @@ class GUIManager:
                     "the data shows no detectable effect of that parameter. The model also "
                     "learns a <i>noise</i> level from the scatter between similar samples "
                     "(e.g. replicates), so it doesn't chase a single lucky result.</p>"
-                    "<p><b>2. Score candidates.</b> 10000 random parameter combinations are "
-                    "drawn inside the search space (default: the range you have already "
+                    "<p><b>2. Score candidates.</b> 8192 parameter combinations are spread "
+                    "evenly (Sobol sequence) inside the search space (default: the range you have already "
                     "measured; set it under 'Search space'). Integer parameters only take "
                     "whole numbers; fixed ones keep their value. Each candidate gets an "
                     "<i>Expected Improvement</i> (EI) score: how much it is expected to "
@@ -1355,13 +1385,20 @@ class GUIManager:
                     "With Suggestions = 1 you get exactly one classic BO step.</p>"
                     "<p><b>Reading the table:</b> suggestions are listed in the order they "
                     "were picked (#1 is the classic single-step BO choice). "
-                    "<i>predicted</i> and <i>&plusmn; std</i> come from the GP fit on real "
-                    "data only; std is the uncertainty of the prediction itself, and a "
-                    "single new measurement will additionally scatter by about the "
-                    "reported noise. <i>Expected improvement</i> is the score at the "
+                    "<i>predicted</i> and its <i>range</i> (&plusmn;1 SD) come from the GP "
+                    "fit on real data only; the range is the uncertainty of the predicted "
+                    "average at that point, and a single new measurement will additionally "
+                    "scatter by about the reported noise.<i>Expected improvement</i> is the score at the "
                     "moment the point was picked, i.e. given the earlier picks, so it "
                     "usually drops down the list. After measuring, add the new data and "
                     "run again.</p>"
+                    "<p><b>Model check:</b> each sample is left out in turn and predicted "
+                    "from all the others (all its pixels together). The plot compares "
+                    "these predictions with what was measured, and <i>leave-one-out "
+                    "R²</i> summarises it: near 1 the model predicts well, near or below "
+                    "0 it predicts nothing and the suggestions are little better than "
+                    "random. <b>Log scale target</b> models log10 of the target, for "
+                    "targets spanning several decades.</p>"
                     "</div>"
                 )
             ],
@@ -1396,6 +1433,7 @@ class GUIManager:
                         self.bo_target_selector,
                         self.bo_direction_selector,
                         self.bo_n_suggestions,
+                        self.bo_log_target,
                         self.suggest_experiments_button,
                         self.bo_download_button,
                     ]
@@ -1403,6 +1441,7 @@ class GUIManager:
                 self.bo_search_space_accordion,
                 self.bo_output,
                 self.bo_widget,
+                self.bo_loo_widget,
                 self.bo_download_output,
             ],
             layout={"padding": "20px"},

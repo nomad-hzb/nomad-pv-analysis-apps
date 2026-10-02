@@ -21,7 +21,7 @@ Author: HySprint Team
 import io
 import logging
 import operator
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from data_loader import HySprintDataLoader
@@ -195,6 +195,52 @@ def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.D
         first_datetime = df.groupby("sample_id", as_index=False)["datetime"].first()
         grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
     return grouped
+
+
+def merge_results_per_sample(
+    results: Dict[str, pd.DataFrame], method: str = "Mean"
+) -> Tuple[Optional[pd.DataFrame], List[str]]:
+    """Outer-merge every result type on sample_id, each first aggregated by
+    aggregate_results_per_sample(method).
+
+    With method="All Points", at most one result type can keep its individual
+    rows: merging two types that both have several rows per sample would pair
+    every row of one with every row of the other (4 JV pixels x 3 EQE rows = 12
+    made-up rows per sample, issue #46). The type with the most rows keeps its
+    points; every other type that has repeats is collapsed to its per-sample
+    mean, so each pixel is paired with that sample's mean value of the other
+    measurement.
+
+    Returns (merged dataframe or None, names of the result types collapsed to
+    their mean only because of this rule).
+    """
+    usable = {
+        name: df
+        for name, df in results.items()
+        if df is not None and not df.empty and "sample_id" in df.columns
+    }
+    if not usable:
+        return None, []
+
+    keep_points = None
+    collapsed = []
+    if method == "All Points":
+        repeated = [n for n, df in usable.items() if df["sample_id"].duplicated().any()]
+        if repeated:
+            keep_points = max(repeated, key=lambda n: len(usable[n]))
+            collapsed = [n for n in repeated if n != keep_points]
+
+    merged = None
+    for name, df in usable.items():
+        type_method = "Mean" if name in collapsed else method
+        grouped = aggregate_results_per_sample(df, type_method)
+        if merged is None:
+            merged = grouped
+        else:
+            merged = pd.merge(
+                merged, grouped, on="sample_id", how="outer", suffixes=("", f"_{name}")
+            )
+    return merged, collapsed
 
 
 # ---------------------------------------------------------------------------

@@ -34,11 +34,11 @@ import pandas as pd
 from data_loader import HySprintDataLoader
 from data_manager import (
     DataManager,
-    aggregate_results_per_sample,
     apply_row_filters,
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    merge_results_per_sample,
     parse_uploaded_analysis_csv,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
@@ -61,6 +61,27 @@ from hysprint_utils.api_calls import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _rows_note(result: dict) -> str:
+    """' (N rows: ...)' when the model saw more rows than samples (pixels, repeats)."""
+    if result["n_rows"] == result["n_samples"]:
+        return ""
+    return f" ({result['n_rows']} rows: several measurements per sample)"
+
+
+def _missing_note(result: dict) -> str:
+    """A Markdown bullet naming the parameters whose missing values cost rows."""
+    missing = result["missing_by_column"]
+    if not missing:
+        return ""
+    dropped = result["n_rows_with_target"] - result["n_rows"]
+    worst = ", ".join(f"`{col}` ({n})" for col, n in list(missing.items())[:3])
+    return (
+        f"- ⚠️ {dropped} of {result['n_rows_with_target']} rows with a target value "
+        f"were left out for missing parameter values, mostly: {worst}. Unchecking a "
+        "sparse parameter in the Analysis Data tab brings them back.\n"
+    )
 
 
 class SampleDataExplorer:
@@ -99,6 +120,7 @@ class SampleDataExplorer:
             self.gui.experimental_outlier_widget,
             self.gui.experimental_drift_widget,
             self.gui.experimental_anova_widget,
+            bo_loo_widget=self.gui.bo_loo_widget,
         )
 
         # Application state
@@ -122,6 +144,7 @@ class SampleDataExplorer:
         self._last_correlation_result = None
         self._last_rf_result = None
         self._last_bo_result = None
+        self._collapsed_result_types = []
         # A user-uploaded CSV (issue #40) replaces the NOMAD-built dataset until
         # the next batch load; kept separately so Recalculate re-applies it
         # instead of rebuilding from (possibly empty) NOMAD data.
@@ -297,7 +320,8 @@ class SampleDataExplorer:
         collapsed to one via the Analysis Data tab's chosen aggregation method
         (Mean/Median/Max) - unlike the process-metadata side, these really are
         repeated measurements of the same thing, so aggregating (not selecting
-        one) is the right operation.
+        one) is the right operation. With "All Points", only one result type
+        keeps its individual rows (see merge_results_per_sample).
 
         Also carries the first non-null 'datetime' per sample_id through
         (dropped by the numeric-only aggregation otherwise) - measurement
@@ -306,30 +330,13 @@ class SampleDataExplorer:
         Drift tool's only source for one, since not every process-metadata
         loader captures it.
         """
+        self._collapsed_result_types = []
         if not self.data_manager.current_results:
             return None
 
-        aggregation_method = self.gui.results_aggregation_selector.value
-        results_df = None
-        for result_type, result_type_df in self.data_manager.current_results.items():
-            if (
-                result_type_df is None
-                or result_type_df.empty
-                or "sample_id" not in result_type_df.columns
-            ):
-                continue
-            grouped = aggregate_results_per_sample(result_type_df, aggregation_method)
-            if results_df is None:
-                results_df = grouped
-            else:
-                results_df = pd.merge(
-                    results_df,
-                    grouped,
-                    on="sample_id",
-                    how="outer",
-                    suffixes=("", f"_{result_type}"),
-                )
-
+        results_df, self._collapsed_result_types = merge_results_per_sample(
+            self.data_manager.current_results, self.gui.results_aggregation_selector.value
+        )
         return results_df
 
     def _rebuild_full_analysis_dataframe(self):
@@ -501,6 +508,13 @@ class SampleDataExplorer:
                 print(
                     "⚠️ For better results, use parameters with more variation "
                     f"(aim for 6+ distinct values): {', '.join(low_variation)}"
+                )
+            if self._collapsed_result_types and self._uploaded_df is None:
+                print(
+                    "ℹ️ 'All Points' keeps individual rows for one measurement type only; "
+                    "pairing every row of one type with every row of another would "
+                    "invent combinations that were never measured. Averaged per sample "
+                    f"instead: {', '.join(self._collapsed_result_types)}"
                 )
 
     def _on_recalculate_analysis_data(self, button):
@@ -1433,7 +1447,8 @@ class SampleDataExplorer:
                 return
 
             importances_df = pd.DataFrame(
-                self._last_rf_result["importances"], columns=["parameter", "importance"]
+                self._last_rf_result["importances"],
+                columns=["parameter", "importance_r2_drop", "importance_sd"],
             )
             filename = trigger_csv_download(importances_df, "random_forest_importances")
             print(
@@ -1619,6 +1634,7 @@ class SampleDataExplorer:
                 self._last_rf_result = None
                 return
 
+            print("⏳ Cross-validating the Random Forest...")
             try:
                 result = ml.run_random_forest(self.analysis_df, target, feature_cols=feature_cols)
             except ValueError as e:
@@ -1631,21 +1647,31 @@ class SampleDataExplorer:
                 self._last_rf_result = None
                 return
 
-            held_out_note = (
-                ""
-                if result["held_out"]
-                else " _(evaluated on training data - too few samples for a held-out test set)_"
-            )
+            clear_output(wait=True)
             top_features = "\n".join(
-                f"- **{name}**: {importance:.1%}" for name, importance in result["importances"][:10]
+                f"- **{name}**: {mean:.3f} ± {sd:.3f}"
+                for name, mean, sd in result["importances"][:10]
+            )
+            r2_note = (
+                " _(no better than predicting the average: the importances below "
+                "carry little information)_"
+                if result["r2"] <= 0
+                else ""
             )
             summary = (
                 f"### Random Forest results for `{target}`\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Samples used: **{result['n_samples']}**"
+                f"{_rows_note(result)}\n"
                 f"- Features used: **{result['n_features']}**\n"
-                f"- R²: **{result['r2']:.3f}**{held_out_note}\n"
-                f"- RMSE: **{result['rmse']:.3g}**\n\n"
-                f"**Top parameters by importance:**\n\n{top_features}"
+                f"- Cross-validated R²: **{result['r2']:.3f} ± {result['r2_sd']:.3f}**"
+                f"{r2_note}\n"
+                f"- Cross-validated RMSE: **{result['rmse']:.3g} ± {result['rmse_sd']:.2g}**\n"
+                f"  _({result['n_folds']}-fold, repeated {result['n_repeats']}x, all rows "
+                "of a sample kept in the same fold; ± is the SD over repeats)_\n"
+                + _missing_note(result)
+                + "".join(f"- ⚠️ {w}\n" for w in result["warnings"])
+                + "\n**Top parameters by importance** (drop in cross-validated R² "
+                f"when shuffled, ± SD):\n\n{top_features}"
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_feature_importance_plot(result["importances"], target)
@@ -1704,6 +1730,7 @@ class SampleDataExplorer:
                     bounds=bounds,
                     integer_cols=integer_cols,
                     fixed=fixed,
+                    log_target=self.gui.bo_log_target.value,
                 )
             except ValueError as e:
                 print(f"⚠️ {e}")
@@ -1720,14 +1747,16 @@ class SampleDataExplorer:
             display_feature_cols = [
                 c
                 for c in suggestions.columns
-                if c not in (pred_col, "predicted_std", "expected_improvement")
+                if c not in (pred_col, "predicted_low", "predicted_high", "expected_improvement")
             ]
 
+            log_target = result["log_target"]
+            log_units = " (log10)" if log_target else ""
             header_cols = [
                 *display_feature_cols,
                 f"{target} (predicted)",
-                "± std",
-                "Expected improvement",
+                "range (±1 SD)",
+                "Expected improvement" + log_units,
             ]
             table_lines = [
                 "| " + " | ".join(header_cols) + " |",
@@ -1740,9 +1769,8 @@ class SampleDataExplorer:
                     for c in display_feature_cols
                 ]
                 table_lines.append(
-                    "| "
-                    + " | ".join(values)
-                    + f" | {row[pred_col]:.4g} | {row['predicted_std']:.2g} "
+                    "| " + " | ".join(values) + f" | {row[pred_col]:.4g} "
+                    f"| {row['predicted_low']:.3g} to {row['predicted_high']:.3g} "
                     f"| {row['expected_improvement']:.3g} |"
                 )
 
@@ -1768,16 +1796,33 @@ class SampleDataExplorer:
                 else ""
             )
 
+            if log_target:
+                noise_line = (
+                    f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** in log10 "
+                    f"units (1 SD), i.e. a single measurement scatters by a factor of "
+                    f"about {10 ** result['noise_sd']:.2g}\n"
+                )
+            else:
+                noise_line = (
+                    f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** (1 SD, "
+                    f"in `{target}` units)\n"
+                )
             summary = (
                 f"### {len(suggestions)} suggested next experiment(s) to "
                 f"{result['direction']} `{target}`\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Samples used: **{result['n_samples']}**{_rows_note(result)}"
+                + (" (target modelled on a log10 scale)" if log_target else "")
+                + "\n"
                 f"- Best observed so far: **{result['best_observed']:.4g}**; best "
                 f"predicted at a measured sample (what EI tries to beat): "
                 f"**{result['incumbent']:.4g}**\n"
-                f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** (1 SD, "
-                f"in `{target}` units)\n"
-                f"- Length scales (0-1 scaled; smaller = stronger effect; estimated "
+                + noise_line
+                + f"- Leave-one-sample-out R²{log_units}: **{result['loo_r2']:.2f}** "
+                "(how well the model predicts a sample it has not seen; see the model "
+                "check plot below)\n"
+                + _missing_note(result)
+                + "".join(f"- ⚠️ {w}\n" for w in result["warnings"])
+                + f"- Length scales (0-1 scaled; smaller = stronger effect; estimated "
                 f"from the data, so uncertain with few or noisy samples):\n"
                 f"{length_scale_lines}\n"
                 f"- {steps_estimate['rationale']}\n"
@@ -1787,6 +1832,9 @@ class SampleDataExplorer:
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_bo_suggestions_plot(suggestions, target)
+            self.plot_manager.create_bo_loo_plot(
+                result["loo_df"], target, result["loo_r2"], log_target
+            )
             self._last_bo_result = result
 
     def _refresh_experimental_options(self):
@@ -1864,14 +1912,11 @@ class SampleDataExplorer:
             color_col = self.gui.experimental_pca_color_selector.value
             color_col = None if not color_col or color_col == "None" else color_col
             scores_df = result["scores_df"]
-            if (
-                color_col
-                and color_col in self.analysis_df.columns
-                and "sample_id" in scores_df.columns
-            ):
-                scores_df = scores_df.merge(
-                    self.analysis_df[["sample_id", color_col]], on="sample_id", how="left"
-                )
+            if color_col and color_col in self.analysis_df.columns:
+                # By row position, not a merge on sample_id: a sample_id repeats
+                # under "All Points", and a merge would multiply the points.
+                color_values = self.analysis_df.loc[result["source_index"], color_col]
+                scores_df = scores_df.assign(**{color_col: color_values.to_numpy()})
 
             variance_pct = ", ".join(f"{v:.1%}" for v in result["explained_variance_ratio"])
             summary = (
@@ -1978,16 +2023,14 @@ class SampleDataExplorer:
 
             summary = (
                 f"### Outlier detection over {len(result['feature_cols'])} checked parameters\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Rows checked: **{result['n_samples']}** (each measurement row on its own)\n"
                 f"- Outliers flagged: **{result['n_outliers']}** "
                 f"(contamination={contamination:.2f})\n"
             )
             ipy_display(Markdown(summary))
-            is_outlier = (
-                result["result_df"]
-                .set_index("sample_id")
-                .loc[pca_result["scores_df"]["sample_id"], "is_outlier"]
-            )
+            # By row position: sample_id repeats under "All Points", so a lookup
+            # by sample_id would return several flags per point.
+            is_outlier = result["result_df"].loc[pca_result["source_index"], "is_outlier"]
             self.plot_manager.create_outlier_plot(
                 pca_result["scores_df"], is_outlier.reset_index(drop=True)
             )
@@ -2022,7 +2065,7 @@ class SampleDataExplorer:
             summary = (
                 f"### {param_col} over time\n\n"
                 f"- Samples used: **{result['n_samples']}**\n"
-                f"- Slope: **{result['slope']:.3g}** per measurement "
+                f"- Slope: **{result['slope']:.3g}** per sample, in time order "
                 f"(p={result['p_value']:.3g} - {trend_note})\n"
             )
             ipy_display(Markdown(summary))
@@ -2064,7 +2107,8 @@ class SampleDataExplorer:
             significance_note = "significant" if result["significant"] else "not significant"
             summary = (
                 f"### ANOVA: `{value_col}` across `{group_col}`\n\n"
-                f"- Groups: {groups_line}\n"
+                f"- Groups (n = samples; pixels of one sample are averaged first): "
+                f"{groups_line}\n"
                 f"- F-statistic: **{result['f_stat']:.3g}**\n"
                 f"- p-value: **{result['p_value']:.3g}** ({significance_note} at p<0.05)\n"
             )

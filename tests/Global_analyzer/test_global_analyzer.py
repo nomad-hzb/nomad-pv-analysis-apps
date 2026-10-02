@@ -12,6 +12,7 @@ from data_manager import (
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    merge_results_per_sample,
     parse_uploaded_analysis_csv,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
@@ -28,6 +29,7 @@ from gui_components import GUIManager
 from ml_analysis import (
     detect_integer_columns,
     estimate_max_bo_steps,
+    run_random_forest,
     suggest_next_experiments,
 )
 from plot_manager import PlotManager, bin_numeric_column
@@ -1303,3 +1305,288 @@ def test_run_anova_raises_when_fewer_than_two_usable_groups():
 
     with pytest.raises(ValueError):
         run_anova(df, "material", "efficiency")
+
+
+# ---------------------------------------------------------------------------
+# Issue #46: row duplication, per-sample counting, model validation
+# ---------------------------------------------------------------------------
+
+
+def _jv_and_eqe():
+    jv = pd.DataFrame({"sample_id": ["s1"] * 4 + ["s2"] * 4, "efficiency": np.arange(8.0)})
+    eqe = pd.DataFrame(
+        {"sample_id": ["s1"] * 3 + ["s2"] * 3, "bandgap": [1.5, 1.6, 1.7, 1.4, 1.5, 1.6]}
+    )
+    return {"JV": jv, "EQE": eqe}
+
+
+def test_merge_results_all_points_does_not_cross_pair_two_repeated_types():
+    merged, collapsed = merge_results_per_sample(_jv_and_eqe(), "All Points")
+
+    # 4 JV pixels per sample kept, EQE averaged: 8 rows, not 4 x 3 x 2 = 24.
+    assert len(merged) == 8
+    assert collapsed == ["EQE"]
+    s1 = merged[merged["sample_id"] == "s1"]
+    assert list(s1["efficiency"]) == [0.0, 1.0, 2.0, 3.0]
+    assert np.allclose(s1["bandgap"], 1.6)
+
+
+def test_merge_results_mean_collapses_everything_without_flagging():
+    merged, collapsed = merge_results_per_sample(_jv_and_eqe(), "Mean")
+
+    assert len(merged) == 2
+    assert collapsed == []
+
+
+def test_merge_results_all_points_with_one_repeated_type_collapses_nothing():
+    results = _jv_and_eqe()
+    results["EQE"] = results["EQE"].groupby("sample_id", as_index=False).mean()
+
+    merged, collapsed = merge_results_per_sample(results, "All Points")
+
+    assert len(merged) == 8
+    assert collapsed == []
+
+
+def test_merge_results_skips_empty_and_returns_none_when_nothing_usable():
+    assert merge_results_per_sample({"JV": pd.DataFrame()}, "Mean") == (None, [])
+
+
+def _rf_dataset(n_samples=30, pixels=1, seed=0):
+    rng = np.random.default_rng(seed)
+    temp = rng.uniform(100, 200, n_samples)
+    noise_param = rng.uniform(0, 1, n_samples)
+    rows = []
+    for i in range(n_samples):
+        for _ in range(pixels):
+            rows.append(
+                {
+                    "sample_id": f"s{i}",
+                    "temp": temp[i],
+                    "noise_param": noise_param[i],
+                    "pce": 0.1 * temp[i] + rng.normal(0, 0.5),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_run_random_forest_reports_cross_validated_r2_and_ranks_real_effect_first():
+    result = run_random_forest(_rf_dataset(), "pce", ["temp", "noise_param"])
+
+    assert result["r2"] > 0.7
+    assert result["n_samples"] == 30
+    assert result["importances"][0][0] == "temp"
+    name, mean, sd = result["importances"][1]
+    assert name == "noise_param" and abs(mean) < 0.1 and sd >= 0
+
+
+def test_run_random_forest_counts_samples_not_pixels():
+    # 2 samples x 4 pixels used to pass the 8-row minimum.
+    df = _rf_dataset(n_samples=2, pixels=4)
+
+    with pytest.raises(ValueError, match="2 samples"):
+        run_random_forest(df, "pce", ["temp"])
+
+
+def test_run_random_forest_does_not_leak_pixels_of_one_sample_across_folds():
+    # The target is a per-sample offset unrelated to the parameter, plus small
+    # pixel scatter. A row-wise split predicts each pixel from its siblings and
+    # scores a high R²; split by sample, there is nothing to learn.
+    rng = np.random.default_rng(1)
+    rows = []
+    for i in range(20):
+        param, offset = rng.uniform(0, 1), rng.normal(0, 5)
+        for _ in range(6):
+            rows.append({"sample_id": f"s{i}", "param": param, "pce": offset + rng.normal(0, 0.1)})
+    df = pd.DataFrame(rows)
+
+    result = run_random_forest(df, "pce", ["param"])
+
+    assert result["n_samples"] == 20 and result["n_rows"] == 120
+    assert result["r2"] < 0.2
+
+
+def test_run_random_forest_reports_rows_lost_to_missing_values():
+    df = _rf_dataset()
+    df.loc[:9, "noise_param"] = np.nan
+
+    result = run_random_forest(df, "pce", ["temp", "noise_param"])
+
+    assert result["n_rows_with_target"] == 30
+    assert result["n_rows"] == 20
+    assert result["missing_by_column"] == {"noise_param": 10}
+
+
+def test_run_random_forest_warns_below_recommended_sample_count():
+    result = run_random_forest(_rf_dataset(n_samples=10), "pce", ["temp"])
+
+    assert any("10 samples" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_counts_samples_not_pixels():
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["a", "b", "c"], 4),
+            "x": np.repeat([1.0, 2.0, 3.0], 4),
+            "y": np.arange(12.0),
+        }
+    )
+
+    with pytest.raises(ValueError, match="3 samples"):
+        suggest_next_experiments(df, "y", feature_cols=["x"])
+
+
+def test_suggest_next_experiments_loo_r2_is_high_on_smooth_data_and_ranges_bracket_mean():
+    result = suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"])
+
+    assert result["loo_r2"] > 0.8
+    assert len(result["loo_df"]) == 20
+    s = result["suggestions"]
+    assert (s["predicted_low"] <= s["predicted_y"]).all()
+    assert (s["predicted_y"] <= s["predicted_high"]).all()
+
+
+def test_suggest_next_experiments_flags_pure_noise():
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({"x": rng.uniform(0, 1, 30), "y": rng.normal(0, 1, 30)})
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x"])
+
+    assert result["loo_r2"] < 0.2
+    assert any("Leave-one-sample-out" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_warns_with_few_samples_per_parameter():
+    df = _bo_dataset().head(7)
+    df["x3"] = np.linspace(0, 1, 7)
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x1", "x2", "x3"])
+
+    assert any("free parameter" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_warns_when_data_spans_batches():
+    df = _bo_dataset()
+    df["batch"] = ["b1"] * 10 + ["b2"] * 10
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x1", "x2"])
+
+    assert any("2 batches" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_log_target_back_transforms_predictions():
+    rng = np.random.default_rng(5)
+    x = rng.uniform(0, 4, 25)
+    df = pd.DataFrame({"x": x, "current": 10.0 ** (-x) * rng.lognormal(0, 0.1, 25)})
+
+    result = suggest_next_experiments(
+        df, "current", feature_cols=["x"], direction="minimize", log_target=True
+    )
+
+    assert result["log_target"] is True
+    assert result["loo_r2"] > 0.9
+    s = result["suggestions"]
+    assert (s["predicted_current"] > 0).all()
+    # Pick #1 sits at the optimum; with near-noiseless data later picks have
+    # ~zero EI and are arbitrary, so only the first is checked.
+    assert s.loc[0, "x"] > 3.5
+    assert s.loc[0, "predicted_current"] < 1e-3
+
+
+def test_suggest_next_experiments_log_target_rejects_non_positive_values():
+    df = _bo_dataset()
+
+    with pytest.raises(ValueError, match="> 0"):
+        suggest_next_experiments(df, "y", feature_cols=["x1", "x2"], log_target=True)
+
+
+def test_find_pareto_front_tie_on_first_objective_keeps_only_the_better_point():
+    df = pd.DataFrame({"a": [1.0, 1.0, 0.5], "b": [0.0, 1.0, 0.5]})
+
+    flags = find_pareto_front(df, "a", "b")["result_df"]["is_pareto_optimal"].tolist()
+
+    assert flags == [False, True, False]
+
+
+def _pixel_metadata_df():
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "sample_id": np.repeat([f"s{i}" for i in range(6)], 3),
+            "p1": np.repeat(rng.normal(size=6), 3),
+            "p2": np.repeat(rng.normal(size=6), 3),
+            "eff": rng.normal(size=18),
+        }
+    )
+
+
+def test_run_pca_counts_each_sample_once_and_returns_source_index():
+    df = _pixel_metadata_df()
+
+    result = run_pca(df, ["p1", "p2"])
+
+    assert result["n_samples"] == 6
+    assert len(result["source_index"]) == 6
+    assert list(df.loc[result["source_index"], "sample_id"]) == list(
+        result["scores_df"]["sample_id"]
+    )
+
+
+def test_outlier_flags_align_with_pca_points_when_sample_ids_repeat():
+    df = _pixel_metadata_df()
+    outliers = detect_outliers(df, ["p1", "p2", "eff"])
+    pca = run_pca(outliers["result_df"], feature_cols=outliers["feature_cols"])
+
+    flags = outliers["result_df"].loc[pca["source_index"], "is_outlier"]
+
+    assert len(flags) == len(pca["scores_df"]) == 18
+
+
+def test_run_anova_uses_per_sample_means():
+    # 2 samples per group, 5 pixels each: 10 pixel rows per group, but only 2
+    # independent observations.
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["a1", "a2", "b1", "b2"], 5),
+            "material": np.repeat(["A", "A", "B", "B"], 5),
+            "efficiency": np.repeat([10.0, 12.0, 11.0, 13.0], 5) + np.tile(np.arange(5) * 0.01, 4),
+        }
+    )
+
+    result = run_anova(df, "material", "efficiency")
+
+    assert result["groups"] == {"A": 2, "B": 2}
+    assert result["p_value"] > 0.05
+
+
+def test_compute_process_drift_uses_one_point_per_sample():
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["s1", "s2", "s3", "s4"], 3),
+            "datetime": np.repeat(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"], 3),
+            "temp": np.repeat([100.0, 110.0, 120.0, 130.0], 3),
+        }
+    )
+
+    result = compute_process_drift(df, "temp")
+
+    assert result["n_samples"] == 4
+    assert result["slope"] == pytest.approx(10.0)
+
+
+def test_create_bo_loo_plot_and_importance_plot_render():
+    pmgr = PlotManager(
+        plot_widget=go.FigureWidget(),
+        stats_output=widgets.Output(),
+        rf_widget=go.FigureWidget(),
+        bo_widget=go.FigureWidget(),
+        bo_loo_widget=go.FigureWidget(),
+    )
+    result = suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"])
+
+    pmgr.create_bo_loo_plot(result["loo_df"], "y", result["loo_r2"], False)
+    pmgr.create_bo_suggestions_plot(result["suggestions"], "y")
+    pmgr.create_feature_importance_plot([("temp", 0.5, 0.1), ("gap", 0.1, 0.05)], "pce")
+
+    assert len(pmgr.bo_loo_widget.data[1].x) == 20
+    assert list(pmgr.rf_widget.data[0].y) == ["gap", "temp"]
