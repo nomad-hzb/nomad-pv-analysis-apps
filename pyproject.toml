@@ -3,6 +3,14 @@ markers = ["live: requires live NOMAD server (skipped in CI)"]
 
 [tool.ruff]
 line-length = 100
+# Notebook-only folders not yet ported to the app layout (parked, see CLAUDE.md "Known
+# gaps"). Everything else is linted and format-checked in CI.
+extend-exclude = [
+    "apps/Electrochemical_analysis",
+    "apps/SEM_crystal_counter",
+    "apps/XPS-Automated",
+    "Learning",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "G"]

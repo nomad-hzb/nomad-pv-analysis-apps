@@ -1,6 +1,6 @@
 [project]
 name = "entry-auditor"
-version = "0.2.0"
+version = "0.2.1"
 description = "Browse NOMAD entries in a batch, find inconsistent field values, and correct all occurrences"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "pandas>=2.0",
     "requests>=2.28",
     "natsort>=8.0",
+    "pydantic>=2.0",
 ]
 
 [tool.hatch.metadata]
