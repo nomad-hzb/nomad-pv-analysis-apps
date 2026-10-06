@@ -24,6 +24,15 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
+# Writing corrections back to NOMAD is switched off until the correction path is made
+# safe: it currently replaces by the last key segment anywhere in the raw file and can
+# rewrite unrelated fields (issue #56). Auditing is unaffected.
+CORRECTIONS_ENABLED = False
+_CORRECTIONS_DISABLED_NOTE = (
+    "<hr><i>Correcting values from this app is temporarily disabled while a data-safety "
+    "issue is fixed (see GitHub issue #56). Auditing works as before.</i>"
+)
+
 _natsort_key = natsort_keygen()
 
 
@@ -69,7 +78,10 @@ class FieldAuditPanel(widgets.VBox):
         self.url = url
         self.token = token
         self.entry_type = ENTRY_TYPES_TO_AUDIT[label]
-        self._can_correct = url is not None and token is not None
+        self._can_correct = CORRECTIONS_ENABLED and url is not None and token is not None
+        self._corrections_disabled = (
+            not CORRECTIONS_ENABLED and url is not None and token is not None
+        )
 
         self.entries_df = session.datasets[label]
         # Entries arrive in whatever order the API happened to return them in, which
@@ -110,6 +122,8 @@ class FieldAuditPanel(widgets.VBox):
 
         self.dropdown: widgets.Dropdown | None = None
         correct_section: widgets.Widget = widgets.VBox([])
+        if self._corrections_disabled:
+            correct_section = widgets.HTML(_CORRECTIONS_DISABLED_NOTE)
         if self._can_correct:
             self.dropdown = widgets.Dropdown(
                 # Same varied-first order as the pivot table below, so the two stay
