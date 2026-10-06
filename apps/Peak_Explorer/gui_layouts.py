@@ -814,9 +814,37 @@ class PLAnalysisApp:
             debug_print(f"ERROR: {e}", "APP")
             debug_print(f"Full traceback:\n{traceback.format_exc()}", "APP")
 
+    def _reset_background_state(self):
+        """Forget the stored pre-background data. Called on every new data load: the
+        stored matrix belongs to the previous file or H5 mode, and applying or removing a
+        background afterwards would otherwise replace the new data with the old."""
+        self.original_data_matrix = None
+        self.background_applied = False
+        self.background_model = None
+        if "bg_remove_btn" in self.widgets:
+            self.widgets["bg_remove_btn"].disabled = True
+
+    def _clear_fit_results(self):
+        """Drop fit results that belong to data that is no longer shown (a new file, H5
+        mode or x unit), so they can't be saved under the new data's labels."""
+        self.fitting_engine.clear_fitting_results()
+        self.fitting_engine.batch_settings = None
+        self.last_fit_result = None
+        self._fit_vis_indices = []
+
+    def _reverse_background_state(self):
+        """Keep the stored pre-background data and background in step with the data
+        matrix, whose columns the nm <-> eV conversion reverses."""
+        if self.original_data_matrix is not None:
+            self.original_data_matrix = self.original_data_matrix[:, ::-1]
+        if getattr(self, "background_model", None) is not None:
+            self.background_model = self.background_model[::-1]
+
     def update_ui_after_data_load(self):
         """Update UI controls after data is loaded"""
         debug_print("Updating UI after data load", "update_ui_after_data_load")
+        self._reset_background_state()
+        self._clear_fit_results()
 
         # Enable energy conversion button for PL data
         if self.wavelength_unit in ["nm", "eV"]:
@@ -1199,6 +1227,8 @@ class PLAnalysisApp:
                 success = self.data_manager.convert_wavelength_to_energy()
                 if success:
                     self.wavelength_unit = "eV"
+                    self._reverse_background_state()
+                    self._clear_fit_results()
                     self.widgets["energy_unit_display"].value = "E (eV)"
 
                     wl_min = float(self.data_manager.wavelengths.min())
@@ -1230,6 +1260,8 @@ class PLAnalysisApp:
                 success = self.data_manager.convert_energy_to_wavelength()
                 if success:
                     self.wavelength_unit = "nm"
+                    self._reverse_background_state()
+                    self._clear_fit_results()
                     self.widgets["energy_unit_display"].value = "λ (nm)"
 
                     wl_min = float(self.data_manager.wavelengths.min())
