@@ -184,6 +184,7 @@ NO_PROXY = "localhost,127.0.0.1"
 | `HYSPRINT_API_ENDPOINT` | only if the API is not at `/nomad-oasis/api/v1` | Identical to the HZB default on CE-AME. Set anyway so the deployment is fully described by one file. |
 | `HTTP_PROXY`, `HTTPS_PROXY` | the container has no direct outbound route | Applied *before* `pip install shared/` runs, because pip fetches `hatchling` from PyPI to build it. Also picked up by `git` for the `insitu_analyser` dependency. |
 | `NO_PROXY` | whenever a proxy is set | Hosts that must be reached *without* the proxy. Defaults to `localhost,127.0.0.1` if omitted. Do not add the Oasis host unless a direct call to it actually works from the container - on CE-AME it does not, and excluding it breaks every API call with `Errno 113 No route to host`. |
+| `HYSPRINT_USAGE_LOG_DIR` | only to keep usage logs somewhere else | Folder for `notebook_usage.log` and `button_usage.log` (`hysprint_utils.usage_tracking`). Defaults to `shared/usage/` in the uploaded repo, so every app in one upload writes to the same two files. Logs from older versions, kept next to `hysprint_utils`, are moved there on first use. |
 
 ### Ordering, and why it is not cosmetic
 

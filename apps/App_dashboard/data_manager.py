@@ -13,9 +13,9 @@ except ImportError:
     )
 
 try:
-    from hysprint_utils.access_token import log_button_usage
+    from hysprint_utils.usage_tracking import log_button_usage
 except ImportError:
-    logger.warning("hysprint_utils.access_token not found; button usage will not be logged")
+    logger.warning("hysprint_utils.usage_tracking not found; button usage will not be logged")
 
     def log_button_usage(action: str, user: str | None = None) -> None:
         return None
