@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    name: Ruff lint
+    name: Lint and repo rules
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,51 +20,40 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      # Only check apps that have been brought up to ruff-clean standard.
-      # Untouched apps (0Global_analyzer, bitmap_maker, etc.) are excluded
-      # until they are individually cleaned up.
+      # Every app is linted; the parked notebook-only folders are excluded in the root
+      # pyproject.toml (extend-exclude), not here.
       - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Repo rules (notebooks, sys.path, URL literals, app pyproject shape)
+        run: python scripts/check_repo_rules.py
+
+  discover:
+    name: Find test suites
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.find.outputs.suites }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        # One job per tests/<folder>, so a new app's tests run without editing this file.
         run: |
-          ruff check \
-            apps/TRPL_Analysis/ \
-            apps/XRD_peak_finder/ \
-            apps/NMR_Analysis/ \
-            apps/EQE_Analysis/ \
-            apps/AbsPL_Analysis/ \
-            apps/JV-Analysis/ \
-            apps/MPPT_Analysis/ \
-            apps/DesignOfExperiments/ \
-            shared/ \
-            tests/ \
-            scripts/
+          suites=$(find tests -mindepth 1 -maxdepth 1 -type d ! -name __pycache__ ! -name live -printf '%f\n' \
+            | sort | python3 -c 'import json, sys; print(json.dumps(sys.stdin.read().split()))')
+          echo "suites=$suites" >> "$GITHUB_OUTPUT"
 
   test:
     name: "Tests: ${{ matrix.suite }}"
     runs-on: ubuntu-latest
-    needs: lint
+    # Not gated on lint, so a lint failure never hides the test results.
+    needs: discover
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - suite: TRPL_Analysis
-            pythonpath: apps/TRPL_Analysis
-          - suite: XRD_peak_finder
-            pythonpath: apps/XRD_peak_finder
-          - suite: NMR_Analysis
-            pythonpath: apps/NMR_Analysis
-          - suite: EQE_Analysis
-            pythonpath: apps/EQE_Analysis
-          - suite: AbsPL_Analysis
-            pythonpath: apps/AbsPL_Analysis
-          - suite: JV-Analysis
-            pythonpath: apps/JV-Analysis
-          - suite: MPPT_Analysis
-            pythonpath: apps/MPPT_Analysis
-          - suite: DesignOfExperiments
-            pythonpath: apps/DesignOfExperiments
-          - suite: shared
-            pythonpath: shared
-
+        suite: ${{ fromJSON(needs.discover.outputs.suites) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,26 +61,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install shared package
-        run: pip install -e shared/
-
-      - name: Install test dependencies
-        run: |
-          pip install \
-            numpy \
-            pydantic \
-            scipy \
-            plotly \
-            natsort \
-            ipywidgets \
-            ipython \
-            pytest \
-            pytest-mock \
-            lmfit \
-            uncertainties \
-            scikit-learn
+      # shared/ plus the app's own pyproject dependencies, as bootstrap.py installs them.
+      - name: Install dependencies
+        run: python scripts/ci_install_test_deps.py "${{ matrix.suite }}"
 
       - name: Run tests (no live)
-        env:
-          PYTHONPATH: ${{ matrix.pythonpath }}
-        run: python -m pytest tests/${{ matrix.suite }}/ -v -m "not live"
+        run: python -m pytest "tests/${{ matrix.suite }}" -m "not live" -q
