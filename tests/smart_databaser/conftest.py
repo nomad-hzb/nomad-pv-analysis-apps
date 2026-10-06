@@ -12,18 +12,21 @@ os.environ.setdefault("NOMAD_CLIENT_ACCESS_TOKEN", "test-token")
 
 _APP_DIR = Path(__file__).parent.parent.parent / "apps" / "smart_databaser"
 _SHARED_DIR = Path(__file__).parent.parent.parent / "shared"
-_EXCEL_CREATOR_DIR = Path(__file__).parent.parent.parent / "apps" / "Excel_creator"
 
 # Add shared so hysprint_utils is importable (safe -- shared across all apps).
 if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
-# Add Excel_creator so sheet_experiment/experiment_excel_builder are importable. In
-# production this comes from smart_databaser's pyproject.toml "excel-creator" file
-# dependency (installed, so `import sheet_experiment` resolves normally); for tests we
-# mirror the same sys.path approach already used for shared/ above.
-if str(_EXCEL_CREATOR_DIR) not in sys.path:
-    sys.path.insert(0, str(_EXCEL_CREATOR_DIR))
+# data_manager imports the Excel_creator sheet builders through excel_creator_modules,
+# which loads them from apps/Excel_creator by file path; register it under its bare name
+# the same way as alias_config below.
+if "excel_creator_modules" not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(
+        "excel_creator_modules", _APP_DIR / "excel_creator_modules.py"
+    )
+    _ecm_module = importlib.util.module_from_spec(_spec)
+    sys.modules["excel_creator_modules"] = _ecm_module
+    _spec.loader.exec_module(_ecm_module)
 
 # alias_config has no dependency on data_manager and must load first, since data_manager
 # does `from alias_config import resolve_progress_units`.

@@ -4,12 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "smart-databaser"
-version = "0.3.0"
+version = "0.3.1"
 description = "Live-autofilled NOMAD experiment Excel builder for HySPRINT"
 requires-python = ">=3.10"
 dependencies = [
     "hysprint-utils",
-    "excel-creator",
     "ipython>=8.12",
     "ipywidgets>=8.1",
     "openpyxl>=3.1",
