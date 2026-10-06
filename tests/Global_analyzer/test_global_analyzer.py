@@ -1,4 +1,5 @@
 import ipywidgets as widgets
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import pytest
@@ -11,7 +12,9 @@ from data_manager import (
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    parse_uploaded_analysis_csv,
     select_layer_row_per_sample,
+    uploaded_numeric_columns,
     variation_warning,
 )
 from experimental_analysis import (
@@ -22,7 +25,11 @@ from experimental_analysis import (
     run_pca,
 )
 from gui_components import GUIManager
-from ml_analysis import estimate_max_bo_steps
+from ml_analysis import (
+    detect_integer_columns,
+    estimate_max_bo_steps,
+    suggest_next_experiments,
+)
 from plot_manager import PlotManager, bin_numeric_column
 from pydantic import ValidationError
 from utils import (
@@ -573,6 +580,221 @@ def test_create_box_plot_with_bin_count_creates_one_trace_per_bin_in_order():
     first_start = float(names[0].split(" to ")[0])
     second_start = float(names[1].split(" to ")[0])
     assert first_start < second_start
+
+
+def test_parse_uploaded_analysis_csv_keeps_existing_sample_id():
+    csv_bytes = b"sample_id,rise_pct,hydration_pct\nS1,120.0,75\nS2,140.0,80\n"
+
+    df = parse_uploaded_analysis_csv(csv_bytes)
+
+    assert list(df["sample_id"]) == ["S1", "S2"]
+    assert list(df.columns) == ["sample_id", "rise_pct", "hydration_pct"]
+
+
+def test_parse_uploaded_analysis_csv_generates_sample_id_when_missing():
+    csv_bytes = b"rise_pct,hydration_pct\n120.0,75\n140.0,80\n"
+
+    df = parse_uploaded_analysis_csv(csv_bytes)
+
+    assert list(df["sample_id"]) == ["row_1", "row_2"]
+    assert list(df.columns) == ["sample_id", "rise_pct", "hydration_pct"]
+
+
+def test_uploaded_numeric_columns_skips_sample_id_text_and_constant_columns():
+    df = pd.DataFrame(
+        {
+            "sample_id": [1, 2, 3],
+            "temp": [100, 120, 140],
+            "constant": [5, 5, 5],
+            "material": ["a", "b", "a"],
+            "pce": [15.0, 17.5, 16.0],
+        }
+    )
+
+    assert uploaded_numeric_columns(df) == ["temp", "pce"]
+
+
+def _bo_dataset():
+    rng = np.random.default_rng(0)
+    x1 = rng.uniform(0, 10, 20)
+    x2 = rng.uniform(100, 200, 20)
+    return pd.DataFrame({"x1": x1, "x2": x2, "y": -((x1 - 6) ** 2) - ((x2 - 150) / 10) ** 2})
+
+
+@pytest.mark.parametrize("n_suggestions", [1, 3, 8])
+def test_suggest_next_experiments_returns_requested_number_of_distinct_points(n_suggestions):
+    result = suggest_next_experiments(
+        _bo_dataset(), "y", feature_cols=["x1", "x2"], n_suggestions=n_suggestions
+    )
+
+    suggestions = result["suggestions"]
+    assert len(suggestions) == n_suggestions
+    assert len(suggestions[["x1", "x2"]].drop_duplicates()) == n_suggestions
+
+
+def test_suggest_next_experiments_first_pick_is_the_single_step_bo_choice():
+    df = _bo_dataset()
+    single = suggest_next_experiments(df, "y", feature_cols=["x1", "x2"], n_suggestions=1)
+    batch = suggest_next_experiments(df, "y", feature_cols=["x1", "x2"], n_suggestions=5)
+
+    pd.testing.assert_series_equal(
+        single["suggestions"].iloc[0], batch["suggestions"].iloc[0], check_names=False
+    )
+
+
+def test_suggest_next_experiments_batch_spreads_out_instead_of_clustering():
+    # Kriging Believer should push later picks away from the first one; plain
+    # top-N-by-EI returns near-duplicates of the single best candidate.
+    result = suggest_next_experiments(
+        _bo_dataset(), "y", feature_cols=["x1", "x2"], n_suggestions=5
+    )
+    points = result["suggestions"][["x1", "x2"]].to_numpy()
+    scaled = (points - points.min(axis=0)) / (np.ptp(points, axis=0) + 1e-12)
+    distances = np.linalg.norm(scaled[:, None, :] - scaled[None, :, :], axis=-1)
+    assert distances[np.triu_indices(5, k=1)].min() > 0.05
+
+
+def test_suggest_next_experiments_rejects_out_of_range_suggestion_count():
+    with pytest.raises(ValueError):
+        suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"], n_suggestions=0)
+    with pytest.raises(ValueError):
+        suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"], n_suggestions=21)
+
+
+def _noisy_bo_dataset():
+    # Integer "starts" (1-3), two continuous params, one irrelevant param, and
+    # replicate scatter (SD 1) comparable to the effect size - the regime where
+    # a near-noiseless GP or a noisy batch method collapses onto one point.
+    # Length scales fitted from 60 noisy points are themselves uncertain: with
+    # other seeds (e.g. 3) the sampled data happens to hide the gap effect and
+    # the fit reasonably reports it as undetectable.
+    rng = np.random.default_rng(0)
+    n = 60
+    starts = rng.integers(1, 4, n)
+    gap = rng.uniform(0.6, 2.0, n)
+    width = rng.uniform(0.9, 2.0, n)
+    irrelevant = rng.uniform(0, 1, n)
+    signal = 4 - 1.5 * (starts - 1) - 6 * (gap - 1.3) ** 2
+    y = np.clip(signal + rng.normal(0, 1.0, n), 0, 4)
+    return pd.DataFrame(
+        {"starts": starts, "gap": gap, "width": width, "irrelevant": irrelevant, "y": y}
+    )
+
+
+_NOISY_FEATURES = ["starts", "gap", "width", "irrelevant"]
+
+
+def test_detect_integer_columns_only_flags_whole_number_columns():
+    df = pd.DataFrame(
+        {"starts": [1, 2, 3, 2], "gap": [1.1, 1.5, 2.0, 0.9], "n": [1.0, 2.0, 2.0, 1.0]}
+    )
+
+    assert detect_integer_columns(df, ["starts", "gap", "n"]) == ["starts", "n"]
+
+
+def test_suggest_next_experiments_respects_integer_bounds_and_fixed_values():
+    result = suggest_next_experiments(
+        _noisy_bo_dataset(),
+        "y",
+        feature_cols=_NOISY_FEATURES,
+        n_suggestions=9,
+        bounds={"starts": (1, 2), "gap": (1.1, 2.0), "width": (0.9, 1.5)},
+        fixed={"irrelevant": 0.6},
+    )
+
+    s = result["suggestions"]
+    assert result["integer_cols"] == ["starts"]
+    assert set(s["starts"]) <= {1, 2}
+    assert s["starts"].dtype.kind == "i"
+    assert s["gap"].between(1.1, 2.0).all()
+    assert s["width"].between(0.9, 1.5).all()
+    assert (s["irrelevant"] == 0.6).all()
+
+
+def test_suggest_next_experiments_uses_best_prediction_not_best_measurement_as_incumbent():
+    result = suggest_next_experiments(
+        _noisy_bo_dataset(), "y", feature_cols=_NOISY_FEATURES, n_suggestions=1
+    )
+
+    # The top measurement (4.0, the clipped scale maximum) is partly luck.
+    assert result["best_observed"] == 4.0
+    assert result["incumbent"] < result["best_observed"]
+
+
+def test_suggest_next_experiments_learns_noise_and_ard_length_scales():
+    result = suggest_next_experiments(
+        _noisy_bo_dataset(), "y", feature_cols=_NOISY_FEATURES, n_suggestions=1
+    )
+
+    assert 0.4 < result["noise_sd"] < 1.6
+    ls = result["length_scales"]
+    assert ls["gap"] < ls["irrelevant"]
+    assert ls["starts"] < ls["irrelevant"]
+
+
+def test_suggest_next_experiments_noisy_batch_stays_diverse():
+    # Regression test: with noise-carrying fake points, Kriging Believer barely
+    # reduced uncertainty and returned 9 near-identical suggestions.
+    bounds = {"starts": (1, 2), "gap": (1.1, 2.0), "width": (0.9, 1.5)}
+    result = suggest_next_experiments(
+        _noisy_bo_dataset(),
+        "y",
+        feature_cols=_NOISY_FEATURES,
+        n_suggestions=9,
+        bounds=bounds,
+        fixed={"irrelevant": 0.5},
+    )
+
+    s = result["suggestions"]
+    scaled = np.column_stack([(s[c] - lo) / (hi - lo) for c, (lo, hi) in bounds.items()])
+    distances = np.linalg.norm(scaled[:, None, :] - scaled[None, :, :], axis=-1)
+    assert distances[np.triu_indices(9, k=1)].min() > 0.1
+
+
+def test_suggest_next_experiments_is_deterministic_for_a_fixed_seed():
+    kwargs = dict(feature_cols=_NOISY_FEATURES, n_suggestions=4)
+    first = suggest_next_experiments(_noisy_bo_dataset(), "y", **kwargs)["suggestions"]
+    second = suggest_next_experiments(_noisy_bo_dataset(), "y", **kwargs)["suggestions"]
+
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_suggest_next_experiments_finds_optimum_of_branin_with_integer_offset():
+    # Minimise Branin(x1, x2) + 2 * |k - 2| over k in {0..4}: global minimum
+    # 0.398 at k = 2. Start from 10 random points, run 6 batches of 5. The
+    # integer term is small next to Branin's range, so it needs a few rounds.
+    def objective(frame):
+        x1, x2, k = frame["x1"], frame["x2"], frame["k"]
+        branin = (
+            (x2 - 5.1 / (4 * np.pi**2) * x1**2 + 5 / np.pi * x1 - 6) ** 2
+            + 10 * (1 - 1 / (8 * np.pi)) * np.cos(x1)
+            + 10
+        )
+        return branin + 2 * (k - 2).abs()
+
+    rng = np.random.default_rng(7)
+    data = pd.DataFrame(
+        {"x1": rng.uniform(-5, 10, 10), "x2": rng.uniform(0, 15, 10), "k": rng.integers(0, 5, 10)}
+    )
+    data["y"] = objective(data)
+    bounds = {"x1": (-5, 10), "x2": (0, 15), "k": (0, 4)}
+    for round_ in range(6):
+        s = suggest_next_experiments(
+            data,
+            "y",
+            feature_cols=["x1", "x2", "k"],
+            direction="minimize",
+            n_suggestions=5,
+            bounds=bounds,
+            integer_cols=["k"],
+            random_state=round_,
+        )["suggestions"][["x1", "x2", "k"]]
+        s["y"] = objective(s)
+        data = pd.concat([data, s], ignore_index=True)
+
+    best = data.loc[data["y"].idxmin()]
+    assert best["k"] == 2
+    assert best["y"] < 1.0
 
 
 def test_variation_warning_flags_low_variation_columns():

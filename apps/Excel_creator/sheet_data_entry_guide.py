@@ -210,7 +210,7 @@ def add_guide_sheet(workbook):
     guide_ws.cell(row=voila_row, column=1, value="• File Uploader Voila Dashboard")
     guide_ws.cell(
         row=voila_row, column=1
-    ).hyperlink = "https://nomad-hzb-se.de/nomad-oasis/gui/search/voila"
+    ).hyperlink = "https://nomad-hzb-se.helmholtz-berlin.de/nomad-oasis/gui/search/voila"
     guide_ws.cell(row=voila_row, column=1).style = "Hyperlink"
 
     guide_ws.cell(

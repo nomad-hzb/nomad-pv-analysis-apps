@@ -304,7 +304,7 @@ def get_sample_entry_links(url, token, sample_ids):
     Batch query: returns {lab_id: full_gui_url} for all sample_ids in one API call.
     GUI URL pattern: {base}/gui/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}
     """
-    base_url = url.split("/api/")[0]  # e.g. https://nomad-hzb-se.de/nomad-oasis
+    base_url = url.split("/api/")[0]  # e.g. https://nomad-hzb-se.helmholtz-berlin.de/nomad-oasis
 
     query = {
         "required": {"metadata": "*"},

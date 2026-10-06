@@ -6,10 +6,11 @@ cosmetic: hysprint_utils.config reads HYSPRINT_URL_BASE at import time, and
 pip reaches PyPI for build dependencies, so both need the environment in
 place before they run.
 
-All of it is opt-in and off by default - the HZB Oasis needs none of it,
-and this file must never hardcode a deployment-specific value. A deployment
-that needs overrides creates oasis_local_config.py next to this file
-(gitignored, same pattern as secrets.py) assigning plain uppercase strings:
+Overrides are opt-in. The one built-in default is the HZB outbound proxy for
+the HZB SE Oasis (see HZB_SE_PROXY); every other deployment gets nothing it
+did not ask for. A deployment that needs overrides creates
+oasis_local_config.py next to this file (gitignored, same pattern as
+secrets.py) assigning plain uppercase strings:
 
     HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
     HTTP_PROXY = "http://proxy.example.org:3128"
@@ -31,6 +32,7 @@ import builtins
 import contextlib
 import hashlib
 import importlib
+import importlib.util
 import io
 import logging
 import os
@@ -45,6 +47,14 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 
 PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+
+# The HZB SE Oasis sits behind the HZB outbound proxy, so its containers cannot
+# reach PyPI, GitHub or the Oasis itself without it. Applied only while the
+# configured Oasis is the HZB SE one and nothing else has set a proxy; any
+# other deployment is left alone. Opt out with `HTTP_PROXY = ""` and
+# `HTTPS_PROXY = ""` in oasis_local_config.py.
+HZB_SE_URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
+HZB_SE_PROXY = "http://proxy.csn29.bessy.de:3128"
 
 
 def _load_local_config() -> dict[str, str]:
@@ -79,6 +89,11 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
     if os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY"):
         return
 
+    # _apply_config_env has already exported any HYSPRINT_URL_BASE override.
+    uses_hzb_se = os.environ.get("HYSPRINT_URL_BASE", HZB_SE_URL_BASE) == HZB_SE_URL_BASE
+    if uses_hzb_se and "HTTP_PROXY" not in config and "HTTPS_PROXY" not in config:
+        config = {**config, "HTTP_PROXY": HZB_SE_PROXY, "HTTPS_PROXY": HZB_SE_PROXY}
+
     http_proxy = config.get("HTTP_PROXY")
     https_proxy = config.get("HTTPS_PROXY")
     if not (http_proxy or https_proxy):
@@ -102,6 +117,22 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
     logger.info("Applied local proxy configuration: %s", os.environ["HTTPS_PROXY"])
 
 
+def _build_isolation_args() -> list[str]:
+    """Skip pip's build isolation whenever hatchling is already installed.
+
+    With isolation on, pip downloads the build backend from PyPI into a
+    throwaway environment on every install, even when the kernel already has
+    it. A container with no route to PyPI then fails to build shared/ at all
+    ("Network is unreachable ... No matching distribution found for
+    hatchling"), which is how an Oasis update that cut outbound access took
+    every app down. Building against the local hatchling needs no network as
+    long as the runtime dependencies are already present.
+    """
+    if importlib.util.find_spec("hatchling") is not None:
+        return ["--no-build-isolation"]
+    return []
+
+
 def _pip_install(target: Path) -> tuple[int, str]:
     """Install target, returning pip's exit code and its combined output.
 
@@ -118,6 +149,7 @@ def _pip_install(target: Path) -> tuple[int, str]:
             "install",
             "-q",
             "--disable-pip-version-check",
+            *_build_isolation_args(),
             str(target),
         ],
         capture_output=True,
@@ -128,20 +160,15 @@ def _pip_install(target: Path) -> tuple[int, str]:
     return result.returncode, output
 
 
+# hysprint-utils' own runtime dependencies (shared/pyproject.toml). If pip
+# could not install shared/, these must already be in the image for the
+# sys.path fallback below to be usable.
+SHARED_RUNTIME_MODULES = ("hysprint_utils", "requests", "pandas", "plotly")
+
+
 def _install_shared() -> None:
     shared = REPO_ROOT / "shared"
     returncode, output = _pip_install(shared)
-    if returncode != 0:
-        # The pip output goes in the exception, not the log line: a traceback
-        # always renders in the notebook, whereas a log record only shows if
-        # something configured logging. Putting it in both duplicates a very
-        # long diagnostic in the one place it is hardest to read.
-        logger.error("pip install of %s failed with exit code %d", shared, returncode)
-        raise RuntimeError(
-            f"bootstrap: pip install of {shared} failed with exit code {returncode}.\n{output}"
-        )
-    if output:
-        logger.info("pip install of %s reported:\n%s", shared, output)
 
     # A fresh kernel already ran site.py before this install happened, so it
     # won't pick up the newly installed package on its own until restarted.
@@ -152,6 +179,34 @@ def _install_shared() -> None:
     shared_str = str(shared)
     if shared_str not in sys.path:
         sys.path.insert(0, shared_str)
+
+    if returncode == 0:
+        if output:
+            logger.info("pip install of %s reported:\n%s", shared, output)
+        return
+
+    # The sys.path entry above is what this kernel actually imports from, so a
+    # failed install (typically no route to PyPI) only matters if something
+    # hysprint_utils needs is genuinely missing. Fatal only in that case.
+    missing = [name for name in SHARED_RUNTIME_MODULES if importlib.util.find_spec(name) is None]
+    if not missing:
+        logger.warning(
+            "pip install of %s failed with exit code %d; continuing with it on sys.path:\n%s",
+            shared,
+            returncode,
+            output,
+        )
+        return
+
+    # The pip output goes in the exception, not the log line: a traceback
+    # always renders in the notebook, whereas a log record only shows if
+    # something configured logging. Putting it in both duplicates a very
+    # long diagnostic in the one place it is hardest to read.
+    logger.error("pip install of %s failed with exit code %d", shared, returncode)
+    raise RuntimeError(
+        f"bootstrap: pip install of {shared} failed with exit code {returncode}, "
+        f"and {', '.join(missing)} cannot be imported without it.\n{output}"
+    )
 
 
 def _silence_import_banners() -> None:

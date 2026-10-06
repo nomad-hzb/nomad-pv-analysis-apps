@@ -24,8 +24,8 @@ SERVERS = {
         "url": "https://nomad-lab.eu/prod/v1/api/v1",
         "default_entry_type": "PerovskiteSolarCell",
     },
-    "HZB SE Oasis (nomad-hzb-se.de)": {
-        "url": "https://nomad-hzb-se.de/nomad-oasis/api/v1",
+    "HZB SE Oasis (nomad-hzb-se.helmholtz-berlin.de)": {
+        "url": "https://nomad-hzb-se.helmholtz-berlin.de/nomad-oasis/api/v1",
         "default_entry_type": "",
     },
 }

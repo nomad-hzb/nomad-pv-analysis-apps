@@ -39,7 +39,9 @@ from data_manager import (
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    parse_uploaded_analysis_csv,
     select_layer_row_per_sample,
+    uploaded_numeric_columns,
     variation_warning,
 )
 from gui_components import GUIManager
@@ -120,6 +122,11 @@ class SampleDataExplorer:
         self._last_correlation_result = None
         self._last_rf_result = None
         self._last_bo_result = None
+        # A user-uploaded CSV (issue #40) replaces the NOMAD-built dataset until
+        # the next batch load; kept separately so Recalculate re-applies it
+        # instead of rebuilding from (possibly empty) NOMAD data.
+        self._uploaded_df = None
+        self._updating_upload_roles = False
 
         # Connect callbacks
         self._connect_callbacks()
@@ -141,6 +148,8 @@ class SampleDataExplorer:
                 "run_random_forest": self._on_run_random_forest,
                 "suggest_experiments": self._on_suggest_experiments,
                 "recalculate_analysis_data": self._on_recalculate_analysis_data,
+                "upload_analysis_csv": self._on_upload_analysis_csv,
+                "upload_results_columns_changed": self._on_upload_results_columns_changed,
                 "add_row_filter": self._on_add_row_filter,
                 "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
@@ -199,6 +208,37 @@ class SampleDataExplorer:
             else:
                 default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
                 selector.value = default if default else numeric_cols[0]
+
+        self._refresh_bo_search_space()
+
+    def _refresh_bo_search_space(self):
+        """Rebuild the BO tab's search-space rows for the checked Process
+        Metadata columns, defaulting each to its observed range and to integer
+        when every measured value is a whole number."""
+        if self.analysis_df is None or self.analysis_df.empty:
+            self.gui.set_bo_search_space([])
+            return
+        checked_metadata = set(self.gui.get_checked_metadata_columns())
+        cols = [
+            c
+            for c in self.analysis_metadata_cols
+            if c in checked_metadata and c in self.analysis_df.columns
+        ]
+        integer_cols = set(ml.detect_integer_columns(self.analysis_df, cols))
+        defaults = []
+        for col in cols:
+            values = pd.to_numeric(self.analysis_df[col], errors="coerce").dropna()
+            if values.empty:
+                continue
+            defaults.append(
+                {
+                    "col": col,
+                    "min": float(values.min()),
+                    "max": float(values.max()),
+                    "integer": col in integer_cols,
+                }
+            )
+        self.gui.set_bo_search_space(defaults)
 
     def _build_process_dataframe(self) -> Optional[pd.DataFrame]:
         """Outer-merge every process/preparation metadata type currently loaded
@@ -298,7 +338,12 @@ class SampleDataExplorer:
         measurement result, on sample_id. Populates self.analysis_df and the
         checked-by-default Results/Process Metadata column lists shown in the
         Analysis Data tab's checkboxes, and refreshes the variation-count warning.
+        An uploaded CSV, while active, is re-applied instead.
         """
+        if self._uploaded_df is not None:
+            self._apply_uploaded_dataset()
+            return
+
         self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
 
         process_df = self._build_process_dataframe()
@@ -487,6 +532,87 @@ class SampleDataExplorer:
 
         self._rerun_active_analyses()
 
+    def _on_upload_analysis_csv(self, change):
+        """Replace the shared analysis dataset with a user-uploaded CSV,
+        bypassing the NOMAD batch-load pipeline entirely (issue #40) - e.g. for
+        a quick offline experiment that has nothing to do with a NOMAD-tracked
+        batch. A flat CSV doesn't say which columns are results and which are
+        process parameters, so the user picks the results in a selector that
+        appears after upload (default: the last numeric column, which is where
+        this tab's own "Download CSV" export puts results).
+        """
+        uploaded = change["new"]
+        if not uploaded:
+            return
+
+        file_info = uploaded[0]
+        with self.gui.analysis_data_upload_output:
+            clear_output()
+            try:
+                df = parse_uploaded_analysis_csv(bytes(file_info["content"]))
+            except Exception as e:
+                logger.exception("Failed to parse uploaded analysis CSV")
+                print(f"❌ Could not read CSV: {e}")
+                return
+
+            numeric_cols = uploaded_numeric_columns(df)
+            if len(numeric_cols) < 2:
+                print(
+                    "❌ Need at least 2 numeric columns with 2+ distinct values each "
+                    "(one result and one parameter)."
+                )
+                return
+
+            self._uploaded_df = df
+            self._updating_upload_roles = True
+            try:
+                selector = self.gui.analysis_data_upload_results_selector
+                selector.options = numeric_cols
+                selector.value = (numeric_cols[-1],)
+            finally:
+                self._updating_upload_roles = False
+            self.gui.analysis_data_upload_roles_box.layout.display = None
+
+            self._apply_uploaded_dataset()
+            self._refresh_ml_target_options()
+            self._refresh_experimental_options()
+            print(
+                f"✓ Loaded {len(df)} row(s), {len(numeric_cols)} usable numeric column(s) "
+                "from the uploaded CSV. Pick the result column(s) below."
+            )
+        # Reset so picking the same (edited) file again still fires a change.
+        self.gui.analysis_data_upload.value = ()
+        self._rerun_active_analyses()
+
+    def _on_upload_results_columns_changed(self, change):
+        """The user changed which uploaded columns count as results - re-split
+        and refresh every tab reading the shared dataset."""
+        if self._updating_upload_roles or self._uploaded_df is None:
+            return
+        self._apply_uploaded_dataset()
+        self._refresh_ml_target_options()
+        self._refresh_experimental_options()
+        self._rerun_active_analyses()
+
+    def _apply_uploaded_dataset(self):
+        """Make the uploaded CSV the shared analysis dataset: the columns picked
+        in the Result columns selector become Results, every other usable
+        numeric column becomes Process Metadata (never both, so a column can't
+        end up predicting itself or appear twice in the scatter matrix)."""
+        df = self._uploaded_df
+        numeric_cols = uploaded_numeric_columns(df)
+        results = set(self.gui.analysis_data_upload_results_selector.value)
+
+        self.full_analysis_df = df
+        self.analysis_results_cols = [c for c in numeric_cols if c in results]
+        self.analysis_metadata_cols = [c for c in numeric_cols if c not in results]
+        self.gui.set_layer_selectors({})
+        self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        sample_ids = sorted(df["sample_id"].unique())
+        self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._apply_filters()
+        self._refresh_variation_warning()
+
     def _rerun_active_analyses(self):
         """Re-run whichever of Correlations/RF/BO already produced a result, so
         Recalculate and row-filter changes visibly update whatever the user
@@ -526,9 +652,13 @@ class SampleDataExplorer:
             self._update_status("⚠️ Please select at least one batch.")
             return
 
-        # Clear old data
+        # Clear old data (including an uploaded CSV, which a batch load replaces)
         self.data_manager.current_results = {}
         self.data_manager.current_metadata = {}
+        self._uploaded_df = None
+        self.gui.analysis_data_upload_roles_box.layout.display = "none"
+        with self.gui.analysis_data_upload_output:
+            clear_output()
 
         self.gui.plot_widget.data = []
         self.gui.plot_widget.update_layout(title='Select data and click "Create Plot"')
@@ -1555,12 +1685,25 @@ class SampleDataExplorer:
                 self._last_bo_result = None
                 return
 
+            space = self.gui.get_bo_search_space()
+            bounds = {c: (space[c]["min"], space[c]["max"]) for c in feature_cols if c in space}
+            integer_cols = [c for c in feature_cols if c in space and space[c]["integer"]]
+            fixed = {
+                c: space[c]["fixed"]
+                for c in feature_cols
+                if c in space and space[c]["fixed"] is not None
+            }
+
             try:
                 result = ml.suggest_next_experiments(
                     self.analysis_df,
                     target,
                     feature_cols=feature_cols,
                     direction=direction,
+                    n_suggestions=self.gui.bo_n_suggestions.value,
+                    bounds=bounds,
+                    integer_cols=integer_cols,
+                    fixed=fixed,
                 )
             except ValueError as e:
                 print(f"⚠️ {e}")
@@ -1590,8 +1733,12 @@ class SampleDataExplorer:
                 "| " + " | ".join(header_cols) + " |",
                 "|" + "---|" * len(header_cols),
             ]
+            integer_set = set(result["integer_cols"])
             for _, row in suggestions.iterrows():
-                values = [f"{row[c]:.3g}" for c in display_feature_cols]
+                values = [
+                    f"{int(row[c])}" if c in integer_set else f"{row[c]:.3g}"
+                    for c in display_feature_cols
+                ]
                 table_lines.append(
                     "| "
                     + " | ".join(values)
@@ -1601,11 +1748,42 @@ class SampleDataExplorer:
 
             steps_estimate = ml.estimate_max_bo_steps(result["n_features"])
 
+            upper = result["length_scale_upper"]
+            length_scale_lines = "\n".join(
+                f"  - `{col}`: {ls:.2g}"
+                + (" (at the upper limit: no detectable effect)" if ls >= upper * 0.99 else "")
+                for col, ls in sorted(result["length_scales"].items(), key=lambda kv: kv[1])
+            )
+
+            # Once the batch has covered the promising regions, EI for the rest
+            # is ~0 and later picks are close to arbitrary - say so.
+            ei = suggestions["expected_improvement"].to_numpy()
+            low_ei = [i + 1 for i, v in enumerate(ei) if ei[0] > 0 and v < 1e-3 * ei[0]]
+            low_ei_note = (
+                f"- ⚠️ Suggestion(s) #{low_ei[0]} onward have near-zero expected "
+                "improvement: given the earlier picks, the model sees little left to "
+                "gain, so these are weakly motivated. Fewer suggestions, or measuring "
+                "the first ones before asking again, is usually better.\n"
+                if low_ei
+                else ""
+            )
+
             summary = (
-                f"### Suggested next experiments to {result['direction']} `{target}`\n\n"
+                f"### {len(suggestions)} suggested next experiment(s) to "
+                f"{result['direction']} `{target}`\n\n"
                 f"- Samples used: **{result['n_samples']}**\n"
-                f"- Best observed so far: **{result['best_observed']:.4g}**\n"
-                f"- {steps_estimate['rationale']}\n\n" + "\n".join(table_lines)
+                f"- Best observed so far: **{result['best_observed']:.4g}**; best "
+                f"predicted at a measured sample (what EI tries to beat): "
+                f"**{result['incumbent']:.4g}**\n"
+                f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** (1 SD, "
+                f"in `{target}` units)\n"
+                f"- Length scales (0-1 scaled; smaller = stronger effect; estimated "
+                f"from the data, so uncertain with few or noisy samples):\n"
+                f"{length_scale_lines}\n"
+                f"- {steps_estimate['rationale']}\n"
+                + low_ei_note
+                + "- Listed in the order they were picked as one batch (see 'How are the "
+                "suggestions calculated?' above).\n\n" + "\n".join(table_lines)
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_bo_suggestions_plot(suggestions, target)

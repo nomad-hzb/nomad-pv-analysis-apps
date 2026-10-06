@@ -611,7 +611,7 @@ class DataManager:
         """Build a link to this entry's fitted results in the NOMAD GUI.
 
         Derived from self.url (URL_BASE + API_ENDPOINT, e.g.
-        "https://nomad-hzb-se.de/nomad-oasis/api/v1") rather than importing
+        "https://nomad-hzb-se.helmholtz-berlin.de/nomad-oasis/api/v1") rather than importing
         URL_BASE separately, since the GUI mount point is the same
         "/nomad-oasis" prefix with "/api/v1" swapped for "/gui" - avoids a
         second, possibly-diverging way to name the same server.

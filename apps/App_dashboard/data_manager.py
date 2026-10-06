@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 try:
     from hysprint_utils.config import URL_BASE
 except ImportError:
-    URL_BASE = "https://nomad-hzb-se.de"
+    URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     logging.getLogger(__name__).warning(
         "hysprint_utils.config not found; using hardcoded URL fallback"
     )

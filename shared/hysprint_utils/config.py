@@ -14,7 +14,7 @@ of editing the defaults below, so a fork can stay in sync with upstream.
 import os
 
 # Base URL of the NOMAD Oasis instance (no trailing slash)
-URL_BASE: str = os.environ.get("HYSPRINT_URL_BASE", "https://nomad-hzb-se.de")
+URL_BASE: str = os.environ.get("HYSPRINT_URL_BASE", "https://nomad-hzb-se.helmholtz-berlin.de")
 
 # API path prefix (no trailing slash)
 API_ENDPOINT: str = os.environ.get("HYSPRINT_API_ENDPOINT", "/nomad-oasis/api/v1")

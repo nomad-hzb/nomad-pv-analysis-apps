@@ -17,7 +17,7 @@ from hysprint_utils import plotting_utils
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
 except ImportError:
-    URL_BASE = "https://nomad-hzb-se.de"
+    URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     API_ENDPOINT = "/nomad-oasis/api/v1"
     logging.getLogger(__name__).warning(
         "hysprint_utils.config not found; using hardcoded URL fallback"

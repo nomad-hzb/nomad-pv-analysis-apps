@@ -3,7 +3,7 @@ Generate test fixtures by fetching real data from NOMAD Oasis.
 
 Usage:
     python scripts/generate_fixtures.py \\
-        --url https://nomad-hzb-se.de/nomad-oasis/api/v1 \\
+        --url https://nomad-hzb-se.helmholtz-berlin.de/nomad-oasis/api/v1 \\
         --token YOUR_TOKEN \\
         --batch BATCH_ID \\
         --app TRPL_Analysis

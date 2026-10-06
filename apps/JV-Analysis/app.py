@@ -47,7 +47,7 @@ except ImportError:
         "hysprint_utils.config not found -- using built-in defaults. "
         "Create shared/hysprint_utils/config.py to override."
     )
-    URL_BASE = "https://nomad-hzb-se.de"
+    URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     API_ENDPOINT = "/nomad-oasis/api/v1"
 
 try:

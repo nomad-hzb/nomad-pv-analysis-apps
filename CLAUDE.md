@@ -53,7 +53,7 @@ secrets.py                    # repo root, NOMAD_CLIENT_ACCESS_TOKEN fallback �
    try:
        from hysprint_utils.config import API_ENDPOINT, URL_BASE
    except ImportError:
-       URL_BASE = "https://nomad-hzb-se.de"
+       URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
        API_ENDPOINT = "/nomad-oasis/api/v1"
        logging.getLogger(__name__).warning("hysprint_utils.config not found; using hardcoded URL fallback")
    ```
@@ -243,6 +243,11 @@ executed module's globals dict**, and a notebook auto-displays the value of
 its last expression — so without the binding, cell 0 dumps `__builtins__`,
 every imported module and every bootstrap function into the app's UI under
 Voila. Hit for real on CE-AME. Don't "simplify" it away.
+
+The HZB SE Oasis needs the HZB outbound proxy, so `bootstrap.py` applies it
+by default (`HZB_SE_PROXY`) while `HYSPRINT_URL_BASE` is unset or the HZB SE
+URL and no proxy is configured; any other Oasis gets none. Opt out with
+`HTTP_PROXY = ""`/`HTTPS_PROXY = ""` in `oasis_local_config.py`.
 
 `bootstrap.py` (repo root) installs `shared/` and then inserts it directly
 into `sys.path` — a deliberate, sanctioned exception to rule 8, not

@@ -838,8 +838,8 @@ class PlotManager:
 
     def create_bo_suggestions_plot(self, suggestions: pd.DataFrame, target_col: str):
         """Render suggested next-experiment predictions (mean ± std) as a bar chart,
-        ranked left-to-right by expected improvement (the suggestions DataFrame's own
-        row order, set by the caller)."""
+        left-to-right in the order the batch picked them (the suggestions
+        DataFrame's own row order)."""
         if self.bo_widget is None:
             raise ValueError("PlotManager has no bo_widget configured")
 
@@ -857,7 +857,7 @@ class PlotManager:
         )
         self.bo_widget.update_layout(
             title=f"Predicted {target_col} for suggested next experiments",
-            xaxis_title="Suggestion (ranked by expected improvement)",
+            xaxis_title="Suggestion (in the order picked)",
             yaxis_title=target_col,
             template="plotly_white",
             height=450,

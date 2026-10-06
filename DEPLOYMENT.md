@@ -1,6 +1,6 @@
 # Deploying the app suite to a second NOMAD Oasis
 
-This repo defaults to the HZB SE Oasis (`nomad-hzb-se.de`) but contains no
+This repo defaults to the HZB SE Oasis (`nomad-hzb-se.helmholtz-berlin.de`) but contains no
 hardcoded dependency on it. Everything a second deployment needs to change
 lives in one gitignored file, `oasis_local_config.py`, read by `bootstrap.py`
 at the top of every notebook.
@@ -156,9 +156,14 @@ already set at the container level wins; this file never overwrites it.
 ### The CE-AME file
 
 The proxy host below is a placeholder. Deployment-specific values like the
-real proxy address are deliberately not written into this repo - they belong
-in the gitignored `oasis_local_config.py` of that one deployment. Get the
-actual address from whoever administers the Oasis.
+real proxy address belong in the gitignored `oasis_local_config.py` of that
+one deployment; get the actual address from whoever administers the Oasis.
+The one exception is the HZB SE Oasis, which always needs the HZB outbound
+proxy: `bootstrap.py` applies it by default (`HZB_SE_PROXY`) whenever
+`HYSPRINT_URL_BASE` is unset or the HZB SE URL and no proxy is configured, so
+that deployment needs no local file. To opt out, set `HTTP_PROXY = ""` and
+`HTTPS_PROXY = ""` in `oasis_local_config.py`; any other `HYSPRINT_URL_BASE`
+turns the default off.
 
 ```python
 # --- Which Oasis the apps talk to ---

@@ -289,6 +289,37 @@ class GUIManager:
         self.analysis_data_status_output = widgets.Output()
 
         # ====================================================================
+        # ANALYSIS DATA - UPLOAD YOUR OWN CSV (bypasses the NOMAD batch load)
+        # ====================================================================
+        self.analysis_data_upload = widgets.FileUpload(
+            description="Upload CSV",
+            button_style="primary",
+            accept=".csv",
+            multiple=False,
+            layout={"width": "220px"},
+        )
+        self.analysis_data_upload_output = widgets.Output()
+        # Which uploaded columns are results (targets); every other numeric
+        # column becomes a process parameter. Hidden until a CSV is uploaded.
+        self.analysis_data_upload_results_selector = widgets.SelectMultiple(
+            description="Result columns:",
+            style={"description_width": "110px"},
+            layout={"width": "450px", "height": "140px"},
+        )
+        self.analysis_data_upload_roles_box = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>Pick which uploaded columns are "
+                    "<b>results</b> (what you measured and want to optimize, e.g. "
+                    "efficiency). Every other numeric column is treated as a process "
+                    "parameter. Ctrl/Shift-click to select several.</p>"
+                ),
+                self.analysis_data_upload_results_selector,
+            ],
+            layout={"display": "none"},
+        )
+
+        # ====================================================================
         # ANALYSIS DATA - ROW FILTERS (e.g. "Fill Factor (JV) >= 0.3")
         # ====================================================================
         self.filter_column_selector = widgets.Dropdown(
@@ -460,6 +491,15 @@ class GUIManager:
             layout={"width": "200px"},
         )
 
+        self.bo_n_suggestions = widgets.BoundedIntText(
+            value=5,
+            min=1,
+            max=20,
+            description="Suggestions:",
+            style={"description_width": "90px"},
+            layout={"width": "170px"},
+        )
+
         self.suggest_experiments_button = widgets.Button(
             description="Suggest Next Experiments",
             button_style="success",
@@ -475,6 +515,30 @@ class GUIManager:
         )
 
         self.bo_output = widgets.Output()
+
+        # Per-parameter search space (min / max / integer / fixed value), rebuilt
+        # by set_bo_search_space() whenever the checked metadata columns change.
+        self.bo_search_space_box = widgets.VBox()
+        self.bo_search_space_accordion = widgets.Accordion(
+            children=[
+                widgets.VBox(
+                    [
+                        widgets.HTML(
+                            "<p style='color:#666;'>Where suggestions may be placed. "
+                            "Defaults to the range already measured. Narrow or widen a "
+                            "range, mark a parameter as <b>integer</b> (only whole numbers "
+                            "are suggested; detected automatically when all measured values "
+                            "are whole numbers), or <b>fix</b> it to one value for every "
+                            "suggestion. Measured samples outside the range still train "
+                            "the model.</p>"
+                        ),
+                        self.bo_search_space_box,
+                    ]
+                )
+            ],
+            selected_index=None,
+        )
+        self.bo_search_space_accordion.set_title(0, "Search space (optional)")
 
         self.bo_widget = go.FigureWidget()
         self.bo_widget.update_layout(
@@ -727,6 +791,12 @@ class GUIManager:
             self.suggest_experiments_button.on_click(callbacks["suggest_experiments"])
         if "recalculate_analysis_data" in callbacks:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
+        if "upload_analysis_csv" in callbacks:
+            self.analysis_data_upload.observe(callbacks["upload_analysis_csv"], names="value")
+        if "upload_results_columns_changed" in callbacks:
+            self.analysis_data_upload_results_selector.observe(
+                callbacks["upload_results_columns_changed"], names="value"
+            )
         if "add_row_filter" in callbacks:
             self.add_filter_button.on_click(callbacks["add_row_filter"])
         if "download_analysis_data_preview" in callbacks:
@@ -873,6 +943,65 @@ class GUIManager:
             checkbox.observe(on_toggle, names="value")
             checkboxes.append(checkbox)
         self.sample_exclusion_checklist_box.children = checkboxes
+
+    def set_bo_search_space(self, defaults: list) -> None:
+        """(Re)build the BO tab's search-space rows, one per parameter.
+
+        Args:
+            defaults: list of {"col", "min", "max", "integer"} dicts (observed
+                range and detected integer-ness). A column already shown keeps
+                whatever the user entered, matching set_analysis_columns'
+                preserve-or-default pattern.
+        """
+        previous = {row._bo_col: row for row in self.bo_search_space_box.children}
+        rows = []
+        for d in defaults:
+            if d["col"] in previous:
+                rows.append(previous[d["col"]])
+                continue
+            label = widgets.Label(d["col"], layout={"width": "220px"})
+            min_box = widgets.FloatText(
+                value=d["min"],
+                description="min",
+                layout={"width": "150px"},
+                style={"description_width": "30px"},
+            )
+            max_box = widgets.FloatText(
+                value=d["max"],
+                description="max",
+                layout={"width": "150px"},
+                style={"description_width": "30px"},
+            )
+            integer_box = widgets.Checkbox(
+                value=d["integer"], description="integer", indent=False, layout={"width": "80px"}
+            )
+            fix_box = widgets.Checkbox(
+                value=False, description="fix at", indent=False, layout={"width": "65px"}
+            )
+            fix_value = widgets.FloatText(value=d["min"], layout={"width": "90px"}, disabled=True)
+            fix_box.observe(
+                lambda change, fv=fix_value: setattr(fv, "disabled", not change["new"]),
+                names="value",
+            )
+            row = widgets.HBox([label, min_box, max_box, integer_box, fix_box, fix_value])
+            row._bo_col = d["col"]
+            row._bo_widgets = (min_box, max_box, integer_box, fix_box, fix_value)
+            rows.append(row)
+        self.bo_search_space_box.children = rows
+
+    def get_bo_search_space(self) -> dict:
+        """{col: {"min", "max", "integer", "fixed" (None or a value)}} from the
+        BO tab's search-space rows."""
+        space = {}
+        for row in self.bo_search_space_box.children:
+            min_box, max_box, integer_box, fix_box, fix_value = row._bo_widgets
+            space[row._bo_col] = {
+                "min": min_box.value,
+                "max": max_box.value,
+                "integer": integer_box.value,
+                "fixed": fix_value.value if fix_box.value else None,
+            }
+        return space
 
     def get_excluded_sample_ids(self) -> set:
         """sample_ids currently unchecked in the "Exclude specific samples" list."""
@@ -1023,8 +1152,32 @@ class GUIManager:
             [self.param_summary_output], layout={"padding": "20px"}
         )
 
+        upload_box = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<h4 style='margin:0 0 4px 0;'>\U0001f4e4 Use your own data (optional)</h4>"
+                    "<p style='color:#666; margin:0;'>Upload a CSV to run Correlations, "
+                    "Random Forest, Bayesian Optimization and Experimental on data that "
+                    "never came from a NOMAD batch load. One row per sample, one column per "
+                    "parameter/result (this tab's own 'Download CSV' export works as-is). "
+                    "It replaces the loaded dataset for every \U0001f517 tab until you load "
+                    "NOMAD batches again. A missing sample_id column is generated (row_1, "
+                    "row_2, ...); text columns (e.g. a material name) become ANOVA grouping "
+                    "options; a column named 'datetime' enables Process Drift.</p>"
+                ),
+                widgets.HBox([self.analysis_data_upload, self.analysis_data_upload_output]),
+                self.analysis_data_upload_roles_box,
+            ],
+            layout={
+                "border": "1px solid #cfd8dc",
+                "padding": "10px",
+                "margin": "0 0 12px 0",
+            },
+        )
+
         analysis_data_tab = widgets.VBox(
             [
+                upload_box,
                 widgets.HTML(
                     "<p style='color:#666;'>This is the full dataset loaded on the Parameter "
                     "Summary/Plotting tabs (independent of what's currently selected there). "
@@ -1166,6 +1319,56 @@ class GUIManager:
             layout={"padding": "20px"},
         )
 
+        bo_explanation = widgets.Accordion(
+            children=[
+                widgets.HTML(
+                    "<div style='color:#444; line-height:1.5;'>"
+                    "<p><b>1. Fit a surrogate model.</b> A Gaussian Process (GP) is fit to "
+                    "your measured samples: the checked Process Metadata columns as inputs, "
+                    "the target as output. For any parameter combination, the GP returns a "
+                    "predicted target value (mean) and how unsure it is (std). Uncertainty "
+                    "is small near measured samples and grows away from them. Each "
+                    "parameter gets its own <i>length scale</i>: how far you must move it "
+                    "before the target changes. A length scale at the upper limit means "
+                    "the data shows no detectable effect of that parameter. The model also "
+                    "learns a <i>noise</i> level from the scatter between similar samples "
+                    "(e.g. replicates), so it doesn't chase a single lucky result.</p>"
+                    "<p><b>2. Score candidates.</b> 10000 random parameter combinations are "
+                    "drawn inside the search space (default: the range you have already "
+                    "measured; set it under 'Search space'). Integer parameters only take "
+                    "whole numbers; fixed ones keep their value. Each candidate gets an "
+                    "<i>Expected Improvement</i> (EI) score: how much it is expected to "
+                    "beat the current best, averaged over the GP's uncertainty. The current "
+                    "best is the best <i>predicted</i> value among your measured samples, "
+                    "not the best raw measurement, since with noisy data the top measurement "
+                    "is partly luck. EI is high where the prediction is good (exploitation) "
+                    "or where the model knows little (exploration).</p>"
+                    "<p><b>3. Pick a batch.</b> Textbook BO picks only the single best-EI "
+                    "point, measures it, refits and repeats, so one run gives one "
+                    "suggestion. Since a lab usually runs several samples at once, this "
+                    "tool uses the <i>Kriging Believer</i> batch method: after picking a "
+                    "point it pretends that point was measured, without noise, exactly as "
+                    "predicted, updates the GP with that fake result, and picks again. "
+                    "The fake result removes the uncertainty around the first pick, so "
+                    "the next pick goes somewhere else instead of right next to it. "
+                    "This repeats until the requested number of suggestions is reached. "
+                    "With Suggestions = 1 you get exactly one classic BO step.</p>"
+                    "<p><b>Reading the table:</b> suggestions are listed in the order they "
+                    "were picked (#1 is the classic single-step BO choice). "
+                    "<i>predicted</i> and <i>&plusmn; std</i> come from the GP fit on real "
+                    "data only; std is the uncertainty of the prediction itself, and a "
+                    "single new measurement will additionally scatter by about the "
+                    "reported noise. <i>Expected improvement</i> is the score at the "
+                    "moment the point was picked, i.e. given the earlier picks, so it "
+                    "usually drops down the list. After measuring, add the new data and "
+                    "run again.</p>"
+                    "</div>"
+                )
+            ],
+            selected_index=None,
+        )
+        bo_explanation.set_title(0, "How are the suggestions calculated?")
+
         bayesian_optimization_tab = widgets.VBox(
             [
                 widgets.HTML(
@@ -1187,14 +1390,17 @@ class GUIManager:
                     '<a href="https://en.wikipedia.org/wiki/Bayesian_optimization" target="_blank">'
                     "Bayesian optimization (Wikipedia)</a></p>"
                 ),
+                bo_explanation,
                 widgets.HBox(
                     [
                         self.bo_target_selector,
                         self.bo_direction_selector,
+                        self.bo_n_suggestions,
                         self.suggest_experiments_button,
                         self.bo_download_button,
                     ]
                 ),
+                self.bo_search_space_accordion,
                 self.bo_output,
                 self.bo_widget,
                 self.bo_download_output,

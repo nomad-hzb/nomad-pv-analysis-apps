@@ -18,6 +18,7 @@ Classes:
 Author: HySprint Team
 """
 
+import io
 import logging
 import operator
 from typing import Dict, List, Optional
@@ -49,6 +50,35 @@ def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6)
     values in df. Advisory only - never blocks a correlation/RF/BO computation,
     just flags columns unlikely to carry a useful signal."""
     return [col for col in columns if col in df.columns and df[col].dropna().nunique() < min_unique]
+
+
+def parse_uploaded_analysis_csv(csv_bytes: bytes) -> pd.DataFrame:
+    """Parse a user-uploaded CSV, in the Analysis Data tab's own "Download CSV"
+    format, into a flat dataframe that can replace the batch-loaded analysis
+    dataset (issue #40) - lets Correlations/Random Forest/Bayesian Optimization
+    run on data that never came from a NOMAD batch load.
+
+    A missing sample_id column is generated (row_1, row_2, ...) so downstream
+    per-sample logic (row filters, sample exclusion) still has something to
+    key on - the exported format doesn't require one to be present.
+    """
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+    if "sample_id" not in df.columns:
+        df.insert(0, "sample_id", [f"row_{i + 1}" for i in range(len(df))])
+    # Always text: sample exclusion matches on checkbox descriptions (strings),
+    # and a numeric id must never be picked up as a numeric feature.
+    df["sample_id"] = df["sample_id"].astype(str)
+    return df
+
+
+def uploaded_numeric_columns(df: pd.DataFrame) -> List[str]:
+    """Numeric columns of an uploaded CSV that can feed the analysis tabs: at
+    least two distinct values, and not sample_id (which may itself be numeric)."""
+    return [
+        col
+        for col in df.select_dtypes(include="number").columns
+        if col != "sample_id" and df[col].dropna().nunique() > 1
+    ]
 
 
 def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame:

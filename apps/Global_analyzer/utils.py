@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 try:
     from hysprint_utils.config import URL_BASE
 except ImportError:
-    URL_BASE = "https://nomad-hzb-se.de"
+    URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     logger.warning("hysprint_utils.config not found; using hardcoded URL fallback")
 
 DOE_VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
