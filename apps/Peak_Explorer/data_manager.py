@@ -289,8 +289,9 @@ class CSVDataLoader:
                 continue
 
             try:
+                # Parse the whole row before appending either list, so a bad cell
+                # drops its wavelength together with its intensities.
                 wavelength = float(parts[0])
-                wavelengths_list.append(wavelength)
 
                 intensity_strings = parts[1 : len(self.timestamps) + 1]
                 intensities = []
@@ -304,6 +305,7 @@ class CSVDataLoader:
                 while len(intensities) < len(self.timestamps):
                     intensities.append(0.0)
 
+                wavelengths_list.append(wavelength)
                 intensity_matrix.append(intensities[: len(self.timestamps)])
             except (ValueError, IndexError):
                 continue
@@ -391,8 +393,9 @@ class CSVDataLoader:
                 continue
 
             try:
+                # Parse the whole row before appending either list, so a bad cell
+                # drops its timestamp together with its intensities.
                 timestamp = float(parts[0])
-                timestamps_list.append(timestamp)
 
                 # Get intensities (should match number of wavelengths)
                 # TODO: empty cells and missing trailing values become 0.0 rather
@@ -403,6 +406,7 @@ class CSVDataLoader:
                 while len(intensities) < len(self.wavelengths):
                     intensities.append(0.0)
 
+                timestamps_list.append(timestamp)
                 intensity_matrix.append(intensities[: len(self.wavelengths)])
             except (ValueError, IndexError) as e:
                 debug_print(f"Skipping line due to error: {e}", "DATA")
