@@ -431,6 +431,48 @@ def test_h5_export_writes_metadata_and_units(fe, ex, x_nm, tmp_path):
     assert units["p0_height"] == "-"
 
 
+def _frame_result(index, success, chi_squared):
+    """A minimal fitting result for one time frame; chi_squared tags the frame."""
+    result = {
+        "index": index,
+        "time": 10.0 * index,
+        "success": success,
+        "chi_squared": chi_squared,
+        "r_squared": 0.9 if success else np.nan,
+        "peak_models": [{"type": "Gaussian", "name": "A"}],
+    }
+    if success:
+        result["parameters"] = {
+            "p0_center": {"value": 500.0 + index, "stderr": 0.1},
+            "p0_amplitude": {"value": 100.0, "stderr": 1.0},
+            "p0_sigma": {"value": 5.0, "stderr": 0.05},
+        }
+    return result
+
+
+def test_h5_export_keeps_quality_metrics_on_their_own_frame(ex, tmp_path):
+    """A failed frame and out-of-order (parallel) results must not shift Success, chi^2
+    etc. onto other frames: every row has to describe one Time_Index."""
+    results = {
+        2: _frame_result(2, True, chi_squared=2.0),
+        0: _frame_result(0, True, chi_squared=0.0),
+        1: _frame_result(1, False, chi_squared=1.0),
+        3: _frame_result(3, True, chi_squared=3.0),
+    }
+    path = tmp_path / "fit.h5"
+    h5py.File(path, "w").close()
+    ex.ResultExporter().export_to_isa_h5(results, str(path))
+    with h5py.File(path, "r") as f:
+        (group,) = f["fitting_results"].values()
+        columns = {name: group[name][()] for name in group}
+    np.testing.assert_array_equal(columns["Time_Index"], [0, 1, 2, 3])
+    np.testing.assert_array_equal(columns["Time"], [0.0, 10.0, 20.0, 30.0])
+    np.testing.assert_array_equal(columns["Chi_Squared"], [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(columns["Success"], [1.0, 0.0, 1.0, 1.0])
+    np.testing.assert_array_equal(columns["p0_center"][[0, 2, 3]], [500.0, 502.0, 503.0])
+    assert np.isnan(columns["p0_center"][1])
+
+
 def _version_from_pyproject():
     text = (APP_DIR / "pyproject.toml").read_text(encoding="utf-8")
     return re.search(r'^version\s*=\s*"([^"]+)"', text, re.M).group(1)
@@ -501,6 +543,21 @@ def test_csv_simple_format(dm):
     np.testing.assert_allclose(wl, [500, 501, 502])
     np.testing.assert_allclose(t, [0.0, 0.5])
     np.testing.assert_allclose(data, [[1, 2, 3], [4, 5, 6]])
+
+
+def test_csv_pl_format_row_with_bad_cell_drops_its_wavelength_too(dm):
+    data, wl, _t, _unit = dm.CSVDataLoader().load_data(
+        PL_FILE.replace("501,4,5,6", "501,bad,5,6").encode()
+    )
+    np.testing.assert_allclose(wl, [500, 502])
+    np.testing.assert_allclose(data, [[1, 7], [2, 8], [3, 9]])
+
+
+def test_csv_simple_format_row_with_bad_cell_drops_its_timestamp_too(dm):
+    content = ",500,501,502\n0.0,1,2,3\n0.5,x,5,6\n1.0,7,8,9\n"
+    data, _wl, t = dm.CSVDataLoader().load_data(content.encode())
+    np.testing.assert_allclose(t, [0.0, 1.0])
+    np.testing.assert_allclose(data, [[1, 2, 3], [7, 8, 9]])
 
 
 @pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig"])
@@ -705,7 +762,6 @@ def test_background_apply_then_remove_restores_the_data(app, x_nm):
     np.testing.assert_allclose(application.data_manager.data_matrix, frames)
 
 
-@BUG("the stored original data is not reversed by the nm/eV conversion")
 def test_background_remove_after_ev_conversion_keeps_axis_order(app, x_nm):
     """Removing a background restores the stored original; after nm -> eV the axis is
     reversed, so the restored data has to be in eV order too."""
@@ -718,6 +774,34 @@ def test_background_remove_after_ev_conversion_keeps_axis_order(app, x_nm):
     application.on_convert_energy(None)
     application.on_background_remove(None)
     np.testing.assert_allclose(application.data_manager.data_matrix, frames[:, ::-1])
+
+
+def test_new_data_load_forgets_the_previous_background_original(app, x_nm):
+    """Applying a background, loading other data and removing the background must not
+    bring the first data set back."""
+    first = np.array([_two_peaks(x_nm, seed=s) for s in range(2)])
+    second = first + 100.0
+    application = app(first, x_nm)
+    application.widgets["background_method"].value = "Linear"
+    application.widgets["bg_linear_slope"].value = 0.0
+    application.widgets["bg_linear_intercept"].value = 1.0
+    application.on_background_apply(None)
+    application.data_manager.data_matrix = second.copy()
+    application.update_ui_after_data_load()
+    assert application.original_data_matrix is None
+    assert not application.background_applied
+    application.on_background_remove(None)
+    np.testing.assert_allclose(application.data_manager.data_matrix, second)
+
+
+def test_unit_conversion_and_new_data_drop_old_fit_results(app, x_nm):
+    application = app(np.array([_two_peaks(x_nm)]), x_nm)
+    application.fitting_engine.fitting_results = {0: {"index": 0, "success": True}}
+    application.on_convert_energy(None)
+    assert not application.fitting_engine.has_fitting_results()
+    application.fitting_engine.fitting_results = {0: {"index": 0, "success": True}}
+    application.update_ui_after_data_load()
+    assert not application.fitting_engine.has_fitting_results()
 
 
 @BUG("np.polyfit on a spectrum with NaN returns NaN coefficients")

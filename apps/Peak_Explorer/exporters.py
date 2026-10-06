@@ -119,11 +119,27 @@ class ResultExporter:
         peak_params_df, stderr_df = self._create_peak_parameters_dataframe(fitting_results)
         quality_df = self._create_quality_metrics_dataframe(fitting_results)
 
-        # Merge the three dataframes into one; columns shared between them are kept once
-        combined_df = peak_params_df.copy()
-        for df in (stderr_df, quality_df):
+        # Merge the three dataframes into one row per frame; columns shared between them
+        # are kept once. They must be matched on the frame, not on row position: the
+        # parameter tables skip failed frames and are sorted, the quality table keeps
+        # every frame in result order.
+        frame_keys = ["Time_Index", "Time"]
+        combined_df = None
+        for df in (peak_params_df, stderr_df, quality_df):
+            if df.empty:
+                continue
+            if combined_df is None:
+                combined_df = df.copy()
+                continue
             new_cols = [c for c in df.columns if c not in combined_df.columns]
-            combined_df = combined_df.join(df[new_cols], how="outer") if new_cols else combined_df
+            if new_cols:
+                combined_df = combined_df.merge(
+                    df[frame_keys + new_cols], on=frame_keys, how="outer"
+                )
+        if combined_df is None:
+            combined_df = pd.DataFrame(columns=frame_keys)
+        else:
+            combined_df = combined_df.sort_values("Time_Index").reset_index(drop=True)
 
         # Batch fits run in one mode; "mixed" would mean results were merged
         modes = {
@@ -189,8 +205,6 @@ class ResultExporter:
 
             # One dataset per column
             for col in combined_df.columns:
-                import pandas as pd
-
                 series = pd.to_numeric(combined_df[col], errors="coerce")
                 data = series.values.astype(float)
                 if col in grp:
