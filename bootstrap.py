@@ -117,6 +117,14 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
     logger.info("Applied local proxy configuration: %s", os.environ["HTTPS_PROXY"])
 
 
+def _apply_usage_log_dir() -> None:
+    """Send every app's usage logs to one folder, shared/usage/ in this checkout (see
+    hysprint_utils.usage_tracking), unless the container or oasis_local_config.py already
+    set HYSPRINT_USAGE_LOG_DIR. Without this, an installed copy of hysprint_utils would
+    log next to itself, wherever pip put it."""
+    os.environ.setdefault("HYSPRINT_USAGE_LOG_DIR", str(REPO_ROOT / "shared" / "usage"))
+
+
 def _build_isolation_args() -> list[str]:
     """Skip pip's build isolation whenever hatchling is already installed.
 
@@ -311,6 +319,7 @@ def _install_app() -> None:
 _local_config = _load_local_config()
 _apply_config_env(_local_config)
 _apply_proxy_env(_local_config)
+_apply_usage_log_dir()
 _install_shared()
 _install_app()
 _silence_import_banners()
