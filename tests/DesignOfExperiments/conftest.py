@@ -16,3 +16,10 @@ _dm = importlib.util.module_from_spec(_spec)
 sys.modules["dm_doe"] = _dm
 sys.modules["data_manager"] = _dm
 _spec.loader.exec_module(_dm)
+
+sys.modules.pop("plot_manager", None)
+_pm_spec = importlib.util.spec_from_file_location("pm_doe", _APP_DIR / "plot_manager.py")
+_pm = importlib.util.module_from_spec(_pm_spec)
+sys.modules["pm_doe"] = _pm
+sys.modules["plot_manager"] = _pm
+_pm_spec.loader.exec_module(_pm)

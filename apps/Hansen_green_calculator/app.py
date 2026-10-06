@@ -13,6 +13,8 @@ import ipywidgets as widgets
 from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
+
+
 class HansenApp:
     """
     Unified Hansen Solubility Parameter app.

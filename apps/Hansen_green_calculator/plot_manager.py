@@ -264,7 +264,9 @@ def blend_3d(
                 mode="markers",
                 marker=marker,
                 text=selected_df.get("Name", pd.Series([""] * len(selected_df))),
-                hovertemplate="<b>SELECTED: %{text}</b><br>D: %{x}<br>P: %{y}<br>H: %{z}<extra></extra>",
+                hovertemplate=(
+                    "<b>SELECTED: %{text}</b><br>D: %{x}<br>P: %{y}<br>H: %{z}<extra></extra>"
+                ),
                 name="Selected",
             )
         )
