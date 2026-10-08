@@ -1956,11 +1956,11 @@ def test_suggest_pareto_experiments_needs_two_distinct_objectives():
 
 def test_categorical_checklist_defaults_unticked_and_keeps_choices():
     gui = GUIManager()
-    gui.set_analysis_columns(["pce"], ["temp"], ["material", "batch"])
+    gui.set_analysis_columns(["pce"], ["temp"], categorical_cols=["material", "batch"])
     assert gui.get_checked_categorical_columns() == []
 
     gui.categorical_checklist_box.children[0].value = True
-    gui.set_analysis_columns(["pce"], ["temp"], ["material", "batch", "solvent"])
+    gui.set_analysis_columns(["pce"], ["temp"], categorical_cols=["material", "batch", "solvent"])
 
     assert gui.get_checked_categorical_columns() == ["material"]
 
