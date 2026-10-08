@@ -15,7 +15,7 @@ from data_manager import DataManager
 from gui_components import GUIComponents
 from IPython.display import clear_output, display
 from plot_manager import PlotManager
-from sampling_algorithms import SamplingEngine
+from sampling_algorithms import SamplingEngine, get_notes
 from utils import Constants, ValidationUtils
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,8 @@ class DoEApplication:
         size_section = self.gui_components.create_sample_size_configurator()
         seed_section = self.gui_components.create_seed_configurator()
         advanced_section = self.gui_components.create_advanced_options()
+        design_options_section = self.gui_components.create_design_options()
+        notes_section = self.gui_components.create_design_notes()
         variable_section = self.gui_components.create_variable_configurator()
         control_section = self.gui_components.create_generation_controls()
         self.progress_section = self.gui_components.create_progress_section()
@@ -123,11 +125,13 @@ class DoEApplication:
                 size_section,
                 seed_section,
                 advanced_section,
+                design_options_section,
                 _sec("Variable Configuration"),
                 variable_section,
                 _sec("Generate"),
                 control_section,
                 self.progress_section,
+                notes_section,
                 _subsec("Quality Metrics"),
                 self.metrics_section,
             ],
@@ -266,6 +270,7 @@ class DoEApplication:
             self.gui_components.generate_button.disabled = True
 
         try:
+            self.gui_components.set_design_notes([])
             variables = self.gui_components.get_variables_from_widgets()
 
             if not variables:
@@ -282,15 +287,22 @@ class DoEApplication:
             params = self.gui_components.get_sampling_parameters()
             self._show_progress("Generating samples…")
 
-            self.current_samples = self.sampling_engine.generate_samples(
+            design = self.sampling_engine.generate_samples(
                 variables=variables,
                 algorithm=self.current_algorithm,
                 **params,
             )
 
-            self.quality_metrics = self.sampling_engine.calculate_quality_metrics(
-                self.current_samples, variables
+            # Metrics describe the design points themselves, before centre points
+            # and replicates (which would make the minimum distance 0).
+            self.quality_metrics = self.sampling_engine.calculate_quality_metrics(design, variables)
+            self.current_samples = self.sampling_engine.finalize_design(
+                design,
+                variables,
+                random_state=params.get("random_state"),
+                **self.gui_components.get_design_options(),
             )
+            self.gui_components.set_design_notes(get_notes(self.current_samples))
 
             self._update_results_display()
             self._update_metrics_display()
