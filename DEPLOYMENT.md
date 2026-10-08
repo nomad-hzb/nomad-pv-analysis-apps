@@ -259,7 +259,7 @@ real error:
 
 ```bash
 export HTTPS_PROXY=http://proxy.example.org:3128
-pip install "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@v0.1.65"
+pip install "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@v0.2.0"
 ```
 
 **Some `/nomad-oasis/...` path literals bypass `API_ENDPOINT`.** GUI-link and
