@@ -36,6 +36,10 @@ class Variable:
     # For categorical variables
     categories: Optional[List[str]] = None
 
+    # Continuous only: sample evenly in log10 space (load, time, concentration,
+    # dose often span decades; a linear design then crowds the top decade).
+    log_scale: bool = False
+
     def validate(self) -> Tuple[bool, str]:
         """Validate the variable definition."""
         if not self.name or not self.name.strip():
@@ -52,7 +56,13 @@ class Variable:
                 if self.step_size is None or self.step_size <= 0:
                     return False, "Positive step size required for discrete variables"
 
-        elif self.type == VariableType.CATEGORICAL:
+            if self.log_scale and self.min_value <= 0:
+                return False, "Log scale needs a min value above 0"
+
+        if self.log_scale and self.type != VariableType.CONTINUOUS:
+            return False, "Log scale is only available for continuous variables"
+
+        if self.type == VariableType.CATEGORICAL:
             if not self.categories or len(self.categories) < 2:
                 return False, "At least 2 categories required for categorical variables"
 
@@ -71,6 +81,7 @@ class Variable:
             "max_value": self.max_value,
             "step_size": self.step_size,
             "categories": self.categories,
+            "log_scale": self.log_scale,
         }
 
     @classmethod
@@ -84,6 +95,7 @@ class Variable:
             max_value=data.get("max_value"),
             step_size=data.get("step_size"),
             categories=data.get("categories"),
+            log_scale=bool(data.get("log_scale", False)),
         )
 
     def get_range(self) -> Union[Tuple[float, float], List[str]]:
