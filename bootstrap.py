@@ -32,10 +32,13 @@ import builtins
 import contextlib
 import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import io
+import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -133,8 +136,9 @@ def _build_isolation_args() -> list[str]:
     return []
 
 
-def _pip_install(target: Path) -> tuple[int, str]:
-    """Install target, returning pip's exit code and its combined output.
+def _pip_install(target: Path | str) -> tuple[int, str]:
+    """Install target (a directory or a requirement string), returning pip's exit code and
+    its combined output.
 
     Captured, not inherited: this runs as cell 0 of a Voila app, where anything
     pip writes to stdout/stderr is rendered into the app's own UI. Callers
@@ -308,10 +312,138 @@ def _install_app() -> None:
         logger.info("could not write the install marker %s", marker)
 
 
+# A tag of a tracked dependency: the series prefix, then dot-separated numbers ("v0.2.7").
+_TAG_NUMBERS = re.compile(r"\.(\d+(?:\.\d+)*)$")
+GIT_LS_REMOTE_TIMEOUT_S = 30
+
+
+def _read_track_tags(pyproject: Path) -> dict[str, dict]:
+    """The app's [tool.hysprint.track-tags] table: {distribution: {"url", "series"}}.
+
+    tomllib is stdlib from Python 3.11 on; older kernels fall back to the copy pip itself
+    ships, which every container that can run bootstrap has.
+    """
+    try:
+        import tomllib
+    except ImportError:
+        from pip._vendor import tomli as tomllib
+    with pyproject.open("rb") as fh:
+        data = tomllib.load(fh)
+    return data.get("tool", {}).get("hysprint", {}).get("track-tags", {})
+
+
+def _newest_tag(url: str, series: str) -> str | None:
+    """The newest tag of *series* (e.g. "v0.2" -> "v0.2.7") on the git remote *url*.
+
+    One `git ls-remote` round trip (through the proxy when one is set). None when the remote
+    cannot be reached or has no tag of the series.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--tags", "--refs", url],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GIT_LS_REMOTE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        logger.warning("could not list the tags of %s: %s", url, error)
+        return None
+    if result.returncode != 0:
+        logger.warning("could not list the tags of %s:\n%s", url, result.stderr.strip())
+        return None
+
+    candidates = []
+    for line in result.stdout.splitlines():
+        tag = line.rpartition("refs/tags/")[2]
+        if not tag.startswith(series):
+            continue
+        match = _TAG_NUMBERS.fullmatch(tag[len(series) :])
+        if match:
+            candidates.append((tuple(int(n) for n in match.group(1).split(".")), tag))
+    return max(candidates)[1] if candidates else None
+
+
+def _installed_tag(name: str) -> str | None:
+    """The git tag *name* was installed from, "editable" for a local development install,
+    or None when it is not installed (or not from git).
+
+    Read from the direct_url.json pip writes for every URL install, so it is exact even when
+    a tag and the package's own version number disagree.
+    """
+    for candidate in {name, name.replace("_", "-"), name.replace("-", "_")}:
+        try:
+            direct_url = importlib.metadata.distribution(candidate).read_text("direct_url.json")
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        if not direct_url:
+            return None
+        info = json.loads(direct_url)
+        if info.get("dir_info", {}).get("editable"):
+            return "editable"
+        return info.get("vcs_info", {}).get("requested_revision")
+    return None
+
+
+def _install_tracked_tags() -> None:
+    """Keep each dependency in the app's [tool.hysprint.track-tags] on its newest tag.
+
+    An entry names a git URL and a release series instead of one fixed tag:
+
+        [tool.hysprint.track-tags]
+        insitu_analyser = { url = "https://.../insitu_analyser.git", series = "v0.2" }
+
+    Every launch asks the remote for the newest tag of the series and installs it when the
+    kernel has a different one (or none), so a new release reaches the Oasis with no commit
+    here. Pushing that tag is the release; moving to a new series (a breaking release) stays
+    a deliberate edit of `series`. Checked on every launch rather than once per container
+    like _install_app, since the pyproject that keys that marker does not change when a tag
+    is pushed.
+
+    Non-fatal like _install_app: without a route to the git host the installed version
+    keeps running. A local development (editable) install is never replaced.
+    """
+    pyproject = Path.cwd() / "pyproject.toml"
+    if not pyproject.exists():
+        return
+    try:
+        tracked = _read_track_tags(pyproject)
+    except Exception as error:  # noqa: BLE001 - a broken table must not stop the app
+        logger.warning("could not read [tool.hysprint.track-tags] of %s: %s", pyproject, error)
+        return
+
+    for name, spec in tracked.items():
+        installed = _installed_tag(name)
+        if installed == "editable":
+            logger.info("%s is a local editable install; not tracking its tags", name)
+            continue
+        newest = _newest_tag(spec["url"], spec["series"])
+        if newest is None:
+            logger.warning("no %s tag of %s found; keeping %s", spec["series"], name, installed)
+            continue
+        if newest == installed:
+            logger.info("%s is on the newest %s tag, %s", name, spec["series"], newest)
+            continue
+
+        returncode, output = _pip_install(f"{name} @ git+{spec['url']}@{newest}")
+        if returncode != 0:
+            logger.warning(
+                "could not install %s %s (pip exit %d); keeping %s:\n%s",
+                name,
+                newest,
+                returncode,
+                installed,
+                output,
+            )
+            continue
+        logger.info("installed %s %s (was %s)", name, newest, installed)
+
+
 _local_config = _load_local_config()
 _apply_config_env(_local_config)
 _apply_proxy_env(_local_config)
 _install_shared()
 _install_app()
+_install_tracked_tags()
 _silence_import_banners()
 importlib.invalidate_caches()

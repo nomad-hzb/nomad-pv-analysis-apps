@@ -5,17 +5,21 @@ description = "Preview and analyse in-situ (GIWAXS, optical, logging) HDF5 runs 
 requires-python = ">=3.10"
 dependencies = [
     "hysprint-utils",
-    # Replaces the notebooks' own "pip install git+..." cell, which re-cloned develop on every
-    # kernel start. Pinned to a tag instead: the ref is resolved once at install time either
-    # way, so a branch would only hide which version is actually running. Raise this line to
-    # adopt a newer insitu_analyser; it is also what keeps the app working if the develop
-    # branch is ever removed.
-    "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@v0.2.0",
+    # insitu_analyser is not listed here: bootstrap.py installs it from
+    # [tool.hysprint.track-tags] below.
     "h5py>=3.8",
     "ipympl>=0.9",
     "ipywidgets>=8.0",
     "matplotlib>=3.0",
 ]
+
+# insitu_analyser follows the newest tag of one release series: bootstrap.py checks the remote
+# on every launch and installs a newer tag of the series, so an insitu_analyser release (a pushed
+# tag) reaches the Oasis without a commit here. Still always an exact tag, never a branch, so
+# the running version stays known (bootstrap logs it). Change `series` only to adopt a breaking
+# release line (e.g. v0.3, the NeXus file format).
+[tool.hysprint.track-tags]
+insitu_analyser = { url = "https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git", series = "v0.2" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

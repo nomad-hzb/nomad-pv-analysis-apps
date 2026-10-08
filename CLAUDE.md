@@ -271,6 +271,17 @@ editing dependencies re-triggers it and an unchanged app never pays twice.
 A failed app install warns and continues (most apps need nothing the NORTH
 image lacks, and breaking a working app over it would be a regression);
 only the `shared/` install is fatal.
+Then it installs **tracked git tags**: a `[tool.hysprint.track-tags]` table in
+the app's `pyproject.toml` names a git URL plus a release series (e.g.
+`ISA_Previewer`: `insitu_analyser`, series `v0.2`), and on every launch
+bootstrap installs the newest tag of that series if the kernel has a
+different one. This replaces raising a fixed `@vX.Y.Z` pin per release: a
+dependency release is a pushed tag, with no commit here. Do not put a tracked
+package back into `dependencies` as a fixed pin, and change `series` only to
+adopt a breaking release line. It runs on every launch (pushing a tag does
+not change `pyproject.toml`, so the install marker cannot see it), never
+replaces a local editable install, and is non-fatal like the app install.
+Details: `DEPLOYMENT.md` section 8.
 
 Last, it **silences import-time stdout** for the rest of the kernel's life by
 wrapping `builtins.__import__`: several third-party packages greet stdout when
