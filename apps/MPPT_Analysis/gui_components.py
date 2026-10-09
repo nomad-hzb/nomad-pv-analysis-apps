@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.5.0"
 
 
 def _html_float_format(value):
@@ -402,7 +402,12 @@ class GUIComponents:
         left, a live raw-data + fit + residuals preview on the right, apply-
         to-all-or-one-sample-at-a-time fitting, and a results table covering
         every selected sample (fitted or not)."""
-        from data_manager import fit_curve
+        from data_manager import (
+            OUTLIER_THRESHOLD,
+            OUTLIER_WINDOW,
+            fit_curve,
+            remove_outliers,
+        )
         from fitting_tools import available_fit_model_list
 
         dm = self.data_manager
@@ -471,6 +476,52 @@ class GUIComponents:
         fit_status = widgets.Output()
         preview_output = widgets.Output()
 
+        outlier_window = widgets.BoundedIntText(
+            value=OUTLIER_WINDOW,
+            min=3,
+            max=1001,
+            step=2,
+            description="Window (points):",
+            tooltip="Points in the rolling median that each point is compared to (odd number). "
+            "Larger tolerates longer noisy stretches.",
+            layout=widgets.Layout(width="230px"),
+            style={"description_width": "110px"},
+        )
+        outlier_threshold = widgets.BoundedFloatText(
+            value=OUTLIER_THRESHOLD,
+            min=1.0,
+            max=50.0,
+            step=0.5,
+            description="Threshold:",
+            tooltip="How far from the rolling median a point must be, in robust standard "
+            "deviations, to count as an outlier. Lower removes more points.",
+            layout=widgets.Layout(width="230px"),
+            style={"description_width": "110px"},
+        )
+        clean_all_button = widgets.Button(
+            description="Clean all plots",
+            button_style="warning",
+            icon="eraser",
+            tooltip="Set outliers to NaN in every selected measurement (raw data is kept). "
+            "Existing fits of those measurements are discarded.",
+            layout=widgets.Layout(width="150px"),
+        )
+        clean_this_button = widgets.Button(
+            description="Clean this plot",
+            button_style="warning",
+            icon="eraser",
+            tooltip="Set outliers to NaN in the measurement shown below (raw data is kept). "
+            "Its existing fit is discarded.",
+            layout=widgets.Layout(width="150px"),
+        )
+        restore_button = widgets.Button(
+            description="Restore raw data",
+            icon="undo",
+            tooltip="Undo cleaning for every measurement",
+            layout=widgets.Layout(width="150px"),
+        )
+        clean_status = widgets.HTML(value="")
+
         results_toggle = widgets.Accordion(
             children=[widgets.Output()], titles=("Show all fitting results",)
         )
@@ -480,6 +531,10 @@ class GUIComponents:
             children=[widgets.Output()], titles=("Statistical Summary",)
         )
         stats_toggle.selected_index = None
+
+        def _get_curve(key):
+            """(time, power_density) of one measurement, outlier-cleaned if it was cleaned."""
+            return dm.get_curve(curves, sample_ids, *key, cleaned=self.app_state.cleaned_power)
 
         def _curve_point_count(key):
             t_data, _ = dm.get_raw_curve(curves, sample_ids, *key)
@@ -523,7 +578,7 @@ class GUIComponents:
             key = _current_preview_key()
             defaults = {}
             if key:
-                t_data, y_data = dm.get_raw_curve(curves, sample_ids, *key)
+                t_data, y_data = _get_curve(key)
                 if t_data is not None and len(t_data):
                     start, end = _resolve_frame_range()
                     t_sub = t_data[start:] if end is None else t_data[start : end + 1]
@@ -580,7 +635,7 @@ class GUIComponents:
                     return
                 sample_id, curve_id = key
 
-                t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, curve_id)
+                t_data, y_data = _get_curve(key)
                 if t_data is None or len(y_data) == 0:
                     print(f"No curve data available for {sample_id} ({curve_id}).")
                     return
@@ -600,7 +655,7 @@ class GUIComponents:
                         x=np.arange(len(y_data)),
                         y=y_data,
                         mode="lines",
-                        name="Raw data",
+                        name="Cleaned data" if key in self.app_state.cleaned_power else "Raw data",
                         line=dict(width=2, color="#1f77b4"),
                     ),
                     row=1,
@@ -752,6 +807,7 @@ class GUIComponents:
                                 frame_range=frame_range,
                                 initial_values=initial_values,
                                 curve_ids=[cid for sid, cid in selected_keys if sid == sample_id],
+                                cleaned=self.app_state.cleaned_power,
                             ).items():
                                 fitted[(sample_id, curve_id)] = fit
                         self.app_state.set_fit_results(fitted)
@@ -769,6 +825,7 @@ class GUIComponents:
                             frame_range=frame_range,
                             initial_values=initial_values,
                             curve_ids=[curve_id],
+                            cleaned=self.app_state.cleaned_power,
                         )
                         new_fits = {(sample_id, cid): fit for cid, fit in fits.items()}
                         self.app_state.update_curve_fit_results(new_fits)
@@ -805,6 +862,48 @@ class GUIComponents:
             refresh_results_panels()
             update_preview()
 
+        def _after_data_change():
+            rebuild_param_fields()
+            refresh_results_panels()
+            update_preview()
+            if self.app_controller and self.app_state.has_fit_results():
+                self.app_controller.enable_plotting_tab(navigate=False)
+
+        def _clean(keys):
+            """Clean the given measurements from their raw data with the current
+            window/threshold, so repeating with new settings replaces the last cleaning."""
+            window = outlier_window.value | 1  # the rolling window is centred, so odd
+            cleaned = {}
+            n_removed = 0
+            for key in keys:
+                _, y_raw = dm.get_raw_curve(curves, sample_ids, *key)
+                if y_raw is None:
+                    continue
+                cleaned[key], removed = remove_outliers(y_raw, window, outlier_threshold.value)
+                n_removed += removed
+            had_fits = any(key in self.app_state.fitted_curves_data for key in cleaned)
+            self.app_state.set_cleaned_power(cleaned)
+            clean_status.value = (
+                f"<small>Removed {n_removed} outlier points from {len(cleaned)} measurement(s)"
+                f" (window {window}, threshold {outlier_threshold.value:g}). Raw data is kept."
+                + (" Their previous fits were discarded: fit again." if had_fits else "")
+                + "</small>"
+            )
+            _after_data_change()
+
+        def on_clean_this(b):
+            key = _current_preview_key()
+            if key:
+                _clean([key])
+
+        def on_clean_all(b):
+            _clean(selected_keys)
+
+        def on_restore(b):
+            self.app_state.clear_cleaned_power()
+            clean_status.value = "<small>Raw data restored for every measurement.</small>"
+            _after_data_change()
+
         update_formula(None)
         update_range_bounds()
         rebuild_param_fields()
@@ -816,6 +915,9 @@ class GUIComponents:
         curve_dropdown.observe(on_sample_change, names="value")
         auto_fit_button.on_click(lambda b: perform_fitting(False))
         manual_fit_button.on_click(lambda b: perform_fitting(True))
+        clean_this_button.on_click(on_clean_this)
+        clean_all_button.on_click(on_clean_all)
+        restore_button.on_click(on_restore)
 
         left_column = widgets.VBox(
             [
@@ -825,6 +927,11 @@ class GUIComponents:
                 param_fields_container,
                 frame_range_selector,
                 frame_range_info,
+                widgets.HTML("<b>Outlier cleaning:</b>"),
+                outlier_window,
+                outlier_threshold,
+                widgets.HBox([clean_all_button, restore_button]),
+                clean_status,
                 widgets.HBox([auto_fit_button, manual_fit_button]),
                 fit_status,
             ],
@@ -833,6 +940,7 @@ class GUIComponents:
         right_column = widgets.VBox(
             [
                 widgets.HBox([apply_to_all_checkbox, curve_dropdown]),
+                clean_this_button,
                 preview_output,
             ],
             layout=widgets.Layout(width="700px"),
@@ -1419,6 +1527,7 @@ class GUIComponents:
                 self.app_state.data["selected_samples"],
                 "power_density",
                 self.app_state.data.get("selected_curves"),
+                self.app_state.cleaned_power,
             )
 
             if selected_data:

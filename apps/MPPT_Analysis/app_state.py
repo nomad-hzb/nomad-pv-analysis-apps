@@ -25,6 +25,10 @@ class AppState:
         self.fitted_curves_data = {}
         self.last_fitted_model = None
 
+        # Outlier-cleaned power_density, {(sample_id, curve_id): array with NaN at
+        # the removed points}. A layer on top of data["curves"], which stays raw.
+        self.cleaned_power = {}
+
         # UI state
         self.sample_selectors = {}
 
@@ -46,6 +50,7 @@ class AppState:
         self.fit_results = None
         self.fitted_curves_data = {}
         self.last_fitted_model = None
+        self.cleaned_power = {}
         self.sample_selectors = {}
 
     def has_curves_data(self):
@@ -114,6 +119,33 @@ class AppState:
         other curve's fit untouched (the individual, one-curve-at-a-time path)."""
         self.fitted_curves_data.update(fits_by_key)
         self._rebuild_fit_results_df()
+
+    def set_cleaned_power(self, cleaned_by_key):
+        """Store outlier-cleaned power_density for {(sample_id, curve_id): array}.
+
+        The fit of every cleaned curve is dropped: it was made on the previous data
+        and would no longer match what the preview and the tables show.
+        """
+        self.cleaned_power.update(cleaned_by_key)
+        self._drop_fits(cleaned_by_key)
+
+    def clear_cleaned_power(self, keys=None):
+        """Go back to the raw data for the given keys (all of them when None)."""
+        keys = (
+            list(self.cleaned_power)
+            if keys is None
+            else [k for k in keys if k in self.cleaned_power]
+        )
+        for key in keys:
+            del self.cleaned_power[key]
+        self._drop_fits(keys)
+
+    def _drop_fits(self, keys):
+        dropped = [key for key in keys if key in self.fitted_curves_data]
+        if dropped:
+            for key in dropped:
+                del self.fitted_curves_data[key]
+            self._rebuild_fit_results_df()
 
     def get_sample_fit_results(self, sample_id):
         """Return {curve_id: fit_dict} for whatever has already been fitted for one sample."""
