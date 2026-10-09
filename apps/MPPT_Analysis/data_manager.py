@@ -209,6 +209,9 @@ def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
 
     resolved_end = end if end is not None else start + len(t_sliced) - 1
 
+    if initial_values:  # a NaN seed (e.g. a guess made on NaN data) can only abort the fit
+        initial_values = {k: v for k, v in initial_values.items() if np.isfinite(v)}
+
     valid_mask = ~(np.isnan(t_sliced) | np.isnan(y_sliced))
     t_sliced = t_sliced[valid_mask]
     y_sliced = y_sliced[valid_mask]

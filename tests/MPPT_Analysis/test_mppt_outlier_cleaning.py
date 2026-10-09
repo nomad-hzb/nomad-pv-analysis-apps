@@ -123,3 +123,22 @@ class TestCleanedLayer:
         state.cleaned_power[("s", 0)] = np.array([1.0])
         state.reset_data()
         assert state.cleaned_power == {}
+
+
+class TestNaNSeeds:
+    """A guess made on NaN-containing data is NaN for some models (Linear,
+    Exponential); it must not abort the fit."""
+
+    def test_nan_initial_values_are_ignored(self):
+        from data_manager import fit_curve
+        from fitting_tools import available_fit_model_list
+
+        t = np.linspace(0, 50, 400)
+        y = 2.0 + np.exp(-t / 10.0)
+        y[100] = np.nan
+        for model in available_fit_model_list:
+            if model.abbreviated_name not in ("Linear", "Exponential"):
+                continue
+            seeds = dict.fromkeys(model.columns[: model.n_params], np.nan)
+            fit = fit_curve(t, y, model, (0, None), seeds)
+            assert fit is not None, model.abbreviated_name

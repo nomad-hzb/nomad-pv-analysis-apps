@@ -583,6 +583,9 @@ class GUIComponents:
                     start, end = _resolve_frame_range()
                     t_sub = t_data[start:] if end is None else t_data[start : end + 1]
                     y_sub = y_data[start:] if end is None else y_data[start : end + 1]
+                    # cleaned curves hold NaN; the guesses (and the fit) need real points
+                    finite = np.isfinite(t_sub) & np.isfinite(y_sub)
+                    t_sub, y_sub = t_sub[finite], y_sub[finite]
                     if len(t_sub) >= 1:
                         try:
                             defaults = model.default_guess(y_sub, t_sub)
