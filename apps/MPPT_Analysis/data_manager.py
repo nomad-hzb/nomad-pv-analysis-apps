@@ -126,6 +126,54 @@ class MPPTRow(BaseModel):
         return float(v)
 
 
+OUTLIER_WINDOW = 11  # points in the rolling-median window (odd)
+OUTLIER_THRESHOLD = 6.0  # deviation from the rolling median, in robust standard deviations
+
+
+def find_outliers(y_data, window=OUTLIER_WINDOW, threshold=OUTLIER_THRESHOLD):
+    """Boolean mask of isolated spikes/dips in y_data (Hampel filter).
+
+    A point is an outlier when it deviates from the rolling median of its
+    centred `window` by more than `threshold` robust standard deviations
+    (1.4826 x the median absolute deviation of all such deviations). A slow
+    trend such as burn-in decay follows its own rolling median and survives;
+    only points that break away from their neighbours are flagged.
+
+    The first and last window//2 points are never flagged: their window is
+    one-sided, so the genuine steep start of a decay would look like a spike.
+    Curves shorter than three windows are returned unflagged.
+    """
+    y = np.asarray(y_data, dtype=float)
+    mask = np.zeros(len(y), dtype=bool)
+    half = int(window) // 2
+    if int(window) < 3 or len(y) < 3 * int(window):
+        return mask
+
+    series = pd.Series(y)
+    median = series.rolling(int(window), center=True, min_periods=1).median()
+    deviation = (series - median).abs()
+    sigma = 1.4826 * deviation.median()
+    if not sigma > 0:  # quantised/flat data: fall back to the mean deviation
+        sigma = deviation.mean()
+    if not sigma > 0:
+        return mask
+
+    mask = np.array(deviation > threshold * sigma)
+    mask[:half] = False
+    mask[len(y) - half :] = False
+    return mask
+
+
+def remove_outliers(y_data, window=OUTLIER_WINDOW, threshold=OUTLIER_THRESHOLD):
+    """Copy of y_data with its outliers (see find_outliers) set to NaN, so the
+    array keeps its length and stays aligned with the time axis. Returns
+    (cleaned, n_removed)."""
+    y = np.array(y_data, dtype=float)
+    mask = find_outliers(y, window, threshold)
+    y[mask] = np.nan
+    return y, int(mask.sum())
+
+
 def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
     """Slice to frame_range (point indices), fit with model, return a result
     dict or None if there aren't enough valid points to fit at all.
@@ -160,6 +208,9 @@ def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
         t_sliced, y_sliced = t_data, y_data
 
     resolved_end = end if end is not None else start + len(t_sliced) - 1
+
+    if initial_values:  # a NaN seed (e.g. a guess made on NaN data) can only abort the fit
+        initial_values = {k: v for k, v in initial_values.items() if np.isfinite(v)}
 
     valid_mask = ~(np.isnan(t_sliced) | np.isnan(y_sliced))
     t_sliced = t_sliced[valid_mask]
@@ -594,6 +645,15 @@ class DataManager:
         except (KeyError, IndexError):
             return None, None
 
+    def get_curve(self, curves_data, sample_ids, sample_id, curve_id, cleaned=None):
+        """Like get_raw_curve, but with power_density taken from `cleaned`
+        ({(sample_id, curve_id): array with NaN at removed points}) when that
+        curve has been cleaned. The raw data itself is never modified."""
+        t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
+        if t_data is not None and cleaned and (sample_id, curve_id) in cleaned:
+            y_data = cleaned[(sample_id, curve_id)]
+        return t_data, y_data
+
     def get_entry_id(self, entries_data, sample_id, curve_id):
         """Look up the NOMAD entry_id backing one (sample_id, curve_id), or None.
 
@@ -651,10 +711,13 @@ class DataManager:
         frame_range=None,
         initial_values=None,
         curve_ids=None,
+        cleaned=None,
     ):
         """Fit the curves of one sample with the given model/point range.
 
         curve_ids: restrict the fit to these curves; None fits every curve of the sample.
+
+        cleaned: optional outlier-cleaned power_density, see get_curve.
 
         initial_values: optional {param_name: value}, passed through to every
         curve's fit_curve() call unchanged - each curve still gets its own
@@ -674,7 +737,7 @@ class DataManager:
         for curve_id in (
             available if curve_ids is None else [c for c in available if c in curve_ids]
         ):
-            t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
+            t_data, y_data = self.get_curve(curves_data, sample_ids, sample_id, curve_id, cleaned)
             if t_data is None:
                 continue
             fit = fit_curve(t_data, y_data, model, frame_range, initial_values)
@@ -861,12 +924,20 @@ class DataManager:
         return outcomes
 
     def get_selected_curve_data(
-        self, curves_data, sample_ids, selected_samples, variable, selected_curves=None
+        self,
+        curves_data,
+        sample_ids,
+        selected_samples,
+        variable,
+        selected_curves=None,
+        cleaned=None,
     ):
         """Get curve data for selected samples.
 
         selected_curves: optional [(sample_id, curve_id)]; when given, only those
         measurements are returned.
+        cleaned: optional outlier-cleaned power_density, see get_curve; replaces
+        the data of cleaned curves when variable is power_density.
         """
         selected_data = []
         wanted = None if selected_curves is None else set(selected_curves)
@@ -905,4 +976,9 @@ class DataManager:
             except:  # noqa: E722
                 continue
 
+        if cleaned and variable == "power_density":
+            for item in selected_data:
+                key = (item["sample_id"], item["curve_id"])
+                if key in cleaned:
+                    item["data"] = cleaned[key]
         return selected_data
