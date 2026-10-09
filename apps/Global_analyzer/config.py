@@ -6,6 +6,7 @@ All user-configurable settings are defined here.
 
 Configuration Sections:
     - PARAMETER_BLACKLIST: Parameters to exclude from dropdowns
+    - MEASURED_PARAMETERS: Process Metadata that is logged, not set
     - PRESET_PLOTS: Quick-plot buttons shown on the Plotting tab
 
 Author: HySprint Team
@@ -75,6 +76,22 @@ PARAMETER_BLACKLIST = {
 # from), since the actual process types available vary per NOMAD upload and
 # can't be hardcoded here. Add more presets here - no code changes needed
 # elsewhere.
+
+# ============================================================================
+# MEASURED (NOT SETTABLE) PROCESS PARAMETERS
+# ============================================================================
+# Process Metadata columns that record a condition rather than a setting
+# (ambient humidity, logged pressure readings). They stay normal inputs for
+# Correlations and Random Forest, but Bayesian Optimization pre-fixes them at
+# their median instead of suggesting values for them. Matched on the base
+# name, so the process-type suffix added when sources are merged
+# (e.g. "relative_humidity_Inkjet Printing") is covered too.
+MEASURED_PARAMETERS = {
+    "relative_humidity",
+    "pressure_start",
+    "pressure_end",
+}
+
 
 PRESET_PLOTS = [
     {
