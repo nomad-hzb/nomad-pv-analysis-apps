@@ -200,8 +200,10 @@
 <p>
   Use the slider to set the number of experimental conditions to generate.
   Range: <code>4</code> to <code>500</code>.
-  The slider minimum automatically adjusts to the recommended minimum for the number of variables
-  you have defined (<em>n_variables²</em>, minimum 4).
+  The slider floor is the number of variables + 1 (minimum 4). To fit a model to the results
+  (e.g. Bayesian optimization in Global_analyzer), about 10 runs per variable is a common rule
+  of thumb; fewer is fine for a first screening. Orthogonal arrays and definitive screening
+  designs set their own size and ignore this value.
 </p>
 
 <h4>Random Seed</h4>
@@ -219,8 +221,31 @@
   <li><strong>Latin Hypercube Sampling</strong> — optional centroid optimisation (<code>None</code>,
       <code>random-cd</code>, <code>lloyd</code>)</li>
   <li><strong>Sobol / Halton</strong> — scrambling checkbox (recommended; improves uniformity)</li>
+  <li><strong>Orthogonal Arrays</strong>: number of levels for continuous variables (2, 3, 5 or 7)</li>
+  <li><strong>Augment Existing Design</strong>: upload the existing design as CSV (one column
+      per variable, same names; extra columns are ignored)</li>
   <li>Other algorithms — no extra options</li>
 </ul>
+
+<h4>Design Options</h4>
+<p>
+  Turn the generated points into a run sheet. With the defaults the design is unchanged.
+</p>
+<ul>
+  <li><strong>Centre points</strong>: extra runs with every variable at the middle of its range
+      (geometric middle for log-scale variables; categorical variables cycle through their
+      categories). Show measurement scatter and curvature.</li>
+  <li><strong>Replicates</strong>: every run repeated this many times.</li>
+  <li><strong>Blocks</strong>: split the runs into groups (one per day or precursor lot), each a
+      random, equal share of the design and centre runs. Use the block as a categorical
+      parameter in the analysis.</li>
+  <li><strong>Randomize run order</strong>: random order within each block, from the seed, so
+      drift over time does not line up with a variable.</li>
+</ul>
+<p>
+  Notes about the generated design (its actual size, a subsampled grid, unequal level counts)
+  appear in a box under the Generate button.
+</p>
 
 <h3>2.3 Variable Configuration</h3>
 <p>
@@ -410,12 +435,27 @@
   <tr>
     <td><strong>Uniform Grid Sampling</strong></td>
     <td>Systematic mapping of a complete response surface</td>
-    <td>All combinations at regular intervals. Sample count must be a perfect n-th power of the number of variables; the app rounds up automatically.</td>
+    <td>All combinations at regular intervals. If the sample size is not a perfect n-th power, a random subset of the next larger grid is used (no longer a regular grid); the notes box says which sizes give a full grid.</td>
+  </tr>
+  <tr>
+    <td><strong>Orthogonal Arrays</strong></td>
+    <td>Screening many factors at a few levels</td>
+    <td>Taguchi-type arrays (L4, L8, L9, L16, L25, L27, ...): every pair of levels of every two variables appears equally often. The size is fixed by the number of variables and levels (up to 7 levels).</td>
+  </tr>
+  <tr>
+    <td><strong>Definitive Screening Design</strong></td>
+    <td>Screening 3 to 24 numeric variables, including curvature</td>
+    <td>Three levels per variable in about 2 x variables + 1 runs; main effects are not confused with two-factor interactions. Numeric variables only; the size is fixed by the design.</td>
   </tr>
   <tr>
     <td><strong>Maximin Distance Design</strong></td>
     <td>Expensive experiments where each test must provide maximum information</td>
-    <td>Iteratively optimises the minimum inter-sample distance. Computationally heavier than other methods; slower for large n.</td>
+    <td>Picks points from a Latin hypercube candidate set to maximise the smallest distance between any two. Categorical variables count as equally different (a mismatch), not as ordered codes.</td>
+  </tr>
+  <tr>
+    <td><strong>Augment Existing Design</strong></td>
+    <td>The next round of experiments after a first design or a set of BO suggestions</td>
+    <td>Adds the requested number of runs to an uploaded design, as far as possible from its points and from each other. Lists the new runs only.</td>
   </tr>
 </table>
 
@@ -434,6 +474,11 @@
   Parameters: <strong>Min</strong>, <strong>Max</strong>.
 </p>
 <p>Example: <code>Temperature, 100, 300</code> → samples drawn from [100, 300].</p>
+<p>
+  Tick <strong>log</strong> for quantities that span decades (load, time, concentration, dose):
+  samples are then spread evenly over the decades instead of crowding the top one. Needs
+  Min &gt; 0.
+</p>
 
 <h3>Discrete</h3>
 <p>
@@ -535,8 +580,7 @@
 
 <h3>Sample size</h3>
 <ul>
-  <li>Minimum rule: at least <em>n²</em> samples for <em>n</em> variables.</li>
-  <li>For a response surface model: 10–20× the number of variables.</li>
+  <li>For a response surface model or Bayesian optimization: about 10× the number of variables.</li>
   <li>For a quick screening: 5–10× the number of variables.</li>
   <li>Sobol sequences work best at power-of-2 sizes (8, 16, 32, 64 …).</li>
 </ul>
@@ -550,6 +594,11 @@
       number of levels per variable.</li>
   <li><strong>Maximin Distance</strong> is best for expensive experiments (slow synthesis,
       long characterisation) where every data point must count.</li>
+  <li>For screening which of many variables matter, use an <strong>Orthogonal Array</strong>
+      (any variable types) or a <strong>Definitive Screening Design</strong> (numeric variables,
+      also shows curvature).</li>
+  <li>For a follow-up round, <strong>Augment Existing Design</strong> adds runs where the
+      existing ones leave gaps.</li>
 </ul>
 
 <h3>Reproducibility</h3>

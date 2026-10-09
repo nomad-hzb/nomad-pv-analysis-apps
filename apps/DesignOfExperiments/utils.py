@@ -47,8 +47,10 @@ class Constants:
         "Halton Sequences": [],
         "Random Sampling": [],
         "Uniform Grid Sampling": [],
-        "Orthogonal Arrays": ["pyDOE2"],
-        "Maximin Distance Design": ["scikit-learn"],
+        "Orthogonal Arrays": [],
+        "Definitive Screening Design": [],
+        "Maximin Distance Design": [],
+        "Augment Existing Design": [],
     }
 
     # Quality metric thresholds
