@@ -452,3 +452,17 @@ def test_modify_file_field_does_not_partial_match_substrings():
         file_text, "entry.archive.json", "location", "HySpinbox", "HySpinBox"
     )
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Corrections are disabled until the write path is safe (issue #56)
+# ---------------------------------------------------------------------------
+
+
+def test_field_audit_panel_offers_no_correction_controls_while_disabled(fresh_session):
+    assert gc.CORRECTIONS_ENABLED is False
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    panel = gc.FieldAuditPanel(fresh_session, label, url="https://example.org", token="t")
+    assert not hasattr(panel, "correct_button")
+    assert panel.dropdown is None
