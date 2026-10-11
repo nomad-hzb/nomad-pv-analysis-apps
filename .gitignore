@@ -203,4 +203,4 @@ output/**/*.json
 .claude/scheduled_tasks.lock
 
 # Usage logs written by hysprint_utils.usage_tracking
-shared/usage/
+shared/log/

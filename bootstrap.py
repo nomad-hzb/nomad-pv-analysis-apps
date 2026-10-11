@@ -118,11 +118,11 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
 
 
 def _apply_usage_log_dir() -> None:
-    """Send every app's usage logs to one folder, shared/usage/ in this checkout (see
+    """Send every app's usage logs to one folder, shared/log/ in this checkout (see
     hysprint_utils.usage_tracking), unless the container or oasis_local_config.py already
     set HYSPRINT_USAGE_LOG_DIR. Without this, an installed copy of hysprint_utils would
     log next to itself, wherever pip put it."""
-    os.environ.setdefault("HYSPRINT_USAGE_LOG_DIR", str(REPO_ROOT / "shared" / "usage"))
+    os.environ.setdefault("HYSPRINT_USAGE_LOG_DIR", str(REPO_ROOT / "shared" / "log"))
 
 
 def _build_isolation_args() -> list[str]:

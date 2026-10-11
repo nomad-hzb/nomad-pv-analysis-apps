@@ -15,7 +15,7 @@ def _no_real_legacy_logs(tmp_path, monkeypatch):
 
 @pytest.fixture
 def log_dir(tmp_path, monkeypatch):
-    folder = tmp_path / "usage"
+    folder = tmp_path / "log"
     monkeypatch.setenv(usage_tracking.USAGE_LOG_DIR_ENV, str(folder))
     monkeypatch.setenv("NOMAD_CLIENT_USER", "alice")
     monkeypatch.setenv("VOILA_REQUEST_URL", "/voila/render/apps/JV-Analysis/jv-analysis.ipynb")
@@ -27,10 +27,10 @@ def _lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def test_default_folder_is_shared_usage(monkeypatch):
+def test_default_folder_is_shared_log(monkeypatch):
     monkeypatch.delenv(usage_tracking.USAGE_LOG_DIR_ENV, raising=False)
     folder = usage_tracking.usage_log_dir()
-    assert folder.name == "usage"
+    assert folder.name == "log"
     assert (folder.parent / "hysprint_utils" / "usage_tracking.py").is_file()
     assert not folder.exists() or folder.is_dir()  # resolving the path creates nothing
 
@@ -76,7 +76,7 @@ def test_old_log_next_to_the_module_is_moved_once(log_dir, tmp_path, monkeypatch
 def test_logging_failure_never_raises(tmp_path, monkeypatch, caplog):
     blocker = tmp_path / "not_a_folder"
     blocker.write_text("", encoding="utf-8")
-    monkeypatch.setenv(usage_tracking.USAGE_LOG_DIR_ENV, str(blocker / "usage"))
+    monkeypatch.setenv(usage_tracking.USAGE_LOG_DIR_ENV, str(blocker / "log"))
     usage_tracking.log_notebook_usage()
     usage_tracking.log_button_usage("x")
     assert "Error logging notebook usage" in caplog.text

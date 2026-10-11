@@ -1,7 +1,7 @@
 """Usage logging for the apps: one CSV line per notebook launch (log_notebook_usage) and per
 in-app navigation click (log_button_usage).
 
-Logs go to one folder, shared/usage/ next to this package, so every app in the same
+Logs go to one folder, shared/log/ next to this package, so every app in the same
 upload writes to the same two files instead of each installed copy of hysprint_utils
 keeping its own. bootstrap.py exports HYSPRINT_USAGE_LOG_DIR pointing there; set it in
 oasis_local_config.py or the container to log somewhere else.
@@ -21,7 +21,7 @@ NOTEBOOK_LOG = "notebook_usage.log"
 BUTTON_LOG = "button_usage.log"
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
-_DEFAULT_DIR = _PACKAGE_DIR.parent / "usage"
+_DEFAULT_DIR = _PACKAGE_DIR.parent / "log"
 
 
 def usage_log_dir() -> Path:

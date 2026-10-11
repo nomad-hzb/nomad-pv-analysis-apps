@@ -16,7 +16,7 @@ apps/<App>/
     <app>.ipynb           # cell 0 is the bootstrap cell, see rule 8
 shared/hysprint_utils/    # config, api_calls, access_token, auth_manager, batch_selection,
                           # consistency, error_handler, plotting_utils, process_specs, schemas,
-                          # usage_tracking (logs to shared/usage/)
+                          # usage_tracking (logs to shared/log/)
 tests/<App>/              # conftest.py + test_<app>*.py, never inside apps/
 tests/conftest.py         # load-bearing, see gotchas
 scripts/check_repo_rules.py  # the rules below that ruff cannot check; runs in CI
@@ -118,7 +118,7 @@ dropped. Route it through an `Output()` that stays in the displayed tree
 ## Known limits (don't fix in passing)
 
 - `T20` (print) is not enabled on purpose: ~650 legacy prints plus the Output() pattern.
-- Usage logs (`hysprint_utils.usage_tracking`) go to `shared/usage/` of the upload, one pair of
+- Usage logs (`hysprint_utils.usage_tracking`) go to `shared/log/` of the upload, one pair of
   files for every app in it; uploads on different Oasis or users are still separate (issue #7).
 - The parked `Electrochemical_analysis` notebooks have no bootstrap cell, so they get no
   deployment environment (Oasis URL, proxy) on a non-HZB Oasis.
