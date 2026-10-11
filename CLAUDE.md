@@ -76,6 +76,10 @@ nomad-baseclasses; never guess, and leave `unit_verified: False` until checked.
   nomad-hysprint or nomad-baseclasses are never used as `Fixes #N` here.
 - Bump only the touched app's `version` (SemVer) in the same PR. No bump for refactors,
   test-only changes or `shared/` edits.
+- In the same PR, update the app's user manual whenever what users see or what the app
+  computes changes (`manual.md`, or the app's existing guide/manual until it is converted).
+  Check the manual against the code, not memory. Apps without a manual yet: note the change
+  in the PR; writing one is tracked separately.
 - PR titles become release notes (`gh release create <tag> --generate-notes`); make them
   descriptive. No CHANGELOG file. Push to the `hzb` remote; branches are `<issue>-<slug>`.
 - After any merge or rebase where both sides touched a file, diff each touched file against
