@@ -44,6 +44,7 @@ from data_manager import (
     merged_result_column_names,
     parse_uploaded_analysis_csv,
     process_type_label,
+    samples_with_several_rows,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
     variation_warning,
@@ -134,6 +135,7 @@ class SampleDataExplorer:
             bo_loo_widget=self.gui.bo_loo_widget,
             rf_pdp_output=self.gui.rf_pdp_output,
         )
+        self.plot_manager.column_resolver = self.data_manager.resolve_result_column
 
         # Application state
         self.current_batches = []
@@ -401,6 +403,7 @@ class SampleDataExplorer:
         self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
 
         process_df = self._build_process_dataframe()
+        self._multi_row_samples = samples_with_several_rows(process_df)
         results_df = self._build_results_dataframe()
 
         if process_df is None or results_df is None:
@@ -569,6 +572,16 @@ class SampleDataExplorer:
                 print(
                     "⚠️ For better results, use parameters with more variation "
                     f"(aim for 6+ distinct values): {', '.join(low_variation)}"
+                )
+            if getattr(self, "_multi_row_samples", None) and self._uploaded_df is None:
+                shown = ", ".join(self._multi_row_samples[:5])
+                more = len(self._multi_row_samples) - 5
+                print(
+                    f"⚠️ {len(self._multi_row_samples)} sample(s) have more than one entry of "
+                    "the same process step (e.g. two spin-coating steps): their rows are "
+                    "repeated in this table, once per entry, so the parameters of one step are "
+                    "paired with the other's. Choose a layer type or check the entries: "
+                    f"{shown}{f' (+{more} more)' if more > 0 else ''}"
                 )
             if self._collapsed_result_types and self._uploaded_df is None:
                 print(

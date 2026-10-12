@@ -2006,3 +2006,171 @@ def test_doe_link_is_styled_as_a_link():
     anchor = re.search(r"<a href=\"\{doe_voila_url\}\"[^>]*?style=\"([^\"]*)\"", source)
     assert anchor, "DoE link has no inline style"
     assert "underline" in anchor.group(1) and "color" in anchor.group(1)
+
+
+# ---------------------------------------------------------------------------
+# 5.8: result columns that share a name, plotting merge without cross-pairing, "Max",
+# identifier-like parameters, samples with several entries of one process
+# ---------------------------------------------------------------------------
+
+
+def test_measurement_row_dump_only_carries_the_fields_that_were_set():
+    """model_dump() put all 12 JV-schema fields (efficiency, bandgap, ...) into EQE, PL and
+    SEM rows as None, which then blocked those types' real columns."""
+    row = MeasurementRow(sample_id="s1", bandgap=1.6)
+    assert row.model_dump(exclude_unset=True) == {"sample_id": "s1", "bandgap": 1.6}
+
+
+def _plot_dm(results, metadata=None):
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_results = results
+    dm.current_metadata = metadata or {}
+    return dm
+
+
+def _rebuild(dm):
+    dm.rebuild_merged_data(None, None, None, "All", "All", "All")
+
+
+def test_plotting_merge_keeps_the_bandgap_of_every_result_type():
+    """JV, EQE and PL each have a bandgap: EQE's and PL's were dropped, 'bandgap (EQE)'
+    plotted nothing."""
+    dm = _plot_dm(
+        {
+            "jv_measurement": pd.DataFrame({"sample_id": ["S1"], "efficiency": [18.0]}),
+            "eqe_measurement": pd.DataFrame({"sample_id": ["S1"], "bandgap": [1.6]}),
+            "pl_measurement": pd.DataFrame({"sample_id": ["S1"], "bandgap": [1.55]}),
+        }
+    )
+    _rebuild(dm)
+
+    eqe = dm.resolve_result_column("bandgap (EQE)")
+    pl = dm.resolve_result_column("bandgap (PL)")
+    assert eqe != pl
+    assert dm.merged_data[eqe].iloc[0] == pytest.approx(1.6)
+    assert dm.merged_data[pl].iloc[0] == pytest.approx(1.55)
+
+
+def test_a_result_datetime_next_to_a_process_datetime_is_kept():
+    """With an Inkjet/ALD/... source selected, JV's datetime was dropped and
+    'datetime (JV)' plotted the process date."""
+    dm = _plot_dm(
+        {
+            "jv_measurement": pd.DataFrame(
+                {"sample_id": ["S1"], "efficiency": [18.0], "datetime": ["2024-05-05"]}
+            )
+        },
+        metadata={
+            "ald": pd.DataFrame({"sample_id": ["S1"], "datetime": ["2024-01-01"], "layer": ["x"]})
+        },
+    )
+    dm.rebuild_merged_data("ald", None, None, "All", "All", "All")
+    column = dm.resolve_result_column("datetime (JV)")
+    assert dm.merged_data[column].iloc[0] == "2024-05-05"
+    assert dm.merged_data["datetime"].iloc[0] == "2024-01-01"  # the process date is unchanged
+
+
+def test_plotting_merge_does_not_cross_pair_rows_of_different_result_types():
+    """8 JV rows x 2 EQE x 2 MPP gave 32 rows per sample; now one type keeps its points."""
+    jv = pd.DataFrame({"sample_id": ["S1"] * 8, "efficiency": [float(i) for i in range(8)]})
+    eqe = pd.DataFrame({"sample_id": ["S1"] * 2, "jsc_eqe": [20.0, 22.0]})
+    mpp = pd.DataFrame({"sample_id": ["S1"] * 2, "mpp_power": [15.0, 17.0]})
+    dm = _plot_dm({"jv_measurement": jv, "eqe_measurement": eqe, "mpp_tracking": mpp})
+    _rebuild(dm)
+
+    assert len(dm.merged_data) == 8
+    assert dm.merged_data["efficiency"].tolist() == [float(i) for i in range(8)]
+    assert set(dm.merged_data["jsc_eqe"]) == {21.0}  # that sample's mean, pixel by pixel
+    assert set(dm._collapsed_result_types) == {"eqe_measurement", "mpp_tracking"}
+
+
+def test_resolve_result_column_ignores_non_result_parameters():
+    dm = _plot_dm({"jv_measurement": pd.DataFrame({"sample_id": ["S1"], "efficiency": [1.0]})})
+    _rebuild(dm)
+    assert dm.resolve_result_column("annealing_temperature") is None
+    assert dm.resolve_result_column("efficiency (JV)") == "efficiency"
+    assert dm.resolve_result_column("efficiency (XYZ)") is None
+
+
+def test_plot_manager_uses_the_resolver_for_display_names():
+    manager = PlotManager(plot_widget=go.FigureWidget(), stats_output=widgets.Output())
+    assert manager.extract_column_name("bandgap (EQE)") == "bandgap"  # unchanged without one
+    manager.column_resolver = lambda param: "bandgap_eqe_measurement" if "EQE" in param else None
+    assert manager.extract_column_name("bandgap (EQE)") == "bandgap_eqe_measurement"
+    assert manager.extract_column_name("bandgap (PL)") == "bandgap"
+    assert manager.extract_column_name("Notes") == "description"
+
+
+def test_max_aggregation_takes_the_best_device_not_a_column_wise_composite():
+    """Max of each column on its own built a device nobody measured: the highest Voc of one
+    pixel with the highest FF of another."""
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S1", "S2"],
+            "efficiency": [16.0, 19.0, 10.0, 12.0],
+            "open_circuit_voltage": [1.10, 1.02, 1.20, 0.9],
+            "fill_factor": [0.80, 0.75, 0.60, 0.7],
+        }
+    )
+    out = aggregate_results_per_sample(df, "Max").set_index("sample_id")
+    best = out.loc["S1"]
+    assert best["efficiency"] == 19.0 and best["open_circuit_voltage"] == 1.02
+    assert best["fill_factor"] == 0.75  # all from the 19% pixel
+    assert out.loc["S2"]["efficiency"] == 12.0
+
+
+def test_max_aggregation_falls_back_to_column_max_without_an_efficiency_column():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "bandgap": [1.5, 1.7]})
+    assert aggregate_results_per_sample(df, "Max")["bandgap"].iloc[0] == 1.7
+
+
+def test_max_aggregation_keeps_samples_without_any_efficiency():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2"],
+            "efficiency": [None, None, 5.0],
+            "fill_factor": [0.5, 0.6, 0.7],
+        }
+    )
+    out = aggregate_results_per_sample(df, "Max").set_index("sample_id")
+    assert out.loc["S1"]["fill_factor"] == 0.6  # column-wise fallback, but the sample stays
+    assert out.loc["S2"]["efficiency"] == 5.0
+
+
+def test_identifier_like_columns_start_unchecked_but_stay_available():
+    import config
+
+    for column in ("position_in_plan", "position_in_plan_spin_coating", "number_of_pixels"):
+        assert config.is_identifier_like(column), column
+    for column in ("annealing_temperature", "speed", "positions"):
+        assert not config.is_identifier_like(column), column
+
+    gui = GUIManager()
+    gui.set_analysis_columns(
+        ["efficiency"], ["annealing_temperature", "position_in_plan", "pixel_area"]
+    )
+    states = {cb.description: cb.value for cb in gui.metadata_checklist_box.children}
+    assert states == {
+        "annealing_temperature": True,
+        "position_in_plan": False,
+        "pixel_area": False,
+    }
+    # a choice the user already made survives a rebuild
+    gui.metadata_checklist_box.children[1].value = True
+    gui.set_analysis_columns(["efficiency"], ["annealing_temperature", "position_in_plan"])
+    assert {cb.description: cb.value for cb in gui.metadata_checklist_box.children}[
+        "position_in_plan"
+    ]
+
+
+def test_samples_with_several_entries_of_one_process_are_listed():
+    """Two spin-coating 'Absorber' entries per sample duplicated every result row."""
+    from data_manager import samples_with_several_rows
+
+    df = pd.DataFrame(
+        {"sample_id": ["S1", "S1", "S2", "S3", "S3"], "rpm": [1000, 3000, 2000, 1, 2]}
+    )
+    assert samples_with_several_rows(df) == ["S1", "S3"]
+    assert samples_with_several_rows(df.drop_duplicates("sample_id")) == []
+    assert samples_with_several_rows(None) == []
+    assert samples_with_several_rows(pd.DataFrame({"rpm": [1]})) == []

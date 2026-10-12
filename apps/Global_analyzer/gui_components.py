@@ -992,11 +992,19 @@ class GUIManager:
         }
 
         self.results_checklist_box.children = [
-            widgets.Checkbox(value=previous_results.get(col, True), description=col, indent=False)
+            widgets.Checkbox(
+                value=previous_results.get(col, not config.is_identifier_like(col)),
+                description=col,
+                indent=False,
+            )
             for col in results_cols
         ]
         self.metadata_checklist_box.children = [
-            widgets.Checkbox(value=previous_metadata.get(col, True), description=col, indent=False)
+            widgets.Checkbox(
+                value=previous_metadata.get(col, not config.is_identifier_like(col)),
+                description=col,
+                indent=False,
+            )
             for col in metadata_cols
         ]
         self._render_results_tree(results_groups or {})

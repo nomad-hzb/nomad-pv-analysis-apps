@@ -119,6 +119,10 @@ class PlotManager:
         self.drift_widget = drift_widget
         self.anova_widget = anova_widget
 
+    # Optional callable "display name -> merged column" (DataManager.resolve_result_column):
+    # result parameters whose name several types share live in suffixed columns.
+    column_resolver = None
+
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
         return _get_material_column(df)
@@ -129,6 +133,10 @@ class PlotManager:
         Strips measurement suffixes like ' (JV)', ' (AbsPL)', and reverses
         display aliases like 'Notes' → 'description'.
         """
+        if self.column_resolver is not None:
+            resolved = self.column_resolver(param)
+            if resolved is not None:
+                return resolved
         if "(" in param:
             base = param[: param.rfind("(")].strip()
         else:
