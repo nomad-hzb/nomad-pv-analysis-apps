@@ -9,9 +9,8 @@ to the app layout yet are skipped, the same set ruff's extend-exclude skips.
 import ast
 import json
 import sys
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APPS = ROOT / "apps"
