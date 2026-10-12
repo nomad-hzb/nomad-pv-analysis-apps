@@ -13,7 +13,6 @@ Author: HySprint Team
 import base64
 import logging
 import math
-import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -29,6 +28,8 @@ try:
 except ImportError:
     URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     logger.warning("hysprint_utils.config not found; using hardcoded URL fallback")
+
+from hysprint_utils.north import get_current_user, get_uploads_path  # noqa: E402, F401
 
 DOE_VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
 DOE_APP_PATH = "DesignOfExperiments/DoE.ipynb"
@@ -308,25 +309,6 @@ class ProcessStepManager:
                 return value
 
         return None
-
-
-def get_current_user() -> str:
-    """Return the NOMAD username of the person running this notebook, or '' if unknown."""
-    return os.environ.get("NOMAD_CLIENT_USER", "")
-
-
-def get_uploads_path() -> str:
-    """Derive 'uploads/<upload_id>/<container>' from the current working directory.
-
-    Same derivation as App_dashboard/data_manager.py's get_uploads_path: under a NOMAD
-    north tool the cwd is .../uploads/<upload_id>/<container>/<AppFolder>, where
-    <container> is the folder holding all app folders.
-    """
-    container_dir = os.path.dirname(os.getcwd())
-    upload_dir = os.path.dirname(container_dir)
-    container = os.path.basename(container_dir)
-    upload_id = os.path.basename(upload_dir)
-    return f"uploads/{upload_id}/{container}"
 
 
 def build_doe_voila_url(user: str, uploads_path: str) -> str:
