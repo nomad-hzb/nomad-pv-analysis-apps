@@ -174,6 +174,19 @@ def remove_outliers(y_data, window=OUTLIER_WINDOW, threshold=OUTLIER_THRESHOLD):
     return y, int(mask.sum())
 
 
+def mask_removed_points(values, raw_power, cleaned_power):
+    """Copy of `values` (e.g. voltage) with NaN at the points the outlier cleaning removed
+    from power_density: NaN in cleaned_power where raw_power was a real number. Points that
+    were already NaN in the raw data are left as they were."""
+    values = np.array(values, dtype=float)
+    removed = np.isnan(np.asarray(cleaned_power, dtype=float)) & ~np.isnan(
+        np.asarray(raw_power, dtype=float)
+    )
+    if len(removed) == len(values):
+        values[removed] = np.nan
+    return values
+
+
 def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
     """Slice to frame_range (point indices), fit with model, return a result
     dict or None if there aren't enough valid points to fit at all.
@@ -937,7 +950,8 @@ class DataManager:
         selected_curves: optional [(sample_id, curve_id)]; when given, only those
         measurements are returned.
         cleaned: optional outlier-cleaned power_density, see get_curve; replaces
-        the data of cleaned curves when variable is power_density.
+        the data of cleaned curves when variable is power_density, and blanks
+        (NaN) the same points in every other variable.
         """
         selected_data = []
         wanted = None if selected_curves is None else set(selected_curves)
@@ -976,9 +990,16 @@ class DataManager:
             except:  # noqa: E722
                 continue
 
-        if cleaned and variable == "power_density":
+        if cleaned:
             for item in selected_data:
                 key = (item["sample_id"], item["curve_id"])
-                if key in cleaned:
+                if key not in cleaned:
+                    continue
+                if variable == "power_density":
                     item["data"] = cleaned[key]
+                else:
+                    # Voltage / current density: blank the same points the power
+                    # cleaning removed, so every variable shows the same clean curve.
+                    _, raw_power = self.get_raw_curve(curves_data, sample_ids, *key)
+                    item["data"] = mask_removed_points(item["data"], raw_power, cleaned[key])
         return selected_data
