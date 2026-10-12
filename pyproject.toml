@@ -6,6 +6,8 @@ line-length = 100
 # Notebook-only folders not yet ported to the app layout (parked, see CLAUDE.md "Known
 # gaps"). Everything else is linted and format-checked in CI.
 extend-exclude = [
+    # until its owner's PR #43 lands; remove together with PARKED in scripts/check_repo_rules.py
+    "apps/Peak_Explorer",
     "apps/Electrochemical_analysis",
     "apps/SEM_crystal_counter",
     "apps/XPS-Automated",

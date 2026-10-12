@@ -74,6 +74,8 @@ class PlotManager:
         outlier_widget=None,
         drift_widget=None,
         anova_widget=None,
+        bo_loo_widget=None,
+        rf_pdp_output=None,
     ):
         """
         Initialize plot manager.
@@ -97,12 +99,19 @@ class PlotManager:
             anova_widget: Plotly FigureWidget for the Experimental tab's ANOVA boxplot -
                 separate from plot_widget so it doesn't overwrite whatever the user has
                 open on the main Plotting tab
+            bo_loo_widget: Plotly FigureWidget for the Bayesian Optimization tab's
+                leave-one-sample-out model check (predicted vs observed)
+            rf_pdp_output: Output widget for the Random Forest partial-dependence
+                subplots (an Output, like correlation_scatter_output, because the
+                number of subplots varies)
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
         self.correlation_widget = correlation_widget
         self.rf_widget = rf_widget
         self.bo_widget = bo_widget
+        self.bo_loo_widget = bo_loo_widget
+        self.rf_pdp_output = rf_pdp_output
         self.correlation_scatter_output = correlation_scatter_output
         self.pca_widget = pca_widget
         self.pareto_widget = pareto_widget
@@ -815,29 +824,125 @@ class PlotManager:
         return varying_cols, truncated
 
     def create_feature_importance_plot(self, importances: list, target: str):
-        """Render Random Forest feature importances as a horizontal bar chart, most
-        important parameter on top. Caps at the top 15 for readability."""
+        """Render Random Forest permutation importances, (name, mean, sd) tuples, as
+        a horizontal bar chart with SD error bars, most important parameter on top.
+        Caps at the top 15 for readability."""
         if self.rf_widget is None:
             raise ValueError("PlotManager has no rf_widget configured")
 
-        top = importances[:15]
-        names = [name for name, _ in top][::-1]
-        values = [value for _, value in top][::-1]
+        top = importances[:15][::-1]
+        names = [item[0] for item in top]
+        values = [item[1] for item in top]
+        errors = [item[2] for item in top]
 
         self.rf_widget.data = []
         self.rf_widget.add_trace(
-            go.Bar(x=values, y=names, orientation="h", marker=dict(color="#2E86AB"))
+            go.Bar(
+                x=values,
+                y=names,
+                orientation="h",
+                error_x=dict(type="data", array=errors),
+                marker=dict(color="#2E86AB"),
+            )
         )
         self.rf_widget.update_layout(
             title=f"Feature importance for {target}",
-            xaxis_title="Importance",
+            xaxis_title="Drop in cross-validated R² when shuffled",
             template="plotly_white",
             height=max(400, 30 * len(top)),
             margin=dict(l=200),
         )
 
+    def create_partial_dependence_plot(self, partial_dependence: list, target: str):
+        """One subplot per parameter from ml_analysis.run_random_forest's
+        partial_dependence: a line for a numeric parameter, bars for a
+        categorical one. Each shows the forest's average prediction as only that
+        parameter changes."""
+        if self.rf_pdp_output is None:
+            raise ValueError("PlotManager has no rf_pdp_output configured")
+
+        with self.rf_pdp_output:
+            clear_output(wait=True)
+            if not partial_dependence:
+                return
+            fig = make_subplots(
+                rows=1,
+                cols=len(partial_dependence),
+                subplot_titles=[item["feature"] for item in partial_dependence],
+                shared_yaxes=True,
+            )
+            for i, item in enumerate(partial_dependence, start=1):
+                if item["kind"] == "categorical":
+                    trace = go.Bar(
+                        x=[str(g) for g in item["grid"]],
+                        y=item["average"],
+                        marker=dict(color="#2E86AB"),
+                        showlegend=False,
+                    )
+                else:
+                    trace = go.Scatter(
+                        x=item["grid"],
+                        y=item["average"],
+                        mode="lines+markers",
+                        line=dict(color="#2E86AB"),
+                        showlegend=False,
+                    )
+                fig.add_trace(trace, row=1, col=i)
+            fig.update_yaxes(title_text=f"Predicted {target}", row=1, col=1)
+            fig.update_layout(
+                title=(
+                    f"How {target} changes with each top parameter "
+                    "(others held at their measured values)"
+                ),
+                template="plotly_white",
+                height=380,
+            )
+            ipy_display(fig)
+
+    def create_pareto_suggestions_plot(
+        self, measured: pd.DataFrame, suggestions: pd.DataFrame, col_a: str, col_b: str
+    ):
+        """Measured samples (one point each) and the suggestions' predicted values
+        on the two objectives, so the spread along the trade-off is visible."""
+        if self.bo_widget is None:
+            raise ValueError("PlotManager has no bo_widget configured")
+
+        self.bo_widget.data = []
+        self.bo_widget.add_trace(
+            go.Scatter(
+                x=measured[col_a],
+                y=measured[col_b],
+                mode="markers",
+                name="Measured samples",
+                marker=dict(color="#999", size=7),
+                text=measured.get("sample_id"),
+                hovertemplate=f"Sample: %{{text}}<br>{col_a}: %{{x:.4g}}<br>{col_b}: %{{y:.4g}}"
+                "<extra></extra>",
+            )
+        )
+        labels = [f"#{i + 1}" for i in range(len(suggestions))]
+        self.bo_widget.add_trace(
+            go.Scatter(
+                x=suggestions[f"predicted_{col_a}"],
+                y=suggestions[f"predicted_{col_b}"],
+                mode="markers+text",
+                name="Suggestions (predicted)",
+                text=labels,
+                textposition="top center",
+                marker=dict(color="#7B2D8B", size=11, symbol="diamond"),
+            )
+        )
+        self.bo_widget.update_layout(
+            title=f"Suggestions along the {col_a} / {col_b} trade-off",
+            xaxis_title=col_a,
+            yaxis_title=col_b,
+            template="plotly_white",
+            height=450,
+        )
+
     def create_bo_suggestions_plot(self, suggestions: pd.DataFrame, target_col: str):
-        """Render suggested next-experiment predictions (mean ± std) as a bar chart,
+        """Render suggested next-experiment predictions (with their ±1 SD range,
+        asymmetric on a log-scale target) as a bar chart,
         left-to-right in the order the batch picked them (the suggestions
         DataFrame's own row order)."""
         if self.bo_widget is None:
@@ -851,7 +956,11 @@ class PlotManager:
             go.Bar(
                 x=labels,
                 y=suggestions[pred_col],
-                error_y=dict(type="data", array=suggestions["predicted_std"]),
+                error_y=dict(
+                    type="data",
+                    array=suggestions["predicted_high"] - suggestions[pred_col],
+                    arrayminus=suggestions[pred_col] - suggestions["predicted_low"],
+                ),
                 marker=dict(color="#7B2D8B"),
             )
         )
@@ -859,6 +968,59 @@ class PlotManager:
             title=f"Predicted {target_col} for suggested next experiments",
             xaxis_title="Suggestion (in the order picked)",
             yaxis_title=target_col,
+            template="plotly_white",
+            height=450,
+        )
+
+    def create_bo_loo_plot(
+        self, loo_df: pd.DataFrame, target_col: str, loo_r2: float, log_target: bool
+    ):
+        """Render the BO model's leave-one-sample-out predictions against the
+        measured values, with ±1 SD bars and the 1:1 line. Points near the line
+        mean the GP predicts unseen samples well."""
+        if self.bo_loo_widget is None:
+            raise ValueError("PlotManager has no bo_loo_widget configured")
+
+        lo = float(min(loo_df["observed"].min(), loo_df["predicted_low"].min()))
+        hi = float(max(loo_df["observed"].max(), loo_df["predicted_high"].max()))
+        axis_type = "log" if log_target else "linear"
+        r2_units = " (log10)" if log_target else ""
+
+        self.bo_loo_widget.data = []
+        self.bo_loo_widget.add_trace(
+            go.Scatter(
+                x=[lo, hi],
+                y=[lo, hi],
+                mode="lines",
+                name="1:1",
+                line=dict(color="#999", dash="dash"),
+                hoverinfo="skip",
+            )
+        )
+        self.bo_loo_widget.add_trace(
+            go.Scatter(
+                x=loo_df["observed"],
+                y=loo_df["predicted"],
+                mode="markers",
+                name="Left-out sample",
+                marker=dict(color="#7B2D8B", size=8),
+                error_y=dict(
+                    type="data",
+                    array=loo_df["predicted_high"] - loo_df["predicted"],
+                    arrayminus=loo_df["predicted"] - loo_df["predicted_low"],
+                ),
+                text=loo_df["sample_id"],
+                hovertemplate=(
+                    "Sample: %{text}<br>Measured: %{x:.4g}<br>Predicted: %{y:.4g}<extra></extra>"
+                ),
+            )
+        )
+        self.bo_loo_widget.update_layout(
+            title=f"Model check: leave-one-sample-out R²{r2_units} = {loo_r2:.2f}",
+            xaxis_title=f"Measured {target_col}",
+            yaxis_title=f"Predicted {target_col} (sample left out)",
+            xaxis_type=axis_type,
+            yaxis_type=axis_type,
             template="plotly_white",
             height=450,
         )

@@ -102,5 +102,15 @@ def pytest_collectstart(collector):
 @pytest.fixture(autouse=True)
 def _bind_app_bare_module_names(request, monkeypatch):
     app = _app_of_test_path(request.node.path)
-    for stem, module in _APP_MODULES.get(app, {}).items():
+    if app is None:
+        return
+    recorded = _APP_MODULES.get(app, {})
+    for stem, module in recorded.items():
         monkeypatch.setitem(sys.modules, stem, module)
+    # Modules of this app that were never imported during collection (a test importing
+    # inside its function) must not resolve to another app's module of the same name:
+    # drop that bare name and put this app's folder first, so the import finds this app.
+    for path in (_APPS_DIR / app).glob("*.py"):
+        if path.stem not in recorded:
+            monkeypatch.delitem(sys.modules, path.stem, raising=False)
+    monkeypatch.syspath_prepend(str(_APPS_DIR / app))
