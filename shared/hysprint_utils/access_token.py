@@ -42,7 +42,9 @@ def get_token(url, name=None):
     password = getpass.getpass()
 
     # get token from the api:
-    response = requests.get(f"{url}/auth/token", params=dict(username=user, password=password))
+    response = requests.post(
+        f"{url}/auth/token", data=dict(username=user, password=password), timeout=60
+    )
     if response.status_code == 401:
         raise Exception(response.json()["detail"])
     return response.json()["access_token"]

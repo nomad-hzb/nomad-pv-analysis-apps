@@ -133,7 +133,7 @@ class WidgetFactory:
     def create_filter_row():
         """Create a filter row with consistent dropdown and text input styling"""
         dropdown1 = WidgetFactory.create_dropdown(
-            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_MPP(V)", "J_MPP(mA/cm2)"],
+            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_mpp(V)", "J_mpp(mA/cm2)"],
             description="",
             width="label",
         )

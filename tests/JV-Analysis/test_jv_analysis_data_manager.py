@@ -222,3 +222,32 @@ def test_apply_filters_returns_dataframes(loaded_manager):
 def test_get_unique_values_returns_nonempty(loaded_manager):
     vals = loaded_manager.get_unique_values()
     assert len(vals) > 0
+
+
+# --- filter-row column names ---------------------------------------------------------------
+
+
+def _filter_row_options(source_file):
+    import re
+
+    text = Path(source_file).read_text(encoding="utf-8")
+    match = re.search(r'options=\[("Voc\(V\)".*?)\]', text)
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+@pytest.mark.parametrize(
+    "source_file",
+    [
+        Path(__file__).parents[2] / "apps" / "JV-Analysis" / "gui_components.py",
+        Path(__file__).parents[2] / "shared" / "hysprint_utils" / "plotting_utils.py",
+    ],
+)
+def test_filter_row_options_are_real_columns_and_filter(loaded_manager, source_file):
+    """Every column offered by a filter row must exist, so the filter really applies."""
+    options = _filter_row_options(source_file)
+    assert "V_mpp(V)" in options and "J_mpp(mA/cm2)" in options
+    for column in options:
+        # A filter nothing can satisfy must remove every row; a misspelt column is
+        # only logged and silently keeps them all.
+        filtered, omitted, _ = loaded_manager.apply_filters([(column, ">", "1e9")], verbose=False)
+        assert len(filtered) == 0 and len(omitted) > 0, column
