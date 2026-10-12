@@ -69,7 +69,7 @@ class WidgetFactory:
     @staticmethod
     def create_filter_row():
         dropdown1 = widgets.Dropdown(
-            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_MPP(V)", "J_MPP(mA/cm2)"],
+            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_mpp(V)", "J_mpp(mA/cm2)"],
             layout=widgets.Layout(width="66%"),
         )
         dropdown2 = widgets.Dropdown(
