@@ -204,3 +204,4 @@ output/**/*.json
 
 # Usage logs written by hysprint_utils.usage_tracking
 shared/log/
+apps/Entry_Auditor/entry_auditor_backups/

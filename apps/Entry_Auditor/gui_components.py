@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import logging
 import re
 from pathlib import Path
@@ -17,6 +18,7 @@ from data_manager import (
     EntryAuditSession,
     apply_correction,
     build_corrections_dict,
+    preview_correction,
 )
 from natsort import natsort_keygen
 
@@ -24,14 +26,18 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-# Writing corrections back to NOMAD is switched off until the correction path is made
-# safe: it currently replaces by the last key segment anywhere in the raw file and can
-# rewrite unrelated fields (issue #56). Auditing is unaffected.
-CORRECTIONS_ENABLED = False
-_CORRECTIONS_DISABLED_NOTE = (
-    "<hr><i>Correcting values from this app is temporarily disabled while a data-safety "
-    "issue is fixed (see GitHub issue #56). Auditing works as before.</i>"
-)
+# Corrections write to NOMAD. They edit one value at its exact path (not by leaf name),
+# are previewed and confirmed before anything is written, keep a backup of every original
+# file, and only count as done once NOMAD processed the entry and it reads back with the
+# new value (issue #56).
+CORRECTIONS_ENABLED = True
+
+
+def _esc(value) -> str:
+    """HTML-escape any text that came from NOMAD or from an exception before it goes into a
+    widgets.HTML: field values are free text typed by any user of the Oasis."""
+    return html.escape(str(value), quote=True)
+
 
 _natsort_key = natsort_keygen()
 
@@ -79,9 +85,7 @@ class FieldAuditPanel(widgets.VBox):
         self.token = token
         self.entry_type = ENTRY_TYPES_TO_AUDIT[label]
         self._can_correct = CORRECTIONS_ENABLED and url is not None and token is not None
-        self._corrections_disabled = (
-            not CORRECTIONS_ENABLED and url is not None and token is not None
-        )
+        self._pending: tuple | None = None
 
         self.entries_df = session.datasets[label]
         # Entries arrive in whatever order the API happened to return them in, which
@@ -107,7 +111,7 @@ class FieldAuditPanel(widgets.VBox):
         header = widgets.HTML(
             value=(
                 "<hr style='margin:28px 0 10px 0;border:none;border-top:2px solid #ccc'>"
-                f"<h2 style='margin:0 0 2px 0;font-size:22px'>&#9679;&nbsp;{label}</h2>"
+                f"<h2 style='margin:0 0 2px 0;font-size:22px'>&#9679;&nbsp;{_esc(label)}</h2>"
                 f"<p style='margin-top:0;color:#555'>Entries: {entries} &nbsp;|&nbsp; "
                 f"Unique samples: {unique_samples} &nbsp;|&nbsp; "
                 f"Auditable fields: {len(overview)}</p>"
@@ -122,8 +126,6 @@ class FieldAuditPanel(widgets.VBox):
 
         self.dropdown: widgets.Dropdown | None = None
         correct_section: widgets.Widget = widgets.VBox([])
-        if self._corrections_disabled:
-            correct_section = widgets.HTML(_CORRECTIONS_DISABLED_NOTE)
         if self._can_correct:
             self.dropdown = widgets.Dropdown(
                 # Same varied-first order as the pivot table below, so the two stay
@@ -141,9 +143,15 @@ class FieldAuditPanel(widgets.VBox):
             self.to_input = widgets.Text(
                 description="To:", placeholder="new value", layout=widgets.Layout(width="260px")
             )
-            self.correct_button = widgets.Button(
-                description="Correct value(s)", button_style="warning", icon="pencil"
+            self.preview_button = widgets.Button(
+                description="Preview correction", button_style="warning", icon="eye"
             )
+            self.confirm_button = widgets.Button(
+                description="Confirm", button_style="danger", icon="check"
+            )
+            self.cancel_button = widgets.Button(description="Cancel", icon="times")
+            self.confirm_button.layout.display = "none"
+            self.cancel_button.layout.display = "none"
             self.correct_out = widgets.HTML(value="")
             self.correct_progress = widgets.IntProgress(
                 min=0, max=1, value=0, layout=widgets.Layout(width="380px", display="none")
@@ -151,7 +159,11 @@ class FieldAuditPanel(widgets.VBox):
 
             self.dropdown.observe(self._on_field_change, names="value")
             self.from_dropdown.observe(self._on_from_change, names="value")
-            self.correct_button.on_click(self._on_correct_click)
+            self.preview_button.on_click(self._on_preview_click)
+            self.confirm_button.on_click(self._on_confirm_click)
+            self.cancel_button.on_click(self._on_cancel_click)
+            for control in (self.dropdown, self.from_dropdown, self.sample_dropdown, self.to_input):
+                control.observe(self._reset_preview, names="value")
 
             correct_section = widgets.VBox(
                 [
@@ -162,7 +174,9 @@ class FieldAuditPanel(widgets.VBox):
                             self.from_dropdown,
                             self.sample_dropdown,
                             self.to_input,
-                            self.correct_button,
+                            self.preview_button,
+                            self.confirm_button,
+                            self.cancel_button,
                         ]
                     ),
                     self.correct_progress,
@@ -209,7 +223,7 @@ class FieldAuditPanel(widgets.VBox):
             row = self.entries_df.loc[row_index]
             sample_id = row.get("sample_id", "") or "N/A"
             mainfile_label = _mainfile_label(row.get("_mainfile", "") or "")
-            tooltip = f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id)
+            tooltip = _esc(f"{sample_id} ({mainfile_label})" if mainfile_label else str(sample_id))
             children.append(
                 widgets.HTML(
                     f"<div style='text-align:center;font-weight:bold' "
@@ -232,7 +246,7 @@ class FieldAuditPanel(widgets.VBox):
                     name_widget.style.button_color = "#f5b7b1"
                 name_widget.on_click(lambda _button, col=column: self._select_field(col))
             else:
-                name_widget = widgets.HTML(f"<code>{column}</code>")
+                name_widget = widgets.HTML(f"<code>{_esc(column)}</code>")
             children.append(name_widget)
 
             row_cells = []
@@ -258,7 +272,7 @@ class FieldAuditPanel(widgets.VBox):
         if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
             text = "-"
         else:
-            text = str(value)
+            text = _esc(value)
             if self.links_toggle.value:
                 sample_id = row.get("sample_id", "") or ""
                 gui_url = row.get("_gui_url", "") or self.session.sample_links.get(sample_id, "")
@@ -267,7 +281,7 @@ class FieldAuditPanel(widgets.VBox):
                     # styles often reset link appearance, which made "Add NOMAD links"
                     # look like it did nothing even though the <a> tag was there.
                     text = (
-                        f"<a href='{gui_url}' target='_blank' "
+                        f"<a href='{_esc(gui_url)}' target='_blank' "
                         f"style='color:#1a73e8;text-decoration:underline'>{text}</a>"
                     )
         return (
@@ -348,8 +362,18 @@ class FieldAuditPanel(widgets.VBox):
             f"<span style='color:#b9770e'><b>Working...</b> ({index}/{total})</span>"
         )
 
-    def _on_correct_click(self, _button) -> None:
-        self.correct_out.value = "<span style='color:#b9770e'><b>Working...</b></span>"
+    def _reset_preview(self, _change=None) -> None:
+        """Any change to the selection invalidates a previewed correction."""
+        self._pending = None
+        self.confirm_button.layout.display = "none"
+        self.cancel_button.layout.display = "none"
+
+    def _on_cancel_click(self, _button) -> None:
+        self._reset_preview()
+        self.correct_out.value = "<i>Cancelled. Nothing was changed.</i>"
+
+    def _on_preview_click(self, _button) -> None:
+        self._reset_preview()
         column = self.dropdown.value
         old_value = self.from_dropdown.value
         new_value = self.to_input.value.strip()
@@ -364,6 +388,63 @@ class FieldAuditPanel(widgets.VBox):
             )
             return
 
+        self.correct_out.value = "<span style='color:#b9770e'><b>Checking entries...</b></span>"
+        self.correct_progress.value = 0
+        self.correct_progress.layout.display = None
+        try:
+            preview = preview_correction(
+                self.url,
+                self.token,
+                self.session.datasets[self.label],
+                column,
+                old_value,
+                new_value,
+                self.entry_type,
+                only_entry_id=only_entry_id,
+                progress_callback=self._on_correct_progress,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Preview failed for %s.%s", self.label, column)
+            self.correct_out.value = f"<span style='color:#c0392b'>Failed: {_esc(exc)}</span>"
+            return
+        finally:
+            self.correct_progress.layout.display = "none"
+
+        n_change = sum(1 for item in preview if item["status"] == "change")
+        n_no_match = sum(1 for item in preview if item["status"] == "no_match")
+        n_error = sum(1 for item in preview if item["status"] == "error")
+        rows = "".join(
+            "<tr><td>{}</td><td>{}</td></tr>".format(
+                _esc(_mainfile_label(item["mainfile"])),
+                {"change": "will change", "no_match": "not at this path, skipped"}.get(
+                    item["status"], "error: " + _esc(item.get("detail", ""))
+                ),
+            )
+            for item in preview
+        )
+        summary = (
+            f"<b>{_esc(column)}</b>: <code>{_esc(old_value)}</code> &rarr; "
+            f"<code>{_esc(new_value)}</code><br>"
+            f"{n_change} entr{'y' if n_change == 1 else 'ies'} will change, "
+            f"{n_no_match} skipped, {n_error} with errors. "
+            "A backup of every original file is kept in <code>entry_auditor_backups/</code>."
+        )
+        self.correct_out.value = (
+            f"{summary}<div style='max-height:220px;overflow-y:auto'>"
+            f"<table style='font-size:12px'>{rows}</table></div>"
+        )
+        if n_change:
+            self._pending = (column, old_value, new_value, only_entry_id)
+            self.confirm_button.description = f"Confirm: change {n_change}"
+            self.confirm_button.layout.display = None
+            self.cancel_button.layout.display = None
+
+    def _on_confirm_click(self, _button) -> None:
+        pending = self._pending
+        self._reset_preview()
+        if pending is None:
+            return
+        column, old_value, new_value, only_entry_id = pending
         self.correct_progress.value = 0
         self.correct_progress.layout.display = None
         try:
@@ -380,15 +461,42 @@ class FieldAuditPanel(widgets.VBox):
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Correction failed for %s.%s", self.label, column)
-            self.correct_out.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            self.correct_out.value = f"<span style='color:#c0392b'>Failed: {_esc(exc)}</span>"
             return
         finally:
             self.correct_progress.layout.display = "none"
 
-        self.correct_out.value = (
-            f"<b>Done</b> - {result.success} updated, {result.skipped} skipped, "
+        message = (
+            f"<b>Done</b> - {result.success} updated and verified, {result.skipped} skipped, "
             f"{result.failed} failed."
         )
+        if result.unverified:
+            message += (
+                f" <span style='color:#b9770e'>{result.unverified} written but NOT confirmed "
+                "(NOMAD was still processing or the result could not be read back): check "
+                "them in NOMAD before correcting again.</span>"
+            )
+        self.correct_out.value = message
+        self._refresh_after_correction(result.succeeded_entry_ids, column, new_value)
+
+    def _refresh_after_correction(self, entry_ids: list[str], column: str, new_value: str) -> None:
+        """Show the corrected values: patch the loaded data for the entries NOMAD confirmed,
+        then rebuild the table and the 'change name' options from it."""
+        if not entry_ids:
+            return
+        df = self.session.datasets[self.label]
+        df.loc[df["_entry_id"].isin(entry_ids), column] = new_value
+        self._overview = sorted(
+            self.session.field_overview(self.label), key=lambda e: not e["is_varied"]
+        )
+        self.content_box.children = (
+            self.links_toggle,
+            self._build_pivot_table(self._overview),
+            *self.content_box.children[2:],
+        )
+        self.dropdown.options = [entry["column"] for entry in self._overview]
+        self.dropdown.value = column
+        self._refresh_from_options(column)
 
 
 def create_audit_tab(
@@ -452,14 +560,14 @@ def create_audit_tab(
             messages = session.load(url, token, batch_ids, progress_callback=_on_load_progress)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load batches %s", batch_ids)
-            _status(f"<span style='color:#c0392b'>Failed to load batches: {exc}</span>")
+            _status(f"<span style='color:#c0392b'>Failed to load batches: {_esc(exc)}</span>")
             return
         finally:
             progress_bar.layout.display = "none"
         _status(
             f"Loaded {len(session.sample_ids)} sample(s) across {len(session.datasets)} schema(s)."
         )
-        _log("<br>".join(f"{label}: {message}" for label, message in messages.items()))
+        _log("<br>".join(f"{_esc(label)}: {_esc(message)}" for label, message in messages.items()))
         _show_results(url, token)
 
     demo_button = widgets.Button(
@@ -473,7 +581,7 @@ def create_audit_tab(
             loaded = session.load_offline(demo_fixture_path)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to load demo fixture %s", demo_fixture_path)
-            _status(f"<span style='color:#c0392b'>Failed to load demo data: {exc}</span>")
+            _status(f"<span style='color:#c0392b'>Failed to load demo data: {_esc(exc)}</span>")
             return
         if not loaded:
             _status("Demo fixture contained no data.")
