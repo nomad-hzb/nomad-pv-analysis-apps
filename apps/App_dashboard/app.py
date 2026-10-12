@@ -67,15 +67,17 @@ def setup_app():
         ]
 
         sections = []
-        for category, entries in dm.CATEGORIES.items():
+        for category, entries in dm.SELECTION.categories.items():
             cards = [render_app_card(e) for e in entries]
             if category == "Build Your Own":
                 # Omit the section entirely on a deployment with no configured
-                # projects, rather than showing an empty "Projects" header.
-                if project_cards:
+                # projects (or one that hides them), rather than showing an empty header.
+                if project_cards and dm.SELECTION.show_projects:
                     sections.append(gui.create_category_section("Projects", project_cards))
-                cards.insert(0, render_learning_card())
-            sections.append(gui.create_category_section(category, cards))
+                if dm.SELECTION.show_learning:
+                    cards.insert(0, render_learning_card())
+            if cards:  # a category with every app hidden disappears
+                sections.append(gui.create_category_section(category, cards))
 
         root.children = [
             gui.create_style(),

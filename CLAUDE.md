@@ -126,6 +126,8 @@ dropped. Route it through an `Output()` that stays in the displayed tree
   files for every app in it; uploads on different Oasis or users are still separate (issue #7).
 - The parked `Electrochemical_analysis` notebooks have no bootstrap cell, so they get no
   deployment environment (Oasis URL, proxy) on a non-HZB Oasis.
+- Which apps the dashboard shows is a per-deployment env choice, not code:
+  `HYSPRINT_DASHBOARD_HIDE_APPS` / `HYSPRINT_DASHBOARD_SHOW_APPS` (`DEPLOYMENT.md`).
 - Oasis-specific content has three ad-hoc mechanisms (per-item env override in App_dashboard,
   the deliberate SE pin in PeroDatabase_downloader, derivation from `hysprint_utils.config`),
   and the Excel_creator guide link (`sheet_data_entry_guide.py`) awaits a decision. Don't add
