@@ -132,7 +132,8 @@ class AuthenticationManager:
         token_url = self.api_client.get_auth_token_url()
 
         try:
-            response = requests.get(token_url, params=auth_dict, timeout=LAYOUT["TIMEOUT_STANDARD"])
+            # NOMAD takes the login as form data; query params would leak the password into URLs.
+            response = requests.post(token_url, data=auth_dict, timeout=LAYOUT["TIMEOUT_STANDARD"])
             response.raise_for_status()
 
             token_data = response.json()
