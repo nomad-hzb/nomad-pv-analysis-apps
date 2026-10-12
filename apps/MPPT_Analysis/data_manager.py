@@ -59,7 +59,12 @@ def _has_value(value):
     field is also NOMAD's own native way to represent "no value" for a
     scalar quantity - the same convention this app already relies on for
     T80_linear when it's inapplicable (see erfc_params in fitting_tools.py)."""
-    return value is not None and not (isinstance(value, float) and math.isnan(value))
+    if value is None:
+        return False
+    try:
+        return bool(math.isfinite(float(value)))
+    except (TypeError, ValueError):
+        return False
 
 
 # Everything else in a model's columns (its actual free parameters, e.g. A,
@@ -75,25 +80,30 @@ def _has_value(value):
 # this is keyed by model.abbreviated_name, not by parameter name alone.
 _LEFTOVER_PARAM_UNITS = {
     "Stretched Exp": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A": ("mW/cm^2", 1.0),
         "tau": ("s", 3600.0),
         "beta": ("", 1.0),
     },
     "Linear": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "slope": ("mW/cm^2/s", 1.0 / 3600.0),
         "intercept": ("mW/cm^2", 1.0),
     },
     "Exponential": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "amplitude": ("mW/cm^2", 1.0),
         "decay": ("s", 3600.0),
     },
     "Biexponential": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A1": ("mW/cm^2", 1.0),
         "tau1": ("s", 3600.0),
         "A2": ("mW/cm^2", 1.0),
         "tau2": ("s", 3600.0),
     },
     "Logistic+Exp": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A": ("mW/cm^2", 1.0),
         "tau": ("s", 3600.0),
         "L": ("mW/cm^2", 1.0),
@@ -101,6 +111,7 @@ _LEFTOVER_PARAM_UNITS = {
         "x0": ("s", 3600.0),
     },
     "ERFC+Linear": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "PCE0": ("mW/cm^2", 1.0),
         "k": ("mW/cm^2/s", 1.0 / 3600.0),
         "t0": ("s", 3600.0),
@@ -338,78 +349,98 @@ class DataManager:
         }
         return self._build_from_raw(raw, fx["descriptions"])
 
-    def _build_from_raw(self, raw: dict, descriptions: dict) -> bool:
-        mppt_curves_list = []
-        description_list = []
-        existing_sample_ids = []
+    @staticmethod
+    def _entry_frame(raw_data, sample_id) -> pd.DataFrame | None:
+        """One MPPT entry's valid rows as a DataFrame in the app's convention (power and
+        current density positive for a generating cell, time in hours), or None when the
+        entry has no usable row.
 
+        NOMAD stores generated power as negative; the sign is detected per entry (median
+        power below zero) instead of being flipped unconditionally, so an entry or demo
+        file already in the positive convention is not turned upside down."""
+        validated_rows = []
+        for row in DataManager._rows_from_entry(raw_data):
+            try:
+                validated = MPPTRow(
+                    time=row.get("time"),
+                    power_density=row.get("power_density"),
+                    voltage=row.get("voltage"),
+                    current_density=row.get("current_density"),
+                )
+                validated_rows.append(validated.model_dump())
+            except ValidationError as exc:
+                logger.warning("Skipping invalid MPPT row for sample %s: %s", sample_id, exc)
+        if not validated_rows:
+            return None
+        frame = pd.DataFrame(validated_rows)
+        if frame["power_density"].median() < 0:
+            frame["power_density"] *= -1
+            frame["current_density"] *= -1
+        frame["time"] *= 1 / 3600
+        return frame
+
+    def _assemble_curves(self, raw: dict):
+        """{sample_id: [(archive_data, metadata), ...]} -> (curves, sample_ids, entries), or
+        None when nothing has usable rows.
+
+        The single loader behind both the live and the offline path. An entry without usable
+        rows contributes no curve, no name and no entry_id, so curve k always belongs to
+        entry k (previously the labels were appended anyway and every later curve was written
+        back to the previous entry), and a sample with no curve is not in sample_ids (pandas
+        silently truncates concat keys that do not match)."""
+        curves_by_sample = []
+        entries_by_sample = []
+        sample_order = []
         for sample_id, entries in raw.items():
-            entry_names_list = []
-            entry_description_list = []
-            entry_ids_list = []
-            upload_ids_list = []
-            sample_curves_list = []
-
+            frames, names, descriptions, entry_ids, upload_ids = [], [], [], [], []
             for mppt_entry in entries:
                 raw_data = mppt_entry[0]
                 metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
-                rows_list = self._rows_from_entry(raw_data)
-                validated_rows = []
-                for row in rows_list:
-                    try:
-                        v = MPPTRow(
-                            time=row.get("time"),
-                            power_density=row.get("power_density"),
-                            voltage=row.get("voltage"),
-                            current_density=row.get("current_density"),
-                        )
-                        validated_rows.append(v.model_dump())
-                    except ValidationError as exc:
-                        logger.warning(
-                            "Skipping invalid MPPT row for sample %s: %s", sample_id, exc
-                        )
-                if validated_rows:
-                    sample_curves_list.append(pd.DataFrame(validated_rows))
+                frame = self._entry_frame(raw_data, sample_id)
+                if frame is None:
+                    continue
                 meta = raw_data if isinstance(raw_data, dict) else {}
-                entry_names_list.append(meta.get("name", ""))
-                entry_description_list.append(meta.get("description", ""))
-                entry_ids_list.append(metadata.get("entry_id"))
-                upload_ids_list.append(metadata.get("upload_id"))
-
-            if sample_curves_list:
-                mppt_curves_list.append(
-                    pd.concat(sample_curves_list, keys=np.arange(len(sample_curves_list)))
+                frames.append(frame)
+                names.append(meta.get("name", ""))
+                descriptions.append(meta.get("description", ""))
+                entry_ids.append(metadata.get("entry_id"))
+                upload_ids.append(metadata.get("upload_id"))
+            if not frames:
+                continue
+            curves_by_sample.append(pd.concat(frames, keys=np.arange(len(frames))))
+            entries_by_sample.append(
+                pd.DataFrame(
+                    {
+                        "entry_names": names,
+                        "entry_description": descriptions,
+                        "entry_id": entry_ids,
+                        "upload_id": upload_ids,
+                    }
                 )
-                description_list.append(
-                    pd.DataFrame(
-                        {
-                            "entry_names": entry_names_list,
-                            "entry_description": entry_description_list,
-                            "entry_id": entry_ids_list,
-                            "upload_id": upload_ids_list,
-                        }
-                    )
-                )
-                existing_sample_ids.append(sample_id)
+            )
+            sample_order.append(sample_id)
+        if not curves_by_sample:
+            return None
+        sample_ids = pd.Series(sample_order)
+        return (
+            pd.concat(curves_by_sample, keys=sample_ids),
+            sample_ids,
+            pd.concat(entries_by_sample, keys=sample_ids),
+        )
 
-        if not mppt_curves_list:
+    def _build_from_raw(self, raw: dict, descriptions: dict) -> bool:
+        assembled = self._assemble_curves(raw)
+        if assembled is None:
             return False
-
-        sample_ids_series = pd.Series(existing_sample_ids)
-        curves = pd.concat(mppt_curves_list, keys=sample_ids_series)
-        curves.loc[:, "power_density"] *= -1
-        curves.loc[:, "current_density"] *= -1
-        curves.loc[:, "time"] *= 1 / 3600
-        entries_df = pd.concat(description_list, keys=sample_ids_series)
+        curves, sample_ids_series, entries_df = assembled
         properties = pd.DataFrame(
             {
                 "description": pd.Series(
-                    {sid: descriptions.get(sid, "") for sid in existing_sample_ids}
+                    {sid: descriptions.get(sid, "") for sid in sample_ids_series}
                 ),
                 "name": pd.Series(dtype=str),
             }
         )
-
         self.curves = curves
         self.sample_ids = sample_ids_series
         self.entries = entries_df
@@ -528,69 +559,8 @@ class DataManager:
     def get_mppt_data_working(self, try_sample_ids):
         """Take list of sample ids and return mppt data as data frames"""
         all_mppt = get_all_mppt(self.url, self.token, try_sample_ids)
-        existing_sample_ids = pd.Series(all_mppt.keys())
-
-        if len(existing_sample_ids) == 0:
-            return None, None, None
-
-        mppt_curves_list = []
-        description_list = []
-        for sample_data in all_mppt:
-            entry_names_list = []
-            entry_description_list = []
-            entry_ids_list = []
-            upload_ids_list = []
-            sample_curves_list = []
-            for mppt_entry in all_mppt.get(sample_data):
-                raw_data = mppt_entry[0]
-                metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
-                rows_list = self._rows_from_entry(raw_data)
-                validated_rows = []
-                for row in rows_list:
-                    try:
-                        v = MPPTRow(
-                            time=row.get("time"),
-                            power_density=row.get("power_density"),
-                            voltage=row.get("voltage"),
-                            current_density=row.get("current_density"),
-                        )
-                        validated_rows.append(v.model_dump())
-                    except ValidationError as exc:
-                        logger.warning(
-                            "Skipping invalid MPPT row for sample %s: %s", sample_data, exc
-                        )
-                        continue
-                if validated_rows:
-                    sample_curves_list.append(pd.DataFrame(validated_rows))
-                meta = raw_data if isinstance(raw_data, dict) else {}
-                entry_names_list.append(meta.get("name", ""))
-                entry_description_list.append(meta.get("description", ""))
-                entry_ids_list.append(metadata.get("entry_id"))
-                upload_ids_list.append(metadata.get("upload_id"))
-
-            if sample_curves_list:
-                mppt_curves_list.append(
-                    pd.concat(sample_curves_list, keys=np.arange(len(sample_curves_list)))
-                )  # noqa: E501
-                description_list.append(
-                    pd.DataFrame(
-                        {
-                            "entry_names": entry_names_list,
-                            "entry_description": entry_description_list,
-                            "entry_id": entry_ids_list,
-                            "upload_id": upload_ids_list,
-                        }
-                    )
-                )  # noqa: E501
-
-        if mppt_curves_list and description_list:
-            return (
-                pd.concat(mppt_curves_list, keys=existing_sample_ids),
-                existing_sample_ids,
-                pd.concat(description_list, keys=existing_sample_ids),
-            )  # noqa: E501
-        else:
-            return None, None, None
+        assembled = self._assemble_curves(all_mppt) if all_mppt else None
+        return assembled if assembled is not None else (None, None, None)
 
     def load_data_from_batches(self, selected_batches):
         """Load MPPT data from selected batches"""
@@ -602,11 +572,6 @@ class DataManager:
                 return None, "The selected batches don't contain any MPPT measurements"
 
             curves, sample_ids, entries = mppt_result
-
-            # Process the data
-            curves.loc[:, "power_density"] *= -1
-            curves.loc[:, "current_density"] *= -1
-            curves.loc[:, "time"] *= 1 / 3600
 
             # Get sample descriptions
             identifiers = get_sample_description(self.url, self.token, list(sample_ids))
@@ -759,6 +724,117 @@ class DataManager:
                 results[curve_id] = fit
         return results
 
+    def _build_fit_changes(self, fit, computed_by, computed_at):
+        """The edit_entry `changes` list that writes one fit into its NOMAD entry."""
+        model = fit["model"]
+        time_h = fit["time"]
+        params = fit.get("params", {})
+
+        changes = [
+            {"path": "data/results/0/fit_method", "new_value": model.name},
+            {"path": "data/results/0/fit_source", "new_value": "manual"},
+            {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
+            {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
+            {
+                "path": "data/results/0/fit_range_start",
+                "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
+            },
+            {
+                "path": "data/results/0/fit_range_end",
+                "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
+            },
+        ]
+        # Declare the full desired state for every standardized metric this app
+        # can produce - upsert what this model computed, explicitly remove
+        # whatever it didn't. Without the "remove" branch, re-fitting a sample
+        # with a model that produces fewer metrics (e.g. switching from
+        # Biexponential, which writes Ts80, to Linear, which doesn't) would
+        # leave the previous fit's Ts80 stale in NOMAD instead of reflecting
+        # what this fit actually produced.
+        for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
+            value = next((params[a] for a in aliases if a in params), None)
+            if _has_value(value):
+                changes.append(
+                    {
+                        "path": f"data/results/0/{schema_field}",
+                        "new_value": float(value) * 3600,
+                    }
+                )
+            else:
+                changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
+
+        # R2, LEY, and PCE_after_1000_h are computed by every model (unlike
+        # the model-specific parameters below), so they get their own typed
+        # fields rather than living in the generic fit_parameters bag.
+        if _has_value(params.get("R2")):
+            changes.append(
+                {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
+            )
+        else:
+            changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
+        if _has_value(params.get("LEY")):
+            changes.append(
+                {
+                    "path": "data/results/0/lifetime_energy_yield",
+                    "new_value": float(params["LEY"]),
+                }
+            )
+        else:
+            changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
+        if _has_value(params.get("PCE_after_1000_h")):
+            changes.append(
+                {
+                    "path": "data/results/0/PCE_after_1000_h",
+                    "new_value": float(params["PCE_after_1000_h"]),
+                }
+            )
+        else:
+            changes.append({"path": "data/results/0/PCE_after_1000_h", "action": "remove"})
+
+        # Everything else this model actually fit (A, tau, beta, slope,
+        # intercept, ...) - always upsert the full list, even if empty, so a
+        # re-fit with a model that has fewer/different parameters doesn't
+        # leave a previous fit's parameters stale (same reasoning as the
+        # ISOS metrics above).
+        leftover_units = _LEFTOVER_PARAM_UNITS.get(model.abbreviated_name, {})
+        fit_parameters = []
+        for column in model.columns:
+            if column in _DEDICATED_FIELD_COLUMNS or column not in params:
+                continue
+            if not _has_value(params[column]):
+                continue  # NaN/inf (e.g. T80_linear when k is 0) cannot be sent as JSON
+            unit_str, factor = leftover_units.get(column, ("", 1.0))
+            entry = {
+                "name": column,
+                "value": float(params[column]) * factor,
+                "unit": unit_str,
+            }
+            error_raw = params.get(f"{column}_error")
+            if _has_value(error_raw):
+                entry["error"] = float(error_raw) * factor
+            fit_parameters.append(entry)
+        changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
+
+        # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
+        # the fit range in time (not a subsample of the raw data points),
+        # matching the convention agreed with nomad-baseclasses.
+        resample_time_s, resample_power = _resample_fit_curve(fit.get("lmfit_result"), time_h)
+        if resample_time_s is not None:
+            changes.append(
+                {
+                    "path": "data/results/0/fitted_time",
+                    "new_value": resample_time_s.tolist(),
+                }
+            )
+            changes.append(
+                {
+                    "path": "data/results/0/fitted_power_density",
+                    "new_value": resample_power.tolist(),
+                }
+            )
+
+        return changes
+
     def write_fit_results_to_nomad(self, entries_data, fits_by_key, computed_by):
         """Push a set of accepted fits back into their NOMAD entries.
 
@@ -783,6 +859,7 @@ class DataManager:
 
         computed_at = datetime.utcnow().isoformat()
         outcomes = []
+        written_entry_ids: set[str] = set()
 
         for (sample_id, curve_id), fit in fits_by_key.items():
             entry_id = self.get_entry_id(entries_data, sample_id, curve_id)
@@ -798,114 +875,24 @@ class DataManager:
                     }
                 )
                 continue
+            if entry_id in written_entry_ids:
+                # An entry that references several samples is indexed under each of them;
+                # write it once, the same fit would otherwise overwrite itself.
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": True,
+                        "message": "Same NOMAD entry already written for another sample.",
+                        "nomad_url": None,
+                    }
+                )
+                continue
+            written_entry_ids.add(entry_id)
             upload_id = self.get_upload_id(entries_data, sample_id, curve_id)
 
-            model = fit["model"]
-            time_h = fit["time"]
-            params = fit.get("params", {})
-
-            changes = [
-                {"path": "data/results/0/fit_method", "new_value": model.name},
-                {"path": "data/results/0/fit_source", "new_value": "manual"},
-                {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
-                {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
-                {
-                    "path": "data/results/0/fit_range_start",
-                    "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
-                },
-                {
-                    "path": "data/results/0/fit_range_end",
-                    "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
-                },
-            ]
-            # Declare the full desired state for every standardized metric this app
-            # can produce - upsert what this model computed, explicitly remove
-            # whatever it didn't. Without the "remove" branch, re-fitting a sample
-            # with a model that produces fewer metrics (e.g. switching from
-            # Biexponential, which writes Ts80, to Linear, which doesn't) would
-            # leave the previous fit's Ts80 stale in NOMAD instead of reflecting
-            # what this fit actually produced.
-            for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
-                value = next((params[a] for a in aliases if a in params), None)
-                if _has_value(value):
-                    changes.append(
-                        {
-                            "path": f"data/results/0/{schema_field}",
-                            "new_value": float(value) * 3600,
-                        }
-                    )
-                else:
-                    changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
-
-            # R2, LEY, and PCE_after_1000_h are computed by every model (unlike
-            # the model-specific parameters below), so they get their own typed
-            # fields rather than living in the generic fit_parameters bag.
-            if _has_value(params.get("R2")):
-                changes.append(
-                    {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
-                )
-            else:
-                changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
-            if _has_value(params.get("LEY")):
-                changes.append(
-                    {
-                        "path": "data/results/0/lifetime_energy_yield",
-                        "new_value": float(params["LEY"]),
-                    }
-                )
-            else:
-                changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
-            if _has_value(params.get("PCE_after_1000_h")):
-                changes.append(
-                    {
-                        "path": "data/results/0/PCE_after_1000_h",
-                        "new_value": float(params["PCE_after_1000_h"]),
-                    }
-                )
-            else:
-                changes.append({"path": "data/results/0/PCE_after_1000_h", "action": "remove"})
-
-            # Everything else this model actually fit (A, tau, beta, slope,
-            # intercept, ...) - always upsert the full list, even if empty, so a
-            # re-fit with a model that has fewer/different parameters doesn't
-            # leave a previous fit's parameters stale (same reasoning as the
-            # ISOS metrics above).
-            leftover_units = _LEFTOVER_PARAM_UNITS.get(model.abbreviated_name, {})
-            fit_parameters = []
-            for column in model.columns:
-                if column in _DEDICATED_FIELD_COLUMNS or column not in params:
-                    continue
-                unit_str, factor = leftover_units.get(column, ("", 1.0))
-                entry = {
-                    "name": column,
-                    "value": float(params[column]) * factor,
-                    "unit": unit_str,
-                }
-                error_raw = params.get(f"{column}_error")
-                if error_raw is not None:
-                    entry["error"] = float(error_raw) * factor
-                fit_parameters.append(entry)
-            changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
-
-            # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
-            # the fit range in time (not a subsample of the raw data points),
-            # matching the convention agreed with nomad-baseclasses.
-            resample_time_s, resample_power = _resample_fit_curve(fit.get("lmfit_result"), time_h)
-            if resample_time_s is not None:
-                changes.append(
-                    {
-                        "path": "data/results/0/fitted_time",
-                        "new_value": resample_time_s.tolist(),
-                    }
-                )
-                changes.append(
-                    {
-                        "path": "data/results/0/fitted_power_density",
-                        "new_value": resample_power.tolist(),
-                    }
-                )
-
             try:
+                changes = self._build_fit_changes(fit, computed_by, computed_at)
                 edit_entry(self.url, self.token, entry_id, changes)
                 outcomes.append(
                     {
@@ -930,6 +917,20 @@ class DataManager:
                         "curve_id": curve_id,
                         "success": False,
                         "message": message,
+                        "nomad_url": None,
+                    }
+                )
+            except (requests.RequestException, ValueError, TypeError, OverflowError) as exc:
+                # A network error, or a value that cannot be sent: report this entry as
+                # failed and carry on, instead of aborting with earlier entries already
+                # written and no word to the user about the rest.
+                logger.exception("Writing the fit of %s / %s failed", sample_id, curve_id)
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": False,
+                        "message": f"{type(exc).__name__}: {exc}",
                         "nomad_url": None,
                     }
                 )

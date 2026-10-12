@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import lmfit
 import numpy as np
 import pandas as pd
@@ -72,7 +74,7 @@ def stretched_exponential_params(power, times, initial_values=None):
     stretched_exponential_model = lmfit.Model(
         stretched_exponential
     )  # create Model object from the function
-    guess = stretched_exponential_defaults(power, times)
+    guess: dict[str, Any] = stretched_exponential_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = stretched_exponential_model.make_params(**guess)  # initial values for the fit
     # tau appears as (t/tau)**beta - an unbounded optimizer can wander tau
@@ -110,6 +112,8 @@ def stretched_exponential_params(power, times, initial_values=None):
     lifetime_energy = calculate_ley(stretched_exponential, [A, tau, beta], ley_end)
 
     # put all relevant parameters into a list, if errors were calculated return parameters as uncertainties.ufloats, otherwise as normal floats
+    ley_1000h = ley_after_1000h(times, power, model_at)
+
     if result.errorbars:
         result_values = [
             result.uvars["A"],
@@ -123,6 +127,7 @@ def stretched_exponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -137,6 +142,7 @@ def stretched_exponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -174,7 +180,9 @@ def linear_params(power, times, initial_values=None):
     tS, Ts80, Ts95 = 0.0, T80, T95
     PCE_1000h = pce_after_1000h(times, power, model_at)
     ley_end = T80 if np.isfinite(T80) else times[-1]
-    lifetime_energy = 0.5 * slope * ley_end**2 + intercept * ley_end
+    lifetime_energy = (0.5 * slope * ley_end**2 + intercept * ley_end) * LEY_MWH_CM2_TO_KWH_M2
+
+    ley_1000h = ley_after_1000h(times, power, model_at)
 
     if result.errorbars:
         result_values = [
@@ -188,6 +196,7 @@ def linear_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -201,6 +210,7 @@ def linear_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -240,8 +250,10 @@ def exponential_params(power, times, initial_values=None):
     PCE_1000h = pce_after_1000h(times, power, model_at)
     ley_end = T80 if np.isfinite(T80) else times[-1]
     lifetime_energy = (
-        amplitude * decay * (1 - np.exp(-ley_end / decay))
+        amplitude * decay * (1 - np.exp(-ley_end / decay)) * LEY_MWH_CM2_TO_KWH_M2
     )  # explicit solution to integral
+
+    ley_1000h = ley_after_1000h(times, power, model_at)
 
     if result.errorbars:
         result_values = [
@@ -255,6 +267,7 @@ def exponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -268,6 +281,7 @@ def exponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -296,7 +310,7 @@ def biexponential_params(power, times, initial_values=None):
     biexp_model = lmfit.models.ExponentialModel(prefix="exp1_") + lmfit.models.ExponentialModel(
         prefix="exp2_"
     )
-    guess = biexponential_defaults(power, times)
+    guess: dict[str, Any] = biexponential_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = biexp_model.make_params(
         **{_BIEXP_DISPLAY_TO_LMFIT[name]: value for name, value in guess.items()}
@@ -333,17 +347,23 @@ def biexponential_params(power, times, initial_values=None):
     # crossings relative to the slow term's own amplitude (its value once
     # the fast term has vanished), found the same way as T80/T95 above.
     tS = -tau_fast * np.log(0.01)
-    Ts80 = crossing_time(times, power, A_slow, 0.8, model_at, search_from=tS)
-    Ts95 = crossing_time(times, power, A_slow, 0.95, model_at, search_from=tS)
+    if tS > times[-1]:
+        # beyond the measurement it is an extrapolation artefact (1350 h on 100 h of data)
+        tS = Ts80 = Ts95 = float("nan")
+    else:
+        Ts80 = crossing_time(times, power, A_slow, 0.8, model_at, search_from=tS)
+        Ts95 = crossing_time(times, power, A_slow, 0.95, model_at, search_from=tS)
 
     PCE_1000h = pce_after_1000h(times, power, model_at)
     # LEY integrates up to T80 (the initial-referenced threshold), matching
     # this field's schema definition - biexponential previously used Ts80
     # here only because T80 didn't exist yet for this model.
     ley_end = T80 if np.isfinite(T80) else times[-1]
-    lifetime_energy = A1 * tau1 * (1 - np.exp(-ley_end / tau1)) + A2 * tau2 * (
-        1 - np.exp(-ley_end / tau2)
-    )  # explicit solution for integral
+    lifetime_energy = (
+        A1 * tau1 * (1 - np.exp(-ley_end / tau1)) + A2 * tau2 * (1 - np.exp(-ley_end / tau2))
+    ) * LEY_MWH_CM2_TO_KWH_M2  # explicit solution for integral
+
+    ley_1000h = ley_after_1000h(times, power, model_at)
 
     if result.errorbars:
         result_values = [
@@ -359,6 +379,7 @@ def biexponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -374,6 +395,7 @@ def biexponential_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -390,7 +412,7 @@ def logistic_defaults(power, times):
 
 def logistic_params(power, times, initial_values=None):
     log_exp_model = lmfit.Model(logistic_plus_exp)
-    guess = logistic_defaults(power, times)
+    guess: dict[str, Any] = logistic_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = log_exp_model.make_params(**guess)
     # tau: denominator in exp(-t/tau), see stretched_exponential_params. k: divides
@@ -408,8 +430,7 @@ def logistic_params(power, times, initial_values=None):
     def model_at(t):
         return logistic_plus_exp(t, A, tau, L, k, x0)
 
-    tS, time_extrapolate, pce_extrapolate = find_tS(times, result)
-    PCE_tS = pce_extrapolate[np.where(time_extrapolate == tS)[0][0]]
+    tS, PCE_tS = find_tS(times, result)
 
     # T80/T95: relative to the initial reference. Ts80/Ts95: relative to the
     # post-burn-in stabilized value (PCE_tS, from find_tS above). Neither has
@@ -426,14 +447,16 @@ def logistic_params(power, times, initial_values=None):
     # this field's schema definition - previously used Ts80 here only
     # because T80 didn't exist yet for this model.
     ley_end = T80 if np.isfinite(T80) else times[-1]
+    # log(1 + e^z) as logaddexp(0, z): the plain form overflows to inf for a large k (the
+    # optimiser often lands on one), which made the whole NOMAD write-back fail.
     lifetime_energy = (
         A * tau * (1 - np.exp(-ley_end / tau))  # exponential part
-        + L
-        / k
-        * (np.log(1 + np.exp(k * (ley_end - x0))) - np.log(1 + np.exp(-k * x0)))  # logistic part
-    )
+        + L / k * (np.logaddexp(0, k * (ley_end - x0)) - np.logaddexp(0, -k * x0))  # logistic part
+    ) * LEY_MWH_CM2_TO_KWH_M2
 
     # for some reason does not calculate errors
+    ley_1000h = ley_after_1000h(times, power, model_at)
+
     if result.errorbars:
         result_values = [
             result.uvars["A"],
@@ -449,6 +472,7 @@ def logistic_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -465,6 +489,7 @@ def logistic_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -482,7 +507,7 @@ def erfc_defaults(power, times):
 
 def erfc_params(power, times, initial_values=None):
     erfc_model = lmfit.Model(erfc_linear)
-    guess = erfc_defaults(power, times)
+    guess: dict[str, Any] = erfc_defaults(power, times)
     guess.update(initial_values or {})
     initial_params = erfc_model.make_params(**guess)
     # b is a denominator inside erfc((t-t0)/b) - the same div-by-zero/NaN
@@ -519,6 +544,8 @@ def erfc_params(power, times, initial_values=None):
     ley_end = T80 if np.isfinite(T80) else times[-1]
     lifetime_energy = calculate_ley(erfc_linear, [PCE0, k, t0, b], ley_end)
 
+    ley_1000h = ley_after_1000h(times, power, model_at)
+
     if result.errorbars:
         result_values = [
             result.uvars["PCE0"],
@@ -534,6 +561,7 @@ def erfc_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     else:
         result_values = [
@@ -550,6 +578,7 @@ def erfc_params(power, times, initial_values=None):
             tS,
             PCE_1000h,
             lifetime_energy,
+            ley_1000h,
         ]
     return result_values, result.best_fit, result
 
@@ -559,11 +588,17 @@ def erfc_params(power, times, initial_values=None):
 # ------------------------
 
 
-# lifetime energy from fitted function, output is in kWh/m^2 when input function uses the default W/cm^2 over hours
+# Lifetime energy yield. The app works in mW/cm^2 and hours, so an integral of power density
+# over time is in mWh/cm^2; NOMAD's `lifetime_energy_yield` is in kWh/m^2. One mWh/cm^2 is
+# 1e-3 Wh / 1e-4 m^2 = 10 Wh/m^2 = 0.01 kWh/m^2, and every model converts with this single
+# factor (previously two models multiplied by 10 and four not at all).
+LEY_MWH_CM2_TO_KWH_M2 = 0.01
+
+
 def calculate_ley(fit_function, params, t_end, t_start=0):
+    """Integral of fit_function(t, *params) from t_start to t_end, in kWh/m^2."""
     integral, _ = quad(fit_function, t_start, t_end, args=tuple(params))
-    ley = integral * 10
-    return ley
+    return integral * LEY_MWH_CM2_TO_KWH_M2
 
 
 # extrapolates the fitted curve by default 10 times the measurement time
@@ -576,17 +611,20 @@ def extrapolate(times, fit_results, time_limit=None):
     return time_extrapolate, pce_extrapolate
 
 
-# finds the global minimum, then finds the global maximum after that, fitted function is extrapolated to 10 times the measurement time
-# exact motivation unknown
 def find_tS(times, fit_results):
-    time_extrapolate = np.linspace(times[0], 10 * times[-1], 1000)
-    pce_extrapolate = fit_results.eval(params=fit_results.params, t=time_extrapolate)
-
-    min_idx = np.argmin(pce_extrapolate)
-    tS_idx = min_idx + np.argmax(pce_extrapolate[min_idx:])
-    tS = time_extrapolate[tS_idx]
-
-    return tS, time_extrapolate, pce_extrapolate
+    """Stabilization time of a model with a burn-in dip: the time of the highest point after
+    the fitted curve's minimum, searched ONLY inside the measured window. Returns
+    (tS, PCE_tS). A curve with no dip (its minimum is the last point, e.g. a monotonic decay)
+    has nothing to stabilize from, so tS is 0 and PCE_tS the starting value, like the other
+    monotonic models. The old search ran over a 10x extrapolation, so a decaying fit always
+    reported ten times the measurement length."""
+    grid = np.linspace(times[0], times[-1], 1000)
+    fitted = fit_results.eval(params=fit_results.params, t=grid)
+    min_idx = int(np.argmin(fitted))
+    if min_idx >= len(grid) - 1:
+        return 0.0, float(fitted[0])
+    tS_idx = min_idx + int(np.argmax(fitted[min_idx:]))
+    return float(grid[tS_idx]), float(fitted[tS_idx])
 
 
 # Every T80/T95/Ts80/Ts95-style figure of merit in this module follows the
@@ -615,6 +653,41 @@ def initial_reference(power):
     return float(np.mean(np.partition(power, -n)[-n:]))
 
 
+def _sustained_crossing_index(times, power, threshold, search_from=None):
+    """Index of the first measured point from which the curve stays at or below `threshold`,
+    or None if it never does.
+
+    "Stays" is judged on a rolling-median smoothed copy, over a run of at least
+    max(3, n/100) points (or to the end of the data). So a single dropout point, noise around
+    the threshold, or a start that ramps up from low values is not a crossing: without this,
+    one zero point gave T80 = 1.25 h for a curve whose real T80 was 71 h, and a ramp-up start
+    gave T80 = 0. Without `search_from` only points after the curve's (smoothed) peak count;
+    with it (Ts80/Ts95, relative to the post-burn-in time) only points from that time on."""
+    n = len(power)
+    valid = np.isfinite(power)
+    if n == 0 or not valid.any():
+        return None
+    window = min(max(3, (n // 50) | 1), 21)
+    smooth = pd.Series(power).rolling(window, center=True, min_periods=1).median().to_numpy()
+    if search_from is not None:
+        candidates = np.flatnonzero(times >= search_from)
+        if len(candidates) == 0:
+            return None
+        start = int(candidates[0])
+    else:
+        start = int(np.nanargmax(smooth))
+    below = np.where(np.isfinite(smooth), smooth <= threshold, False)
+    # run[i]: how many consecutive points from i on are below the threshold
+    run = np.zeros(n + 1, dtype=int)
+    for i in range(n - 1, -1, -1):
+        run[i] = run[i + 1] + 1 if below[i] else 0
+    hold = max(3, n // 100)
+    for i in range(start, n):
+        if below[i] and run[i] >= min(hold, n - i) and (run[i] >= 2 or n - i == 1):
+            return i
+    return None
+
+
 def crossing_time(
     times, power, reference, target_fraction, model_at, closed_form=None, search_from=None
 ):
@@ -635,14 +708,12 @@ def crossing_time(
     a transient dip before stabilizing shouldn't count as "reached".
     """
     threshold = target_fraction * reference
-    if search_from is not None:
-        mask = times >= search_from
-        considered_times, considered_power = times[mask], power[mask]
-    else:
-        considered_times, considered_power = times, power
-    if len(considered_times) and np.any(considered_power <= threshold):
-        reached = considered_power <= threshold
-        return float(considered_times[np.argmax(reached)])
+    times = np.asarray(times, dtype=float)
+    power = np.asarray(power, dtype=float)
+    start_time = search_from
+    reached_idx = _sustained_crossing_index(times, power, threshold, start_time)
+    if reached_idx is not None:
+        return float(times[reached_idx])
 
     t_last = times[-1]
     horizon = EXTRAPOLATION_HORIZON_FACTOR * t_last
@@ -658,7 +729,7 @@ def crossing_time(
     f_last = model_at(t_last) - threshold
     if f_last <= 0:
         return float(t_last)  # fit already at/below threshold right at the measurement's edge
-    return float(brentq(lambda t: model_at(t) - threshold, t_last, horizon))
+    return float(cast(float, brentq(lambda t: model_at(t) - threshold, t_last, horizon)))
 
 
 def pce_after_1000h(times, power, model_at):
@@ -674,6 +745,26 @@ def pce_after_1000h(times, power, model_at):
     if EXTRAPOLATION_HORIZON_FACTOR * times[-1] < 1000:
         return float("nan")
     return float(model_at(1000.0))
+
+
+def ley_after_1000h(times, power, model_at):
+    """Lifetime energy yield (kWh/m^2) accumulated over the first 1000 h, with the same
+    real-else-extrapolated-else-NaN policy as pce_after_1000h: integrate the measured curve
+    when it reaches 1000 h, else integrate the fitted model if 1000 h lies within the
+    extrapolation horizon, else NaN."""
+    times = np.asarray(times, dtype=float)
+    power = np.asarray(power, dtype=float)
+    if times[-1] >= 1000:
+        valid = np.isfinite(times) & np.isfinite(power)
+        grid = np.concatenate([times[valid & (times < 1000)], [1000.0]])
+        values = np.interp(grid, times[valid], power[valid])
+        integrate = getattr(np, "trapezoid", None) or np.trapz
+        return float(integrate(values, grid)) * LEY_MWH_CM2_TO_KWH_M2
+    if EXTRAPOLATION_HORIZON_FACTOR * times[-1] < 1000:
+        return float("nan")
+    # a model that decays below zero (Linear) cannot give back negative energy
+    integral, _ = quad(lambda t: max(float(model_at(t)), 0.0), float(times[0]), 1000.0, limit=200)
+    return float(integral) * LEY_MWH_CM2_TO_KWH_M2
 
 
 available_fit_model_list = [
@@ -693,6 +784,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=3,
         default_guess=stretched_exponential_defaults,
@@ -713,6 +805,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=2,
         default_guess=linear_defaults,
@@ -733,6 +826,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=2,
         default_guess=exponential_defaults,
@@ -755,6 +849,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=4,
         default_guess=biexponential_defaults,
@@ -778,6 +873,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=5,
         default_guess=logistic_defaults,
@@ -801,6 +897,7 @@ available_fit_model_list = [
             "tS",
             "PCE_after_1000_h",
             "LEY",
+            "LEY_1000h",
         ],
         n_params=4,
         default_guess=erfc_defaults,

@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 
 def _html_float_format(value):

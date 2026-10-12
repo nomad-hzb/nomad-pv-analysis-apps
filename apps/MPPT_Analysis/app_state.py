@@ -96,6 +96,11 @@ class AppState:
         self.data["sample_ids"] = sample_ids
         self.data["entries"] = entries
         self.data["properties"] = properties
+        # Fits and cleaning belong to the data they were made on: another batch that shares
+        # sample IDs must not inherit them (they would be written to NOMAD and counted).
+        self.fitted_curves_data = {}
+        self.cleaned_power = {}
+        self._rebuild_fit_results_df()
 
     def set_selected_samples(self, selected_samples, custom_names=None, selected_curves=None):
         """Set selected samples and custom names.
@@ -108,6 +113,20 @@ class AppState:
         self.data["selected_curves"] = None if selected_curves is None else list(selected_curves)
         if custom_names:
             self.data["custom_names"] = custom_names
+        self._drop_fits_outside_selection()
+
+    def _drop_fits_outside_selection(self):
+        """Forget the fits of measurements that are no longer selected, so the write-back to
+        NOMAD, the statistics and the exports only ever cover the current selection."""
+        selected_samples = set(self.data.get("selected_samples", []))
+        selected_curves = self.data.get("selected_curves")
+        wanted = None if selected_curves is None else set(selected_curves)
+        stale = [
+            key
+            for key in self.fitted_curves_data
+            if key[0] not in selected_samples or (wanted is not None and key not in wanted)
+        ]
+        self._drop_fits(stale)
 
     def set_fit_results(self, fitted_curves_data):
         """Replace every fit result at once (the 'apply to all' path)."""
