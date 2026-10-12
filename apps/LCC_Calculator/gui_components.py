@@ -8,6 +8,7 @@ secondary download of the same already-computed numbers.
 
 from __future__ import annotations
 
+import html
 import logging
 
 import ipywidgets as widgets
@@ -58,7 +59,7 @@ def _fmt_cost(value: float | None, verified: bool) -> str:
 def _build_html_table(headers: list[str], rows: list[list], bold_last_row: bool = False) -> str:
     header_cells = "".join(
         "<th style='padding:4px 10px; border-bottom:2px solid #2E86AB; "
-        f"text-align:left; white-space:nowrap;'>{header}</th>"
+        f"text-align:left; white-space:nowrap;'>{html.escape(str(header))}</th>"
         for header in headers
     )
     body_rows = []
@@ -69,7 +70,8 @@ def _build_html_table(headers: list[str], rows: list[list], bold_last_row: bool 
             else ""
         )
         cells = "".join(
-            f"<td style='padding:4px 10px; border-bottom:1px solid #eee;'>{cell}</td>"
+            "<td style='padding:4px 10px; border-bottom:1px solid #eee;'>"
+            f"{html.escape(str(cell))}</td>"
             for cell in row
         )
         body_rows.append(f"<tr style='{row_style}'>{cells}</tr>")
@@ -301,11 +303,18 @@ class ResultsPanel:
             "Materials",
             "Processes",
             "Equipment",
+            "Overhead",
             "Labor",
             "Grand Total",
             "Per Sample",
             "Unverified",
+            "Missing",
         ]
+
+        def money(value: float, complete: bool) -> str:
+            # a total that leaves out unknown items is a lower bound, never "the" cost
+            return f"{value:.2f}" if complete else f"\u2265 {value:.2f} (incomplete)"
+
         table_rows = [
             [
                 total.batch_id,
@@ -313,14 +322,21 @@ class ResultsPanel:
                 f"{total.material_total:.2f}",
                 f"{total.process_total:.2f}",
                 f"{total.equipment_total:.2f}",
+                f"{total.overhead_total:.2f}",
                 f"{total.labor_total:.2f}",
-                f"{total.grand_total:.2f}",
-                f"{total.per_sample:.2f}" if total.per_sample is not None else "-",
+                money(total.grand_total, total.is_complete),
+                (
+                    money(total.per_sample, total.is_complete)
+                    if total.per_sample is not None
+                    else "-"
+                ),
                 total.unverified_count,
+                total.missing_count,
             ]
             for total in totals
         ]
         if totals:
+            everything_known = all(total.is_complete for total in totals)
             table_rows.append(
                 [
                     "TOTAL (all selected)",
@@ -329,9 +345,11 @@ class ResultsPanel:
                     "",
                     "",
                     "",
-                    f"{sum(total.grand_total for total in totals):.2f}",
+                    "",
+                    money(sum(total.grand_total for total in totals), everything_known),
                     "",
                     "",
+                    sum(total.missing_count for total in totals),
                 ]
             )
         self._render_table(
