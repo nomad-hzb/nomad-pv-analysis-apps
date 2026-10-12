@@ -1,11 +1,13 @@
 """Entry_Auditor: unit tests for the data_manager layer -- never hits the real API."""
 
 import json
+from pathlib import Path
 
 import data_manager as dm
 import gui_components as gc
 import pandas as pd
-from conftest import FIXTURE_PATH
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_batch.json"
 
 # ---------------------------------------------------------------------------
 # modify_file_field -- raw-text regex correction mechanism

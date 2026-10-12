@@ -20,6 +20,13 @@ sys.modules["dm_hansen"] = _dm
 sys.modules["data_manager"] = _dm
 _spec.loader.exec_module(_dm)
 
+sys.modules.pop("plot_manager", None)
+_pm_spec = importlib.util.spec_from_file_location("pm_hansen", _APP_DIR / "plot_manager.py")
+_pm = importlib.util.module_from_spec(_pm_spec)
+sys.modules["pm_hansen"] = _pm
+sys.modules["plot_manager"] = _pm
+_pm_spec.loader.exec_module(_pm)
+
 from data_manager import InkDataManager, PerovskiteDataManager, SolventDataManager  # noqa: E402
 
 # ---------------------------------------------------------------------------
