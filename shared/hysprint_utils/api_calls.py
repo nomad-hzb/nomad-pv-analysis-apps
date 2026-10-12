@@ -67,14 +67,6 @@ def edit_entry(url, token, entry_id, changes):
     return response.json()
 
 
-def init_cache():
-    import requests_cache
-
-    requests_cache.install_cache(
-        "my_local_cache", allowable_methods=("GET", "POST"), ignored_parameters=["Authorization"]
-    )
-
-
 # retreive information about all uploads of current user
 def get_all_uploads(url, token, number_of_uploads=20):
     response = requests.get(
@@ -340,7 +332,9 @@ def get_sample_entry_links(url, token, sample_ids):
             if lab_id in sample_ids:
                 result[lab_id] = gui_url
 
-    print(f"[DEBUG] get_sample_entry_links: resolved {len(result)}/{len(sample_ids)} sample links")
+    logger.debug(
+        "get_sample_entry_links: resolved %d/%d sample links", len(result), len(sample_ids)
+    )
     return result
 
 
