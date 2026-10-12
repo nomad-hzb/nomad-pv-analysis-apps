@@ -1993,3 +1993,16 @@ def test_bo_constraints_only_returns_enabled_rows():
     enable.value, column.value, op.value, value.value = True, "voc", ">=", 1.1
 
     assert gui.get_bo_constraints() == [{"col": "voc", "op": ">=", "value": 1.1}]
+
+
+def test_doe_link_is_styled_as_a_link():
+    """The link sat in plain text; it must be underlined and coloured so it reads as clickable."""
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[2] / "apps" / "Global_analyzer" / "gui_components.py"
+    ).read_text(encoding="utf-8")
+    anchor = re.search(r"<a href=\"\{doe_voila_url\}\"[^>]*?style=\"([^\"]*)\"", source)
+    assert anchor, "DoE link has no inline style"
+    assert "underline" in anchor.group(1) and "color" in anchor.group(1)
