@@ -32,10 +32,17 @@ def run_pca(df: pd.DataFrame, feature_cols: list, n_components: int = 2) -> dict
     Standardize feature_cols and fit a PCA to see which parameters vary/cluster
     together.
 
+    Rows of the same sample with identical values in feature_cols (e.g. the
+    pixel rows "All Points" produces, which share every process parameter) are
+    counted once, so a sample with more pixels does not pull the components
+    towards itself.
+
     Returns a dict: feature_cols, n_samples, explained_variance_ratio (list,
     one per component), loadings_df (component x feature_cols, how much each
     original column contributes to each component), scores_df (sample_id +
-    PC1..PCn, one row per complete sample).
+    PC1..PCn, one row per complete sample), source_index (df's index label of
+    each scores_df row, for attaching other columns of df without a merge on
+    sample_id, which multiplies rows when a sample_id repeats).
     """
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
@@ -50,6 +57,9 @@ def run_pca(df: pd.DataFrame, feature_cols: list, n_components: int = 2) -> dict
         raise ValueError("Need at least 2 varying numeric parameters to run PCA.")
 
     model_df = df[usable_cols].dropna()
+    if "sample_id" in df.columns:
+        keys = df.loc[model_df.index, ["sample_id"]].join(model_df)
+        model_df = model_df[~keys.duplicated()]
     if len(model_df) < MIN_ROWS_PCA:
         raise ValueError(
             f"Only {len(model_df)} complete rows available (need at least "
@@ -86,6 +96,7 @@ def run_pca(df: pd.DataFrame, feature_cols: list, n_components: int = 2) -> dict
         "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
         "loadings_df": loadings_df,
         "scores_df": scores_df,
+        "source_index": model_df.index.tolist(),
     }
 
 
@@ -123,10 +134,12 @@ def find_pareto_front(
     a = model_df[target_a].to_numpy() * (1 if direction_a == "maximize" else -1)
     b = model_df[target_b].to_numpy() * (1 if direction_b == "maximize" else -1)
 
-    # Sort by a descending, then sweep keeping only points whose b beats every
-    # b seen so far - a point dominated by an earlier (better-a) point with
-    # equal-or-better b is not on the front.
-    order = np.argsort(-a)
+    # Sort by a descending (ties: b descending), then sweep keeping only points
+    # whose b beats every b seen so far - a point dominated by an earlier
+    # (better-or-equal-a) point with equal-or-better b is not on the front.
+    # Without the tie-break, of two points with equal a the worse-b one could
+    # be visited first and wrongly kept.
+    order = np.lexsort((-b, -a))
     is_pareto = np.zeros(len(model_df), dtype=bool)
     best_b_so_far = -np.inf
     for idx in order:
@@ -212,6 +225,10 @@ def compute_process_drift(df: pd.DataFrame, param_col: str, datetime_col: str = 
     ordinal position, not clock time, so unevenly-spaced measurements don't
     distort the slope).
 
+    With a sample_id column, each sample contributes one point (its earliest
+    datetime, mean param_col): rows of one sample (e.g. pixels) are not
+    independent, and counting them separately would overstate significance.
+
     Returns a dict: param_col, n_samples, slope, p_value, trend_df (sample_id
     if present, datetime_col, param_col, sorted by time).
     """
@@ -226,8 +243,12 @@ def compute_process_drift(df: pd.DataFrame, param_col: str, datetime_col: str = 
     if "sample_id" in df.columns:
         working["sample_id"] = df["sample_id"]
     working[datetime_col] = pd.to_datetime(working[datetime_col], errors="coerce")
-    working = working.dropna(subset=[param_col, datetime_col]).sort_values(datetime_col)
-    working = working.reset_index(drop=True)
+    working = working.dropna(subset=[param_col, datetime_col])
+    if "sample_id" in working.columns:
+        working = working.groupby("sample_id", as_index=False).agg(
+            {datetime_col: "min", param_col: "mean"}
+        )
+    working = working.sort_values(datetime_col, kind="stable").reset_index(drop=True)
 
     if len(working) < MIN_ROWS_DRIFT:
         raise ValueError(
@@ -262,6 +283,10 @@ def run_anova(df: pd.DataFrame, group_col: str, value_col: str) -> dict:
     defined by group_col? Groups with fewer than MIN_GROUP_SIZE_ANOVA samples
     are dropped first (too small to say anything about).
 
+    With a sample_id column the test runs on per-sample means: the sample is
+    the experimental unit, and treating its pixels as independent observations
+    (pseudo-replication) makes p-values far too small.
+
     Returns a dict: group_col, value_col, groups (dict: group name -> n),
     f_stat, p_value, significant (p_value < 0.05).
     """
@@ -271,6 +296,12 @@ def run_anova(df: pd.DataFrame, group_col: str, value_col: str) -> dict:
         raise ValueError(f"'{group_col}' and/or '{value_col}' not found in the current dataset.")
 
     working = df[[group_col, value_col]].dropna()
+    if "sample_id" in df.columns:
+        working = (
+            working.assign(sample_id=df.loc[working.index, "sample_id"])
+            .groupby(["sample_id", group_col], as_index=False)[value_col]
+            .mean()
+        )
     group_sizes = working.groupby(group_col)[value_col].count()
     usable_groups = group_sizes[group_sizes >= MIN_GROUP_SIZE_ANOVA].index
 

@@ -45,6 +45,8 @@ class PlotManager:
             self.app_state.data["sample_ids"],
             self.app_state.data["selected_samples"],
             variable,
+            self.app_state.data.get("selected_curves"),
+            self.app_state.cleaned_power,
         )
 
         if not selected_data:
