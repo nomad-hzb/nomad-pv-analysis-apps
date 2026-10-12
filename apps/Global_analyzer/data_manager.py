@@ -21,7 +21,7 @@ Author: HySprint Team
 import io
 import logging
 import operator
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from data_loader import HySprintDataLoader
@@ -43,6 +43,49 @@ _ROW_FILTER_OPS = {
 }
 
 RESULTS_AGGREGATION_METHODS = {"Mean": "mean", "Median": "median", "Max": "max"}
+
+# Every result schema the app loads (keys of data_manager.current_results) and the
+# short label used to group its columns in the Analysis Data tab's Results tree.
+RESULT_TYPE_LABELS = {
+    "jv_measurement": "JV",
+    "eqe_measurement": "EQE",
+    "mpp_tracking": "MPP Tracking",
+    "simple_mpp_tracking": "Simple MPP Tracking",
+    "pl_measurement": "PL",
+    "trpl_measurement": "TRPL",
+    "abspl_measurement": "AbsPL",
+    "pl_imaging": "PL Imaging",
+    "sem": "SEM",
+    "uvvis_measurement": "UV-Vis",
+    "pes": "PES",
+    "cyclic_voltammetry": "Cyclic Voltammetry",
+    "eis": "EIS",
+    "trspv_measurement": "trSPV",
+    "nmr": "NMR",
+    "xrd": "XRD",
+}
+
+
+def result_type_label(result_type: str) -> str:
+    """Display label of a result schema key, e.g. 'mpp_tracking' -> 'MPP Tracking'."""
+    return RESULT_TYPE_LABELS.get(result_type, result_type.replace("_measurement", "").upper())
+
+
+def process_type_label(metadata_type: str) -> str:
+    """Display label of a process metadata key, e.g. 'spin_coating' -> 'Spin Coating'."""
+    words = metadata_type.split("_")
+    return " ".join(w.upper() if w in {"ald", "pl", "uv"} else w.capitalize() for w in words)
+
+
+def merged_result_column_names(
+    left_columns, right_columns, result_type: str, key: str = "sample_id"
+) -> dict:
+    """Names the columns of the right frame get after
+    pd.merge(left, right, on=key, suffixes=("", f"_{result_type}")): a column
+    that also exists on the left gets the suffix, the rest keep their name.
+    Returns {name in right frame: name in merged frame}."""
+    overlap = (set(left_columns) & set(right_columns)) - {key}
+    return {c: (f"{c}_{result_type}" if c in overlap else c) for c in right_columns if c != key}
 
 
 def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
@@ -195,6 +238,76 @@ def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.D
         first_datetime = df.groupby("sample_id", as_index=False)["datetime"].first()
         grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
     return grouped
+
+
+def average_rows_per_sample(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    """One row per sample_id: the mean of cols over that sample's rows.
+
+    For correlations under "All Points": a sample's pixels share every process
+    parameter, so correlating pixel rows weights each sample by its pixel count
+    and lets pixel-to-pixel scatter dilute the process-to-result relationship.
+    Returns df unchanged when it has no sample_id or no sample_id repeats.
+    """
+    if "sample_id" not in df.columns or not df["sample_id"].duplicated().any():
+        return df
+    return df.groupby("sample_id", as_index=False)[cols].mean(numeric_only=True)
+
+
+def merge_results_per_sample(
+    results: Dict[str, pd.DataFrame],
+    method: str = "Mean",
+    column_groups: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[pd.DataFrame], List[str]]:
+    """Outer-merge every result type on sample_id, each first aggregated by
+    aggregate_results_per_sample(method).
+
+    With method="All Points", at most one result type can keep its individual
+    rows: merging two types that both have several rows per sample would pair
+    every row of one with every row of the other (4 JV pixels x 3 EQE rows = 12
+    made-up rows per sample, issue #46). The type with the most rows keeps its
+    points; every other type that has repeats is collapsed to its per-sample
+    mean, so each pixel is paired with that sample's mean value of the other
+    measurement.
+
+    If column_groups is given, it is filled with {column in the merged
+    dataframe: result_type_label of the type it came from}, using the names the
+    merge actually produced (a repeated name gets the "_<type>" suffix).
+
+    Returns (merged dataframe or None, names of the result types collapsed to
+    their mean only because of this rule).
+    """
+    usable = {
+        name: df
+        for name, df in results.items()
+        if df is not None and not df.empty and "sample_id" in df.columns
+    }
+    if not usable:
+        return None, []
+
+    keep_points = None
+    collapsed = []
+    if method == "All Points":
+        repeated = [n for n, df in usable.items() if df["sample_id"].duplicated().any()]
+        if repeated:
+            keep_points = max(repeated, key=lambda n: len(usable[n]))
+            collapsed = [n for n in repeated if n != keep_points]
+
+    merged = None
+    for name, df in usable.items():
+        type_method = "Mean" if name in collapsed else method
+        grouped = aggregate_results_per_sample(df, type_method)
+        if merged is None:
+            renamed = {c: c for c in grouped.columns if c != "sample_id"}
+            merged = grouped
+        else:
+            renamed = merged_result_column_names(merged.columns, grouped.columns, name)
+            merged = pd.merge(
+                merged, grouped, on="sample_id", how="outer", suffixes=("", f"_{name}")
+            )
+        if column_groups is not None:
+            for merged_name in renamed.values():
+                column_groups[merged_name] = result_type_label(name)
+    return merged, collapsed
 
 
 # ---------------------------------------------------------------------------

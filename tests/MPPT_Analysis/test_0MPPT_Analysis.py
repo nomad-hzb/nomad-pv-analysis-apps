@@ -7,8 +7,10 @@ from pathlib import Path
 
 import fitting_tools
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import pytest
+from app_state import AppState
 from data_manager import DataManager, MPPTRow
 from pydantic import ValidationError
 
@@ -417,3 +419,84 @@ class TestWriteFitResultsToNomadNaNHandling:
         assert by_path["data/results/0/PCE_after_1000_h"]["action"] == "remove"
         assert by_path["data/results/0/fit_r_squared"]["new_value"] == pytest.approx(0.9)
         assert by_path["data/results/0/lifetime_energy_yield"]["new_value"] == pytest.approx(12.3)
+
+
+# ===========================================================================
+# Per-measurement (pixel) selection
+# ===========================================================================
+
+
+class TestPerCurveSelection:
+    """batch1&sample1 in the fixture holds two measurements (curves 0 and 1)."""
+
+    SAMPLE = "batch1&sample1"
+
+    def test_fit_sample_fits_every_curve_by_default(self, loaded_manager):
+        model = fitting_tools.available_fit_model_list[0]
+        fits = loaded_manager.fit_sample(
+            loaded_manager.curves, loaded_manager.sample_ids, self.SAMPLE, model
+        )
+        assert set(fits) <= {0, 1}
+
+    def test_fit_sample_restricted_to_one_curve(self, loaded_manager, mocker):
+        mocker.patch("data_manager.fit_curve", return_value={"x": 1})
+        model = fitting_tools.available_fit_model_list[0]
+        fits = loaded_manager.fit_sample(
+            loaded_manager.curves,
+            loaded_manager.sample_ids,
+            self.SAMPLE,
+            model,
+            curve_ids=[1],
+        )
+        assert list(fits) == [1]
+
+    def test_selected_curve_data_filters_to_chosen_curves(self, loaded_manager):
+        data = loaded_manager.get_selected_curve_data(
+            loaded_manager.curves,
+            loaded_manager.sample_ids,
+            [self.SAMPLE],
+            "power_density",
+            selected_curves=[(self.SAMPLE, 1)],
+        )
+        assert [(d["sample_id"], d["curve_id"]) for d in data] == [(self.SAMPLE, 1)]
+
+    def test_selected_curve_data_without_filter_returns_all(self, loaded_manager):
+        data = loaded_manager.get_selected_curve_data(
+            loaded_manager.curves,
+            loaded_manager.sample_ids,
+            [self.SAMPLE],
+            "power_density",
+        )
+        assert len(data) == 2
+
+    def test_curve_label_strips_sample_prefix(self, loaded_manager):
+        entries = pd.DataFrame(
+            {"entry_names": ["S1 Front_PixelA", ""]},
+            index=pd.MultiIndex.from_tuples([("S1", 0), ("S1", 1)]),
+        )
+        assert loaded_manager.get_curve_label(entries, "S1", 0) == "Front_PixelA"
+        assert loaded_manager.get_curve_label(entries, "S1", 1) == "Curve 1"
+        assert loaded_manager.get_curve_label(None, "S1", 2) == "Curve 2"
+
+
+class TestAppStateCurveSelection:
+    def test_default_selection_means_all_curves(self):
+        state = AppState()
+        state.set_selected_samples(["s1"])
+        assert state.data["selected_curves"] is None
+        assert state.selected_curve_ids("s1") is None
+
+    def test_selected_curves_are_stored_per_sample(self):
+        state = AppState()
+        state.set_selected_samples(["s1", "s2"], selected_curves=[("s1", 0), ("s1", 2), ("s2", 1)])
+        assert state.selected_curve_ids("s1") == [0, 2]
+        assert state.selected_curve_ids("s2") == [1]
+        assert state.get_selected_curves_count() == 3
+
+    def test_update_curve_fit_results_keeps_other_curves(self):
+        model = fitting_tools.available_fit_model_list[0]
+        fit = {"model": model, "time": np.array([0.0, 1.0]), "params": {}}
+        state = AppState()
+        state.set_fit_results({("s1", 0): fit, ("s1", 1): fit})
+        state.update_curve_fit_results({("s1", 1): fit})
+        assert set(state.fitted_curves_data) == {("s1", 0), ("s1", 1)}

@@ -3,10 +3,13 @@ GUI Components for HySprint Data Analysis Tool
 Creates and manages all user interface widgets
 """
 
+from typing import Optional
+
 import config
 import ipywidgets as widgets
 import plotly.graph_objects as go
 import utils
+from data_manager import RESULT_TYPE_LABELS
 from natsort import natsorted
 
 from hysprint_utils.api_calls import get_batch_ids_with_authors
@@ -271,9 +274,21 @@ class GUIManager:
                 "padding": "4px",
             }
         )
+        # The checkboxes live in results_checklist_box (the source of truth read
+        # by get_checked_results_columns, never displayed); results_tree_box is
+        # what the tab shows: the same checkboxes under one heading per
+        # result schema (JV, MPP Tracking, ...). Full height, no inner scrollbar.
+        self.results_tree_box = widgets.VBox(layout={"padding": "4px"})
+        self.results_schemas_html = widgets.HTML()
+        self._column_labels: dict = {}  # column -> "column (Schema)" for the filter UI
         self.metadata_checklist_box = widgets.VBox(
+            layout={"border": "1px solid #ddd", "padding": "4px"}
+        )
+        # Text-like process parameters (material, solvent, batch, ...). Off by
+        # default: Random Forest and BO only use the ones ticked here.
+        self.categorical_checklist_box = widgets.VBox(
             layout={
-                "max_height": "220px",
+                "max_height": "160px",
                 "overflow_y": "auto",
                 "border": "1px solid #ddd",
                 "padding": "4px",
@@ -407,6 +422,17 @@ class GUIManager:
             layout={"width": "260px"},
         )
 
+        self.correlation_per_sample = widgets.Checkbox(
+            value=True,
+            description="One point per sample",
+            indent=False,
+            tooltip=(
+                "Average repeated rows of a sample (e.g. pixels under 'All Points') "
+                "before correlating, so each sample counts once"
+            ),
+            layout={"width": "170px"},
+        )
+
         self.correlation_plot_type = widgets.Dropdown(
             options=["Heatmap", "Scatter Matrix"],
             value="Heatmap",
@@ -465,6 +491,8 @@ class GUIManager:
         )
 
         self.rf_output = widgets.Output()
+        # Partial-dependence subplots, rendered fresh each run (subplot count varies).
+        self.rf_pdp_output = widgets.Output()
 
         self.rf_widget = go.FigureWidget()
         self.rf_widget.update_layout(
@@ -498,6 +526,17 @@ class GUIManager:
             description="Suggestions:",
             style={"description_width": "90px"},
             layout={"width": "170px"},
+        )
+
+        self.bo_log_target = widgets.Checkbox(
+            value=False,
+            description="Log scale target",
+            indent=False,
+            tooltip=(
+                "Model log10 of the target - for targets spanning decades "
+                "(currents, resistances). Needs every value > 0."
+            ),
+            layout={"width": "140px"},
         )
 
         self.suggest_experiments_button = widgets.Button(
@@ -540,11 +579,86 @@ class GUIManager:
         )
         self.bo_search_space_accordion.set_title(0, "Search space (optional)")
 
+        self.bo_batch_offset = widgets.Checkbox(
+            value=True,
+            description="Correct for batch offsets",
+            indent=False,
+            tooltip=(
+                "Fit a constant offset per batch (day, precursor lot) so batch "
+                "differences don't look like parameter effects. Used when the data "
+                "has a 'batch' column with 2+ values."
+            ),
+            layout={"width": "190px"},
+        )
+
+        # Up to two constraints on other Results columns, e.g. dark current <= 1e-9.
+        self.bo_constraint_rows = []
+        for _ in range(2):
+            enable = widgets.Checkbox(value=False, indent=False, layout={"width": "30px"})
+            column = widgets.Dropdown(layout={"width": "260px"})
+            op = widgets.Dropdown(options=["<=", ">="], value="<=", layout={"width": "70px"})
+            value = widgets.FloatText(value=0.0, layout={"width": "120px"})
+            self.bo_constraint_rows.append((enable, column, op, value))
+        self.bo_constraints_accordion = widgets.Accordion(
+            children=[
+                widgets.VBox(
+                    [
+                        widgets.HTML(
+                            "<p style='color:#666;'>Only suggest experiments likely to keep "
+                            "another result within a limit (e.g. dark current &lt;= a "
+                            "maximum). Each constraint gets its own model; suggestions are "
+                            "scored by expected improvement times the probability of "
+                            "meeting every limit.</p>"
+                        ),
+                        *[widgets.HBox(list(row)) for row in self.bo_constraint_rows],
+                    ]
+                )
+            ],
+            selected_index=None,
+        )
+        self.bo_constraints_accordion.set_title(0, "Constraints (optional)")
+
+        self.bo_pareto_enable = widgets.Checkbox(
+            value=False, description="Trade off against", indent=False, layout={"width": "140px"}
+        )
+        self.bo_pareto_target = widgets.Dropdown(layout={"width": "260px"})
+        self.bo_pareto_direction = widgets.Dropdown(
+            options=["Maximize", "Minimize"], value="Maximize", layout={"width": "110px"}
+        )
+        self.bo_pareto_accordion = widgets.Accordion(
+            children=[
+                widgets.VBox(
+                    [
+                        widgets.HTML(
+                            "<p style='color:#666;'>Optimize the target and a second "
+                            "result together. Instead of one best point, the suggestions "
+                            "spread along the trade-off between the two: each one weighs "
+                            "them differently (from mostly the target to mostly the "
+                            "second result). Log scale does not apply here.</p>"
+                        ),
+                        widgets.HBox(
+                            [self.bo_pareto_enable, self.bo_pareto_target, self.bo_pareto_direction]
+                        ),
+                    ]
+                )
+            ],
+            selected_index=None,
+        )
+        self.bo_pareto_accordion.set_title(0, "Second objective (optional)")
+
         self.bo_widget = go.FigureWidget()
         self.bo_widget.update_layout(
             height=450,
             template="plotly_white",
             title='Pick a target and click "Suggest Next Experiments"',
+        )
+
+        # Leave-one-sample-out check of the GP: predicted vs observed.
+        self.bo_loo_widget = go.FigureWidget()
+        self.bo_loo_widget.update_layout(
+            height=450,
+            template="plotly_white",
+            title="Model check (appears after running)",
         )
 
         # ====================================================================
@@ -849,7 +963,14 @@ class GUIManager:
         one layer_type loaded - see set_layer_selectors."""
         return {dd.description: dd.value for dd in self.layer_selector_box.children}
 
-    def set_analysis_columns(self, results_cols: list, metadata_cols: list):
+    def set_analysis_columns(
+        self,
+        results_cols: list,
+        metadata_cols: list,
+        results_groups: Optional[dict] = None,
+        metadata_groups: Optional[dict] = None,
+        categorical_cols: list = (),
+    ):
         """(Re)build the Results / Process Metadata checkbox lists on the Analysis
         Data tab. Called whenever the shared analysis dataframe is rebuilt (batch
         load or Recalculate) - a column already present keeps whatever checked
@@ -858,6 +979,12 @@ class GUIManager:
         column that's new (first load, or newly appeared after a batch change)
         defaults to checked, matching the original all-checked-by-default
         behavior for columns nobody has made a choice about yet.
+
+        results_groups maps a results column to its result schema label (e.g.
+        "JV"); the Results tree shows one branch per label. Columns without an
+        entry (e.g. from an uploaded CSV) go in a single "Results" branch.
+        results_groups / metadata_groups also label the row-filter column
+        dropdown, e.g. "annealing_temperature (Spin Coating)".
         """
         previous_results = {cb.description: cb.value for cb in self.results_checklist_box.children}
         previous_metadata = {
@@ -872,18 +999,87 @@ class GUIManager:
             widgets.Checkbox(value=previous_metadata.get(col, True), description=col, indent=False)
             for col in metadata_cols
         ]
+        self._render_results_tree(results_groups or {})
+        previous_categorical = {
+            cb.description: cb.value for cb in self.categorical_checklist_box.children
+        }
+        self.categorical_checklist_box.children = [
+            widgets.Checkbox(
+                value=previous_categorical.get(col, False), description=col, indent=False
+            )
+            for col in categorical_cols
+        ] or [widgets.HTML("<span style='color:#888;'>None in the current data.</span>")]
 
         previous_filter_column = self.filter_column_selector.value
-        filter_options = sorted(set(results_cols) | set(metadata_cols))
+        schema_of = {**(metadata_groups or {}), **(results_groups or {})}
+        filter_columns = sorted(set(results_cols) | set(metadata_cols))
+        self._column_labels = {
+            col: f"{col} ({schema_of[col]})" if col in schema_of else col for col in filter_columns
+        }
+        # (label, column) pairs: the dropdown shows the schema, its value stays
+        # the bare column name the filters and dataframe use.
+        filter_options = [(self._column_labels[col], col) for col in filter_columns]
         self.filter_column_selector.options = filter_options
-        if previous_filter_column in filter_options:
+        if previous_filter_column in filter_columns:
             self.filter_column_selector.value = previous_filter_column
-        elif filter_options:
-            self.filter_column_selector.value = filter_options[0]
+        elif filter_columns:
+            self.filter_column_selector.value = filter_columns[0]
+
+    def _render_results_tree(self, results_groups: dict) -> None:
+        """Arrange the checkboxes of results_checklist_box under one static
+        heading per result schema, each with a select-all toggle."""
+        by_group: dict = {}
+        for checkbox in self.results_checklist_box.children:
+            group = results_groups.get(checkbox.description, "Results")
+            by_group.setdefault(group, []).append(checkbox)
+
+        branches = []
+        for group in sorted(by_group, key=lambda g: (g != "JV", g)):
+            boxes = by_group[group]
+            select_all = widgets.Checkbox(
+                value=all(cb.value for cb in boxes), description="Select all", indent=False
+            )
+
+            def _toggle_all(change, boxes=boxes):
+                for cb in boxes:
+                    cb.value = change["new"]
+
+            select_all.observe(_toggle_all, names="value")
+            branches.append(
+                widgets.VBox(
+                    [
+                        widgets.HTML(
+                            f"<b style='color:#444;'>{group}</b> "
+                            f"<span style='color:#888;'>({len(boxes)})</span>"
+                        ),
+                        select_all,
+                        *boxes,
+                    ],
+                    layout={"margin": "0 0 8px 0"},
+                )
+            )
+        self.results_tree_box.children = branches or [
+            widgets.HTML("<span style='color:#888;'>No results loaded.</span>")
+        ]
+        self.results_schemas_html.value = (
+            "<p style='color:#666; margin:0;'>Result schemas available in this app: "
+            + ", ".join(RESULT_TYPE_LABELS.values())
+            + ".<br><b>Loaded for this dataset:</b> "
+            + (", ".join(sorted(by_group, key=lambda g: (g != "JV", g))) or "none")
+            + ".</p>"
+        )
 
     def get_checked_results_columns(self) -> list:
         """Column names currently checked in the Results checklist."""
         return [cb.description for cb in self.results_checklist_box.children if cb.value]
+
+    def get_checked_categorical_columns(self) -> list:
+        """Column names currently ticked in the Categorical parameters checklist."""
+        return [
+            cb.description
+            for cb in self.categorical_checklist_box.children
+            if isinstance(cb, widgets.Checkbox) and cb.value
+        ]
 
     def get_checked_metadata_columns(self) -> list:
         """Column names currently checked in the Process Metadata checklist."""
@@ -908,8 +1104,9 @@ class GUIManager:
 
         rows = []
         for row_filter in row_filters:
+            column_label = self._column_labels.get(row_filter["column"], row_filter["column"])
             label = widgets.HTML(
-                f"<code>{row_filter['column']} {row_filter['op']} {row_filter['value']:g}</code>"
+                f"<code>{column_label} {row_filter['op']} {row_filter['value']:g}</code>"
             )
             remove_button = widgets.Button(
                 description="Remove", icon="times", button_style="danger", layout={"width": "90px"}
@@ -949,7 +1146,8 @@ class GUIManager:
 
         Args:
             defaults: list of {"col", "min", "max", "integer"} dicts (observed
-                range and detected integer-ness). A column already shown keeps
+                range and detected integer-ness), optionally with "measured"
+                (start fixed, at "median") for logged conditions. A column already shown keeps
                 whatever the user entered, matching set_analysis_columns'
                 preserve-or-default pattern.
         """
@@ -959,7 +1157,24 @@ class GUIManager:
             if d["col"] in previous:
                 rows.append(previous[d["col"]])
                 continue
-            label = widgets.Label(d["col"], layout={"width": "220px"})
+            if d.get("levels") is not None:
+                label = widgets.Label(d["col"], layout={"width": "220px"})
+                level = widgets.Dropdown(
+                    options=["(any)", *d["levels"]],
+                    value="(any)",
+                    description="level",
+                    style={"description_width": "40px"},
+                    layout={"width": "300px"},
+                )
+                row = widgets.HBox([label, level])
+                row._bo_col = d["col"]
+                row._bo_widgets = (level,)
+                rows.append(row)
+                continue
+            measured = d.get("measured", False)
+            label = widgets.Label(
+                d["col"] + (" (measured)" if measured else ""), layout={"width": "220px"}
+            )
             min_box = widgets.FloatText(
                 value=d["min"],
                 description="min",
@@ -976,9 +1191,13 @@ class GUIManager:
                 value=d["integer"], description="integer", indent=False, layout={"width": "80px"}
             )
             fix_box = widgets.Checkbox(
-                value=False, description="fix at", indent=False, layout={"width": "65px"}
+                value=measured, description="fix at", indent=False, layout={"width": "65px"}
             )
-            fix_value = widgets.FloatText(value=d["min"], layout={"width": "90px"}, disabled=True)
+            fix_value = widgets.FloatText(
+                value=d.get("median", d["min"]) if measured else d["min"],
+                layout={"width": "90px"},
+                disabled=not measured,
+            )
             fix_box.observe(
                 lambda change, fv=fix_value: setattr(fv, "disabled", not change["new"]),
                 names="value",
@@ -991,9 +1210,17 @@ class GUIManager:
 
     def get_bo_search_space(self) -> dict:
         """{col: {"min", "max", "integer", "fixed" (None or a value)}} from the
-        BO tab's search-space rows."""
+        BO tab's search-space rows; a categorical row gives {"categorical": True,
+        "fixed": None or a level}."""
         space = {}
         for row in self.bo_search_space_box.children:
+            if len(row._bo_widgets) == 1:
+                level = row._bo_widgets[0].value
+                space[row._bo_col] = {
+                    "categorical": True,
+                    "fixed": None if level == "(any)" else level,
+                }
+                continue
             min_box, max_box, integer_box, fix_box, fix_value = row._bo_widgets
             space[row._bo_col] = {
                 "min": min_box.value,
@@ -1002,6 +1229,14 @@ class GUIManager:
                 "fixed": fix_value.value if fix_box.value else None,
             }
         return space
+
+    def get_bo_constraints(self) -> list:
+        """[{"col", "op", "value"}] for each enabled constraint row with a column."""
+        return [
+            {"col": column.value, "op": op.value, "value": value.value}
+            for enable, column, op, value in self.bo_constraint_rows
+            if enable.value and column.value
+        ]
 
     def get_excluded_sample_ids(self) -> set:
         """sample_ids currently unchecked in the "Exclude specific samples" list."""
@@ -1152,10 +1387,9 @@ class GUIManager:
             [self.param_summary_output], layout={"padding": "20px"}
         )
 
-        upload_box = widgets.VBox(
+        upload_content = widgets.VBox(
             [
                 widgets.HTML(
-                    "<h4 style='margin:0 0 4px 0;'>\U0001f4e4 Use your own data (optional)</h4>"
                     "<p style='color:#666; margin:0;'>Upload a CSV to run Correlations, "
                     "Random Forest, Bayesian Optimization and Experimental on data that "
                     "never came from a NOMAD batch load. One row per sample, one column per "
@@ -1168,11 +1402,14 @@ class GUIManager:
                 widgets.HBox([self.analysis_data_upload, self.analysis_data_upload_output]),
                 self.analysis_data_upload_roles_box,
             ],
-            layout={
-                "border": "1px solid #cfd8dc",
-                "padding": "10px",
-                "margin": "0 0 12px 0",
-            },
+            layout={"padding": "10px"},
+        )
+        # Closed by default: most sessions use the NOMAD batch load instead.
+        upload_box = widgets.Accordion(
+            children=[upload_content],
+            titles=("\U0001f4e4 Use your own data (optional)",),
+            selected_index=None,
+            layout={"margin": "0 0 12px 0"},
         )
 
         analysis_data_tab = widgets.VBox(
@@ -1210,11 +1447,21 @@ class GUIManager:
                         widgets.VBox(
                             [
                                 widgets.HTML("<h4 style='color: #666;'>Results (targets)</h4>"),
-                                self.results_checklist_box,
+                                self.results_schemas_html,
+                                self.results_tree_box,
                                 widgets.HTML(
                                     "<h4 style='color: #666;'>Process Metadata (supporting)</h4>"
                                 ),
                                 self.metadata_checklist_box,
+                                widgets.HTML(
+                                    "<h4 style='color: #666;'>Categorical parameters</h4>"
+                                    "<p style='color:#888; font-size:0.9em;'>Text-valued "
+                                    "process parameters (material, solvent, batch, ...). "
+                                    "Ticked ones are used by Random Forest and Bayesian "
+                                    "Optimization; BO only suggests levels already in the "
+                                    "data.</p>"
+                                ),
+                                self.categorical_checklist_box,
                             ]
                         )
                     ],
@@ -1274,6 +1521,7 @@ class GUIManager:
                     [
                         self.correlation_min_unique,
                         self.correlation_plot_type,
+                        self.correlation_per_sample,
                         self.find_correlations_button,
                         self.correlation_download_button,
                     ]
@@ -1296,7 +1544,22 @@ class GUIManager:
                 widgets.HTML(
                     "<p style='color:#666;'>Fits a Random Forest to predict the chosen "
                     "target (a Results column) from the checked Process Metadata columns "
-                    "in the Analysis Data tab, and reports which parameters matter most.</p>"
+                    "and ticked categorical parameters in the Analysis Data tab, and "
+                    "reports which parameters matter most.</p>"
+                    "<p style='color:#666;'><b>How it is checked:</b> the model is "
+                    "trained on part of the samples and tested on the rest, five times "
+                    "over with different splits, repeated three times (cross-"
+                    "validation). All pixels of one sample stay on the same side, so "
+                    "the model can't predict a pixel from its neighbours. R² is measured "
+                    "only on the held-out samples: 1 is perfect, 0 is no better than "
+                    "guessing the average, below 0 is worse. <b>Importance</b> is how "
+                    "much that held-out R² drops when one parameter's values are "
+                    "shuffled (permutation importance). Around 0 means the parameter "
+                    "does not help the prediction. Two strongly correlated parameters "
+                    "share their importance, so both can look small; such pairs are "
+                    "listed. <b>Partial dependence</b> (plots below the bars) shows how "
+                    "the prediction changes as one of the top parameters is varied with "
+                    "the others left as measured.</p>"
                     "<p style='color:#444;'><b>Why it helps:</b> tells you which process "
                     "parameters matter most for your outcome - useful for deciding what to "
                     "control tightly during fabrication and what to deprioritize.</p>"
@@ -1314,6 +1577,7 @@ class GUIManager:
                 ),
                 self.rf_output,
                 self.rf_widget,
+                self.rf_pdp_output,
                 self.rf_download_output,
             ],
             layout={"padding": "20px"},
@@ -1333,8 +1597,8 @@ class GUIManager:
                     "the data shows no detectable effect of that parameter. The model also "
                     "learns a <i>noise</i> level from the scatter between similar samples "
                     "(e.g. replicates), so it doesn't chase a single lucky result.</p>"
-                    "<p><b>2. Score candidates.</b> 10000 random parameter combinations are "
-                    "drawn inside the search space (default: the range you have already "
+                    "<p><b>2. Score candidates.</b> 8192 parameter combinations are spread "
+                    "evenly (Sobol sequence) inside the search space (default: the range you have already "
                     "measured; set it under 'Search space'). Integer parameters only take "
                     "whole numbers; fixed ones keep their value. Each candidate gets an "
                     "<i>Expected Improvement</i> (EI) score: how much it is expected to "
@@ -1355,13 +1619,30 @@ class GUIManager:
                     "With Suggestions = 1 you get exactly one classic BO step.</p>"
                     "<p><b>Reading the table:</b> suggestions are listed in the order they "
                     "were picked (#1 is the classic single-step BO choice). "
-                    "<i>predicted</i> and <i>&plusmn; std</i> come from the GP fit on real "
-                    "data only; std is the uncertainty of the prediction itself, and a "
-                    "single new measurement will additionally scatter by about the "
-                    "reported noise. <i>Expected improvement</i> is the score at the "
+                    "<i>predicted</i> and its <i>range</i> (&plusmn;1 SD) come from the GP "
+                    "fit on real data only; the range is the uncertainty of the predicted "
+                    "average at that point, and a single new measurement will additionally "
+                    "scatter by about the reported noise.<i>Expected improvement</i> is the score at the "
                     "moment the point was picked, i.e. given the earlier picks, so it "
                     "usually drops down the list. After measuring, add the new data and "
                     "run again.</p>"
+                    "<p><b>Model check:</b> each sample is left out in turn and predicted "
+                    "from all the others (all its pixels together). The plot compares "
+                    "these predictions with what was measured, and <i>leave-one-out "
+                    "R²</i> summarises it: near 1 the model predicts well, near or below "
+                    "0 it predicts nothing and the suggestions are little better than "
+                    "random. <b>Log scale target</b> models log10 of the target, for "
+                    "targets spanning several decades.</p>"
+                    "<p><b>Options:</b> <i>Correct for batch offsets</i> fits a constant "
+                    "shift per batch (day, precursor lot), so a good or bad batch does not "
+                    "look like a parameter effect; suggestions are then for the process "
+                    "alone. Ticked <i>categorical parameters</i> (material, solvent) are "
+                    "used as inputs, and suggestions only use levels already in the data. "
+                    "<i>Constraints</i> keep another result within a limit: each gets its "
+                    "own model, and candidates are scored by expected improvement times "
+                    "the probability of meeting every limit. A <i>second objective</i> "
+                    "turns the batch into a spread along the trade-off between the two "
+                    "results: each suggestion weighs them differently.</p>"
                     "</div>"
                 )
             ],
@@ -1396,13 +1677,18 @@ class GUIManager:
                         self.bo_target_selector,
                         self.bo_direction_selector,
                         self.bo_n_suggestions,
+                        self.bo_log_target,
+                        self.bo_batch_offset,
                         self.suggest_experiments_button,
                         self.bo_download_button,
                     ]
                 ),
                 self.bo_search_space_accordion,
+                self.bo_constraints_accordion,
+                self.bo_pareto_accordion,
                 self.bo_output,
                 self.bo_widget,
+                self.bo_loo_widget,
                 self.bo_download_output,
             ],
             layout={"padding": "20px"},
