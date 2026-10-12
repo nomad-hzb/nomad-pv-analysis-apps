@@ -127,8 +127,8 @@ def get_token(url, name=None):
     password = getpass.getpass()
 
     # Get a token from the api, login
-    response = requests.get(
-        f"{url}/auth/token", params=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
+    response = requests.post(
+        f"{url}/auth/token", data=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
     return response.json()["access_token"]
