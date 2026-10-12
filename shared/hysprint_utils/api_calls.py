@@ -2,10 +2,13 @@
 # methods to access the nomad api
 
 import getpass
+import logging
 
 import requests
 
 from hysprint_utils.config import ENTRY_TYPES
+
+logger = logging.getLogger(__name__)
 
 
 def edit_entry(url, token, entry_id, changes):
@@ -26,14 +29,6 @@ def edit_entry(url, token, entry_id, changes):
     )
     response.raise_for_status()
     return response.json()
-
-
-def init_cache():
-    import requests_cache
-
-    requests_cache.install_cache(
-        "my_local_cache", allowable_methods=("GET", "POST"), ignored_parameters=["Authorization"]
-    )
 
 
 # retreive information about all uploads of current user
@@ -329,7 +324,9 @@ def get_sample_entry_links(url, token, sample_ids):
             if lab_id in sample_ids:
                 result[lab_id] = gui_url
 
-    print(f"[DEBUG] get_sample_entry_links: resolved {len(result)}/{len(sample_ids)} sample links")
+    logger.debug(
+        "get_sample_entry_links: resolved %d/%d sample links", len(result), len(sample_ids)
+    )
     return result
 
 
