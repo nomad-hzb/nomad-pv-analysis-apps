@@ -126,8 +126,7 @@ nomad-pv-analysis-apps/
 │       ├── auth_manager.py
 │       ├── batch_selection.py
 │       ├── error_handler.py
-│       ├── plotting_utils.py
-│       └── process_handling.py
+│       └── plotting_utils.py
 ├── apps/                       # one folder per app (see table above for the full list)
 │   ├── JV-Analysis/
 │   ├── Peak_Explorer/

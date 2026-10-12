@@ -53,14 +53,12 @@ since every field in that group loops together off the same counter. Each
 entry's "path" carries a "{i}" placeholder resolved to the 0-based index.
 "test" may be a plain value (repeated for every n) or a callable taking the
 1-based n and returning the value, for tests that vary by index (e.g.
-Solvent volumes). "mapping_range" (default (1, 5)) is how far
-smart_databaser pre-generates archive-path lookups for autofill - this is
-an autofill-coverage limit inherited unchanged from field_mappings.json's
-original ranges, NOT the same as how many columns Excel_creator's own loop
-will generate (that's uncapped, driven purely by the live config count, per
-the GUI's own numeric-control max of 20) - a source archive with more than
-`mapping_range` items simply won't autofill the extras, same pre-existing
-behavior as before this module existed. Exactly one entry per config
+Solvent volumes). "mapping_range" (default (1, N), N being the GUI's own
+max for that group's numeric control, 5 when it has none) is how far
+smart_databaser pre-generates archive-path lookups for autofill. It is NOT the
+same as how many columns Excel_creator's own loop generates (uncapped, driven
+by the live config count); a source archive with more than `mapping_range`
+items won't autofill the extras. Exactly one entry per config
 concept should carry a `config_key` matching its group key (mirrors the old
 field_mappings.json convention where only one indexed_fields entry per
 concept carried the tag) - data_manager.infer_config_from_source_step uses
@@ -836,7 +834,7 @@ PROCESSES = {
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [("gavd", "GAVD")],
-            "config_defaults": {"solvents": 1, "solutes": 1, "annealing": False, "gavd": False},
+            "config_defaults": {"solvents": 1, "solutes": 1, "gavd": False},
         },
         "fields": {
             **_COATING_PREFIX_FIELDS,
@@ -1492,6 +1490,19 @@ def _resolve_indexed_path(path_template: list, index0: int) -> list:
     return [index0 if segment == "{i}" else segment for segment in path_template]
 
 
+_DEFAULT_MAPPING_END = 5
+
+
+def _group_mapping_end(spec: dict, group_key: str) -> int:
+    """Default last index of an indexed group's autofill mapping: the GUI's own maximum for
+    that group's numeric control (so solvents/solutes autofill all 20 the GUI allows, not
+    just the first 5), or _DEFAULT_MAPPING_END when the group has no such control."""
+    for config_key, _label, _min, max_val in spec.get("meta", {}).get("numeric_config", []):
+        if config_key == group_key:
+            return max_val
+    return _DEFAULT_MAPPING_END
+
+
 def build_field_paths(
     processes: dict | None = None,
 ) -> dict[str, dict[str, tuple[list[list], bool]]]:
@@ -1513,9 +1524,9 @@ def build_field_paths(
                 paths = _field_paths(field_spec)
                 if paths is not None:
                     field_paths[key] = (paths, field_spec.get("unit_verified", True))
-        for group in spec.get("indexed", {}).values():
+        for group_key, group in spec.get("indexed", {}).items():
             for entry in group:
-                start, end = entry.get("mapping_range", (1, 5))
+                start, end = entry.get("mapping_range", (1, _group_mapping_end(spec, group_key)))
                 templates = entry.get("path_templates") or (
                     [entry["path"]] if "path" in entry else None
                 )
@@ -1571,11 +1582,11 @@ def build_field_value_multipliers(processes: dict | None = None) -> dict[str, di
             for key, field_spec in block.items():
                 if "multiply" in field_spec:
                     multipliers[key] = field_spec["multiply"]
-        for group in spec.get("indexed", {}).values():
+        for group_key, group in spec.get("indexed", {}).items():
             for entry in group:
                 if "multiply" not in entry:
                     continue
-                start, end = entry.get("mapping_range", (1, 5))
+                start, end = entry.get("mapping_range", (1, _group_mapping_end(spec, group_key)))
                 for n in range(start, end + 1):
                     multipliers[entry["excel_key"].format(n=n)] = entry["multiply"]
         if multipliers:
