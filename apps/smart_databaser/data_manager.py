@@ -30,8 +30,10 @@ from hysprint_utils.api_calls import (
 )
 from hysprint_utils.process_specs import (
     ATMOSPHERIC_CONFIG_KEY,  # noqa: F401 (re-exported for gui_components)
+    ATMOSPHERIC_FIELDS,
     AVAILABLE_PROCESSES,
     build_boolean_config_fields,
+    build_boolean_config_probes,
     build_configurable_process_types,
     build_default_config_by_process_type,
     build_field_paths,
@@ -39,6 +41,7 @@ from hysprint_utils.process_specs import (
     build_indexed_config_keys,
     build_material_gated_process_types,
     build_numeric_config_fields,
+    build_quenching_field_kinds,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,27 +83,14 @@ DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
 # missing_critical_fields / gui_components.create_finish_section's hard gate.
 CRITICAL_EXPERIMENT_INFO_KEYS = ("Batch", "Project_Name")
 
-# Process catalog - mirrors Excel_creator's voila_experiment_app.py MinimalistExperimentBuilder
-# (available_processes / configurable_processes / _get_default_config), reimplemented here as
-# plain data since Excel_creator does not export these as importable module-level constants
-# (they're literals inside a widget class) and this module must have zero widget imports.
-# The actual field-generation logic (generate_steps_for_process) is NOT duplicated - see
+# Process catalog: everything below (process types, config controls, defaults, archive
+# paths, probes) is derived from hysprint_utils.process_specs, the single source shared with
+# Excel_creator, so this module needs no copy of it and keeps zero widget imports. The actual
+# field-generation logic (generate_steps_for_process) is not duplicated either - see
 # generate_header_workbook() below, which calls Excel_creator's own sheet_experiment.py.
 #
-# AVAILABLE_PROCESSES itself is imported directly above from process_specs (it no longer
-# needs "mirroring" - both this module and voila_experiment_app.py read the same list).
-#
-# "Evaporation"'s old "carbon_paste" boolean config (previously present in
-# DEFAULT_CONFIG_BY_PROCESS_TYPE and BOOLEAN_CONFIG_FIELDS below) was confirmed-dead -
-# "Evaporation" was never in CONFIGURABLE_PROCESS_TYPES, which gui_components.py's
-# control-rendering gates on, and sheet_experiment.py's Evaporation branch never read a
-# "carbon_paste" config key either - and is not carried over by process_specs.py's
-# derivation. See that module's note for the verification. Slot Die Coating's
-# "gasquenching"/"vacuumquenching" declarations ARE carried over even though they're
-# similarly inert on the Excel-generation side (sheet_experiment.py's Slot Die Coating
-# branch never reads them) - unlike carbon_paste, their checkboxes DO render, so
-# dropping them would be a user-visible change; see process_specs.py's Slot Die Coating
-# entry for the full note.
+# Slot Die Coating declares no gas/vacuum quenching blocks (removed with #38/#39: its sheet
+# branch never read them), so none of the quenching controls below apply to it.
 CONFIGURABLE_PROCESS_TYPES: set[str] = build_configurable_process_types()
 
 DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = build_default_config_by_process_type()
@@ -113,30 +103,17 @@ NUMERIC_CONFIG_FIELDS = build_numeric_config_fields()
 # process (not Experiment Info, which never appears in ExperimentState.process_sequence).
 BOOLEAN_CONFIG_FIELDS = build_boolean_config_fields()
 
-# config_key -> Excel field key(s) whose presence on a source archive step implies that
-# optional block was actually used there - probed by infer_config_from_source_step so a
-# boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already
-# are (see INDEXED_CONFIG_KEYS). Without this, a source step with real Anti solvent/Gas
-# quenching/Vacuum quenching/Air Knife quenching/GAVD data was silently dropped on
-# adopt/replicate, since the target process's config stayed at its all-False default and
-# never gained a field_spec
-# slot for autofill_process_from_batch to write into. Not every BOOLEAN_CONFIG_FIELDS key
-# has a probe yet - those simply never get inferred, same as before this change.
-#
-# IMPORTANT: per process_specs.py, Gas quenching and Vacuum quenching share the same
-# archive "quenching" sub-object and even overlap on some field names ("duration" backs
-# both "Gas quenching duration [s]" AND "Vacuum quenching duration [s]"; same for
-# "pressure") - probing those would set BOTH booleans whenever either one has data. Only
-# each block's own EXCLUSIVE field is used here (confirmed against process_specs.py,
-# not guessed): "Gas" (quenching.gas) for gas quenching, "Vacuum quenching start time [s]"
-# (quenching.start_time) for vacuum quenching.
-BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
-    "antisolvent": ("Anti solvent name", "Anti solvent volume [ml]"),
-    "gasquenching": ("Gas", "Gas quenching flow rate [ml/s]", "Gas quenching velocity [m/s]"),
-    "vacuumquenching": ("Vacuum quenching start time [s]",),
-    "airknifequenching": ("Air knife angle [°]", "Bead volume [mm/s]", "Drying speed [cm/min]"),
-    "gavd": ("GAVD start time [s]", "GAVD vacuum pressure [mbar]"),
-}
+# {process_type: {config_key: Excel field keys}} whose presence on a source archive step implies
+# that optional block was actually used there - probed by infer_config_from_source_step so a
+# boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already are
+# (see INDEXED_CONFIG_KEYS). Derived from process_specs: for each optional block, the fields
+# whose archive path no other block of that process shares (Gas and Vacuum quenching both
+# read quenching.duration/pressure, so in Spin Coating only their exclusive fields probe).
+BOOLEAN_CONFIG_PROBES = build_boolean_config_probes()
+
+# Quenching fields that only apply to one kind of archive `quenching` section, see
+# _field_applies_to_step.
+QUENCHING_FIELD_KINDS = build_quenching_field_kinds()
 
 # ATMOSPHERIC_CONFIG_KEY itself is imported directly above from process_specs.
 
@@ -616,16 +593,18 @@ def infer_config_from_source_step(process_type: str, step: dict) -> dict:
     inferred: dict[str, int] = {}
     for config_key, excel_key_template in INDEXED_CONFIG_KEYS.get(process_type, {}).items():
         count = 0
-        for n in range(1, 6):
-            path_info = field_paths.get(excel_key_template.format(n=n))
-            if path_info is not None and _get_path_any(step, path_info[0]) is not None:
+        n = 1
+        # As far as the catalogue maps this group (its mapping_range), not a fixed 5.
+        while (path_info := field_paths.get(excel_key_template.format(n=n))) is not None:
+            if _get_path_any(step, path_info[0]) is not None:
                 count = n
+            n += 1
         if count:
             inferred[config_key] = count
     for config_key, _label, applicable_types in BOOLEAN_CONFIG_FIELDS:
         if process_type not in applicable_types:
             continue
-        probes = BOOLEAN_CONFIG_PROBE_FIELDS.get(config_key, ())
+        probes = BOOLEAN_CONFIG_PROBES.get(process_type, {}).get(config_key, ())
         for probe_key in probes:
             path_info = field_paths.get(probe_key)
             if path_info is not None and _get_path_any(step, path_info[0]) is not None:
@@ -915,16 +894,7 @@ def _generic_process_parameter_resolver(excel_key: str) -> Callable[[dict], Any]
 
 
 # Generic Process Excel columns with no fixed archive path - see _process_parameter_value.
-_GENERIC_PROCESS_PARAMETER_KEYS = [
-    "Room temperature [°C]",
-    "rel. humidity [%]",
-    "GB start oxygen level [ppm]",
-    "GB end oxygen level [ppm]",
-    "GB start water level [ppm]",
-    "GB end water level [ppm]",
-    "GB start temperature [°C]",
-    "GB end temperature [°C]",
-]
+_GENERIC_PROCESS_PARAMETER_KEYS = list(ATMOSPHERIC_FIELDS)
 
 # Fields with no direct archive attribute of their own - computed from other fields on
 # the same step instead of a process_specs.py path. Keep this small; only add an entry
@@ -945,6 +915,35 @@ def _apply_multiplier(process_type: str, field_key: str, value: Any) -> Any:
     if multiplier is not None and isinstance(value, int | float):
         return value * multiplier
     return value
+
+
+def _step_quenching_kind(step: dict) -> str | None:
+    """ "gas" or "vacuum" for the step's `quenching` section, None when it has none or cannot
+    be told. The section's m_def names its class (GasQuenching..., VacuumQuenching); without
+    one, fields only one kind has (gas, starting_delay / start_time) decide."""
+    quenching = step.get("quenching")
+    if not isinstance(quenching, dict):
+        return None
+    m_def = str(quenching.get("m_def") or "")
+    if "Vacuum" in m_def:
+        return "vacuum"
+    if "Gas" in m_def:
+        return "gas"
+    if "gas" in quenching or "starting_delay" in quenching:
+        return "gas"
+    if "start_time" in quenching:
+        return "vacuum"
+    return None
+
+
+def _field_applies_to_step(field_key: str, step: dict) -> bool:
+    """False for a gas-only/vacuum-only quenching field when the step's quenching section is
+    of the other kind (so a shared path like quenching.duration fills one block, not both)."""
+    kind = QUENCHING_FIELD_KINDS.get(field_key)
+    if kind is None:
+        return True
+    step_kind = _step_quenching_kind(step)
+    return step_kind is None or step_kind == kind
 
 
 def fetch_process_field_values(
@@ -969,6 +968,8 @@ def fetch_process_field_values(
     step = steps[occurrence]
     values = {}
     for field_key, (paths, _unit_verified) in (field_paths or {}).items():
+        if not _field_applies_to_step(field_key, step):
+            continue
         value = _get_path_any(step, paths)
         if value is not None:
             values[field_key] = _apply_multiplier(process_type, field_key, value)
@@ -1086,6 +1087,8 @@ def preview_value_for_field(
     matching = distinct_steps_for_process_type(steps, process.process_type)
     occurrence = occurrence_index_for_process(state, process)
     if occurrence >= len(matching):
+        return None
+    if not _field_applies_to_step(field_key, matching[occurrence]):
         return None
     value = _get_path_any(matching[occurrence], path_info[0])
     if value is None:

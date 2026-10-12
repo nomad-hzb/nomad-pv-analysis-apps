@@ -4161,3 +4161,79 @@ def test_varying_fields_matrix_rejects_forbidden_character_cell(fresh_state):
 
     assert spec.per_sample_values.get(1) is None
     assert material_cell.layout.border != ""
+
+
+# --- S10: catalogue-derived probes, mapping range, gas/vacuum quenching ------------------
+
+
+def _spin_step_with_quenching(quenching):
+    step = dict(SPIN_COATING_STEP_TWO_SOLVENTS)
+    step["quenching"] = quenching
+    return step
+
+
+def test_infer_config_counts_beyond_five_solvents():
+    """The probe range was a fixed 5; it now follows the catalogue (GUI maximum 20)."""
+    solvents = [{"name": f"S{n}", "chemical_2": {"name": f"Solv{n}"}} for n in range(1, 8)]
+    step = dict(SPIN_COATING_STEP_TWO_SOLVENTS)
+    step["solution"] = [
+        {
+            "solution_volume": 0.1,
+            "solution_details": {"solute": [{"name": "A"}], "solvent": solvents},
+        }
+    ]
+    assert infer_config_from_source_step("Spin Coating", step)["solvents"] == 7
+
+
+def test_gas_quenching_step_does_not_fill_the_vacuum_fields():
+    cache = NomadSessionCache()
+    step = _spin_step_with_quenching(
+        {"m_def": "x.GasQuenchingWithNozzle", "gas": "Nitrogen", "duration": 15.0, "pressure": 1.2}
+    )
+    cache._processing_steps_by_batch["B1"] = [step]
+    values, _ = fetch_process_field_values("url", "token", cache, "B1", "Spin Coating")
+    assert values["Gas quenching duration [s]"] == 15.0
+    assert values["Gas quenching pressure [bar]"] == 1.2
+    assert "Vacuum quenching duration [s]" not in values
+    assert "Vacuum quenching pressure [bar]" not in values
+
+
+def test_vacuum_quenching_step_does_not_fill_the_gas_fields():
+    cache = NomadSessionCache()
+    step = _spin_step_with_quenching(
+        {"m_def": "x.VacuumQuenching", "start_time": 8.0, "duration": 20.0, "pressure": 0.01}
+    )
+    cache._processing_steps_by_batch["B1"] = [step]
+    values, _ = fetch_process_field_values("url", "token", cache, "B1", "Spin Coating")
+    assert values["Vacuum quenching duration [s]"] == 20.0
+    assert values["Vacuum quenching pressure [bar]"] == 0.01
+    assert "Gas quenching duration [s]" not in values
+    assert "Gas quenching pressure [bar]" not in values
+
+
+def test_quenching_kind_falls_back_to_exclusive_fields_without_an_m_def():
+    from data_manager import _step_quenching_kind
+
+    assert _step_quenching_kind({"quenching": {"gas": "N2", "duration": 1}}) == "gas"
+    assert _step_quenching_kind({"quenching": {"start_time": 3, "duration": 1}}) == "vacuum"
+    assert _step_quenching_kind({"quenching": {"duration": 1}}) is None
+    assert _step_quenching_kind({}) is None
+
+
+def test_boolean_probes_are_derived_and_share_no_path_between_gas_and_vacuum():
+    from data_manager import BOOLEAN_CONFIG_PROBES
+
+    spin = BOOLEAN_CONFIG_PROBES["Spin Coating"]
+    assert "Gas quenching duration [s]" not in spin["gasquenching"]
+    assert "Vacuum quenching start time [s]" in spin["vacuumquenching"]
+    assert "Gas" in spin["gasquenching"]
+    # a process with only a gas block can probe on duration as well
+    assert "Gas quenching duration [s]" in BOOLEAN_CONFIG_PROBES["Blade Coating"]["gasquenching"]
+
+
+def test_generic_process_parameter_keys_are_the_atmospheric_fields():
+    from data_manager import _GENERIC_PROCESS_PARAMETER_KEYS
+
+    from hysprint_utils.process_specs import ATMOSPHERIC_FIELDS
+
+    assert _GENERIC_PROCESS_PARAMETER_KEYS == list(ATMOSPHERIC_FIELDS)
