@@ -63,8 +63,7 @@ def setup_app():
                     pattern_base = pattern
 
                 # Generate image
-                logger.info("Generating %sx%smm image at %s DPI...", width_mm, height_mm, dpi)
-                logger.info("Using %s pattern for chemical mixing optimization...", pattern)
+                logger.info("Generating %sx%smm image at %s DPI", width_mm, height_mm, dpi)
                 img = utils.create_bitmap(
                     width_mm, height_mm, dpi, margin_dict, black_pct, pattern_base, **kwargs
                 )
@@ -76,6 +75,7 @@ def setup_app():
                     "dpi": dpi,
                     "pattern": pattern,
                     "black_pct": black_pct,
+                    "achieved_pct": utils.black_coverage(img, margin_dict, dpi),
                     "margins": margin_dict,
                 }
 
@@ -105,15 +105,20 @@ def setup_app():
                 # Show info
                 width_px = utils.mm_to_pixels(width_mm, dpi)
                 height_px = utils.mm_to_pixels(height_mm, dpi)
+                achieved = current_params["achieved_pct"]
                 logger.info("Image generated: %sx%s pixels", width_px, height_px)
-                logger.info("Size: %sx%s mm", width_mm, height_mm)
-                logger.info("Pattern: %s, Black: %.1f%%", pattern, black_pct)
+                logger.info(
+                    "Pattern: %s, black %.1f%% (asked %.1f%%)", pattern, achieved, black_pct
+                )
+                print(f"Image: {width_px} x {height_px} pixels ({width_mm} x {height_mm} mm)")
+                print(f"Pattern: {pattern}. Black: {achieved:.1f}% (requested {black_pct:.1f}%)")
 
                 # Enable download
                 download_btn.disabled = False
 
             except Exception as e:
                 logger.exception("Error generating image: %s", e)
+                print(f"Could not generate the image: {e}")
 
     def download_image(b):
         """Create download link for current image"""
@@ -121,6 +126,8 @@ def setup_app():
 
         if current_image is None:
             logger.warning("No image to download. Please generate an image first.")
+            with output_area:
+                print("No image to download yet. Click Generate first.")
             return
 
         with output_area:
@@ -130,11 +137,13 @@ def setup_app():
                 # Generate filename
                 format_str = format_selector.value
                 params = current_params
-                base_filename = f"bitmap_{params['width']:.0f}x{params['height']:.0f}mm_{params['dpi']}dpi_{params['black_pct']:.0f}pct"  # noqa: E501
+                base_filename = f"bitmap_{params['width']:.0f}x{params['height']:.0f}mm_{params['dpi']}dpi_{params['achieved_pct']:.1f}pct"  # noqa: E501
                 filename = f"{base_filename}.{format_str.lower()}"
 
                 # Create download link for original
-                download_link = gui.create_download_link(current_image, filename, format_str)
+                download_link = gui.create_download_link(
+                    utils.to_binary_image(current_image), filename, format_str
+                )
                 display(download_link)
 
                 # Create inverted version if requested
@@ -149,7 +158,7 @@ def setup_app():
                     )
                     inverted_filename = f"{base_filename}_inverted.{format_str.lower()}"
                     inverted_link = gui.create_download_link(
-                        inverted_img, inverted_filename, format_str
+                        utils.to_binary_image(inverted_img), inverted_filename, format_str
                     )
                     display(
                         HTML("<p style='margin-top: 10px;'><strong>Inverted version:</strong></p>")
@@ -182,10 +191,11 @@ def setup_app():
                         )
                     )
 
-                logger.info("Click the button(s) above to download.")
+                print("Click the button(s) above to download.")
 
             except Exception as e:
                 logger.exception("Error creating download: %s", e)
+                print(f"Could not create the download: {e}")
 
     # Attach event handlers
     generate_btn.on_click(generate_image)
