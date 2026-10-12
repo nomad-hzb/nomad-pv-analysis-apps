@@ -27,6 +27,14 @@ sys.modules["pm_nmr"] = _pm
 sys.modules["plot_manager"] = _pm
 _pm_spec.loader.exec_module(_pm)
 
+# gui_components, for the panel tests (it imports data_manager/plot_manager by bare name).
+sys.modules.pop("gui_components", None)
+_gui_spec = importlib.util.spec_from_file_location("gui_nmr", _APP_DIR / "gui_components.py")
+_gui = importlib.util.module_from_spec(_gui_spec)
+sys.modules["gui_nmr"] = _gui
+sys.modules["gui_components"] = _gui
+_gui_spec.loader.exec_module(_gui)
+
 from data_manager import NMRDataManager  # noqa: E402
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"

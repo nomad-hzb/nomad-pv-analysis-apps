@@ -71,6 +71,16 @@ class NMRDataManager:
             return []
         return list(self.data["sample_id"].unique())
 
+    @property
+    def measurement_ids(self) -> list[str]:
+        """One id per NMR entry, in load order. A sample with a single measurement uses its
+        sample_id; a sample measured more than once (repeat, other nucleus, other solvent)
+        gets "<sample_id> #1", "<sample_id> #2", ... so every measurement can be picked,
+        plotted and integrated, not just the first."""
+        if not self.is_loaded:
+            return []
+        return list(self.data["measurement_id"])
+
     def load(self, url: str, token: str, batch_ids: tuple[str, ...]) -> bool:
         """Fetch NMR data for the given batch IDs. Returns True on success."""
         sample_ids = get_ids_in_batch(url, token, batch_ids)
@@ -108,7 +118,14 @@ class NMRDataManager:
         if not rows:
             return False
 
-        self.data = pd.DataFrame(rows)
+        frame = pd.DataFrame(rows)
+        counts = frame.groupby("sample_id")["sample_id"].transform("size")
+        position = frame.groupby("sample_id").cumcount() + 1
+        frame["measurement_id"] = [
+            sid if n == 1 else f"{sid} #{k}"
+            for sid, n, k in zip(frame["sample_id"], counts, position)
+        ]
+        self.data = frame
         self.original_data = self.data.copy()
         return True
 
@@ -124,7 +141,21 @@ class NMRDataManager:
             return f"{variation} ({sample_id})"
         return sample_id
 
-    def get_spectrum(self, sample_id: str) -> tuple[list[float], list[float]]:
-        """Return (chemical_shift, intensity) for a single sample_id."""
-        row = self.data[self.data["sample_id"] == sample_id].iloc[0]
+    def get_measurement_label(self, measurement_id: str) -> str:
+        """Display label of one measurement: the sample label, plus the entry name (or its
+        number) when the sample has several measurements."""
+        row = self.data[self.data["measurement_id"] == measurement_id]
+        if row.empty:
+            return measurement_id
+        sample_id = row["sample_id"].iloc[0]
+        label = self.get_sample_label(sample_id)
+        if measurement_id == sample_id:
+            return label
+        name = row["name"].iloc[0]
+        suffix = name if name else measurement_id[len(sample_id) :].strip()
+        return f"{label} - {suffix}"
+
+    def get_spectrum(self, measurement_id: str) -> tuple[list[float], list[float]]:
+        """Return (chemical_shift, intensity) of one measurement (see measurement_ids)."""
+        row = self.data[self.data["measurement_id"] == measurement_id].iloc[0]
         return row["chemical_shift"], row["intensity"]

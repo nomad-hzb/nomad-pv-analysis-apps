@@ -101,12 +101,12 @@ class OverlayPlotPanel:
     def __init__(self, data_manager: dm_module.NMRDataManager) -> None:
         self._dm = data_manager
 
-        sample_ids = self._dm.sample_ids
+        measurement_ids = self._dm.measurement_ids
 
-        # --- color pickers ---
+        # --- color pickers (one per measurement) ---
         self._color_pickers: dict[str, widgets.ColorPicker] = {}
-        for i, sid in enumerate(sample_ids):
-            label = self._dm.get_sample_label(sid)
+        for i, sid in enumerate(measurement_ids):
+            label = self._dm.get_measurement_label(sid)
             self._color_pickers[sid] = widgets.ColorPicker(
                 concise=False,
                 description=f"{label}:",
@@ -155,8 +155,9 @@ class OverlayPlotPanel:
 
     def _redraw(self) -> None:
         colors = {sid: cp.value for sid, cp in self._color_pickers.items()}
+        labels = {mid: self._dm.get_measurement_label(mid) for mid in self._dm.measurement_ids}
         fig = pm.NMRPlotManager.plot_overlay(
-            self._dm.data, colors=colors, offset=self._offset.value
+            self._dm.data, colors=colors, offset=self._offset.value, labels=labels
         )
         self._plot_out.clear_output(wait=True)
         with self._plot_out:
@@ -176,8 +177,9 @@ class SingleSpectrumPanel:
     def __init__(self, data_manager: dm_module.NMRDataManager) -> None:
         self._dm = data_manager
 
-        sample_ids = self._dm.sample_ids
-        dropdown_options = [(self._dm.get_sample_label(sid), sid) for sid in sample_ids]
+        dropdown_options = [
+            (self._dm.get_measurement_label(mid), mid) for mid in self._dm.measurement_ids
+        ]
 
         # --- controls ---
         self._sample_dd = WidgetFactory.create_dropdown(
@@ -270,7 +272,7 @@ class SingleSpectrumPanel:
 
     def _current_spectrum(self):
         sid = self._sample_dd.value
-        return sid, self._dm.get_sample_label(sid), *self._dm.get_spectrum(sid)
+        return sid, self._dm.get_measurement_label(sid), *self._dm.get_spectrum(sid)
 
     def _redraw(self) -> None:
         sid, label, cs, inten = self._current_spectrum()
@@ -291,15 +293,10 @@ class SingleSpectrumPanel:
         self._peak_out.clear_output(wait=True)
         with self._peak_out:
             if peak_df.empty:
-                logger.info("No peaks found with the current threshold.")
+                print("No peaks found with the current threshold.")
             else:
                 shifts = [float(v) for v in peak_df["Chemical Shift (ppm)"]]
-                logger.info(
-                    "Found %d peaks (%.2f to %.2f ppm).",
-                    len(peak_df),
-                    min(shifts),
-                    max(shifts),
-                )
+                print(f"Found {len(peak_df)} peaks ({min(shifts):.2f} to {max(shifts):.2f} ppm).")
                 ipydisplay(peak_df)
 
     def _run_integration(self) -> None:
@@ -313,10 +310,9 @@ class SingleSpectrumPanel:
         self._integration_out.clear_output(wait=True)
         with self._integration_out:
             if result is None:
-                logger.info(
-                    "No data points found in range %.2f to %.2f ppm.",
-                    self._range_start.value,
-                    self._range_end.value,
+                print(
+                    f"No data points found in range {self._range_start.value:.2f} "
+                    f"to {self._range_end.value:.2f} ppm."
                 )
             else:
                 df = pd.DataFrame(
@@ -331,9 +327,7 @@ class SingleSpectrumPanel:
                     }
                 )
                 ipydisplay(df)
-                logger.info(
-                    "Integral from %.2f to %.2f ppm = %.4f",
-                    result["start"],
-                    result["end"],
-                    result["integral"],
+                print(
+                    f"Integral from {result['start']:.2f} to {result['end']:.2f} ppm "
+                    f"= {result['integral']:.4f}"
                 )
