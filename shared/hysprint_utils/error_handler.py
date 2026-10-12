@@ -1,6 +1,9 @@
+import logging
 import traceback
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class ErrorHandler:
@@ -21,9 +24,7 @@ class ErrorHandler:
                 if show_traceback and error:
                     traceback.print_exc()
         else:
-            print(full_message)
-            if show_traceback and error:
-                traceback.print_exc()
+            logger.error("%s", full_message, exc_info=bool(show_traceback and error))
 
     @staticmethod
     def log_info(message, output_widget=None):
@@ -32,7 +33,7 @@ class ErrorHandler:
             with output_widget:
                 print(message)
         else:
-            print(message)
+            logger.info("%s", message)
 
     @staticmethod
     def log_success(message, output_widget=None):
@@ -41,7 +42,7 @@ class ErrorHandler:
             with output_widget:
                 print(message)
         else:
-            print(message)
+            logger.info("%s", message)
 
     @staticmethod
     def handle_auth_error(error, auth_manager):
