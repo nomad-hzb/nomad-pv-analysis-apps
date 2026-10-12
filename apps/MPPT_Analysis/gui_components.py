@@ -365,6 +365,9 @@ class GUIComponents:
                     continue
                 row = {
                     "sample_id": sample_id,
+                    "pixel": self.data_manager.get_curve_label(
+                        self.app_state.data["entries"], sample_id, curve_id
+                    ),
                     "curve_id": curve_id,
                     "model": fit["model"].abbreviated_name,
                     "n_frames": len(fit["time"]),
@@ -379,17 +382,20 @@ class GUIComponents:
         fitted_df = (
             pd.DataFrame(fitted_rows)
             if fitted_rows
-            else pd.DataFrame(columns=["sample_id", "curve_id"])
+            else pd.DataFrame(columns=["sample_id", "pixel", "curve_id"])
         )
         columns = (
             list(fitted_df.columns)
             if not fitted_df.empty
-            else ["sample_id", "curve_id", "model", "n_frames", "max_time_h"]
+            else ["sample_id", "pixel", "curve_id", "model", "n_frames", "max_time_h"]
         )
         not_fitted_rows = []
         for sample_id, curve_id in not_fitted_keys:
             row = dict.fromkeys(columns, "Not fitted")
             row["sample_id"] = sample_id
+            row["pixel"] = self.data_manager.get_curve_label(
+                self.app_state.data["entries"], sample_id, curve_id
+            )
             row["curve_id"] = curve_id
             not_fitted_rows.append(row)
 

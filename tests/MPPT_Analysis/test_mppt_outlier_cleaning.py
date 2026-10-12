@@ -90,20 +90,52 @@ class TestCleanedLayer:
         _, y_none = dm.get_curve(dm.curves, dm.sample_ids, sample_id, curve_id, None)
         assert np.array_equal(y_none, y_raw)
 
-    def test_selected_curve_data_uses_cleaned_power_only(self, loaded_manager):
+    def test_cleaning_blanks_the_same_points_in_voltage_and_current(self, loaded_manager):
+        """Clean all plots must give clean Voltage and Current Density too, not only power."""
         dm = loaded_manager
         sample_id = dm.sample_ids[0]
         curve_id = dm.get_curve_ids_for_sample(dm.curves, dm.sample_ids, sample_id)[0]
-        n = len(dm.get_raw_curve(dm.curves, dm.sample_ids, sample_id, curve_id)[1])
-        cleaned = {(sample_id, curve_id): np.full(n, 7.0)}
-        power = dm.get_selected_curve_data(
-            dm.curves, dm.sample_ids, [sample_id], "power_density", cleaned=cleaned
+        _, raw_power = dm.get_raw_curve(dm.curves, dm.sample_ids, sample_id, curve_id)
+        cleaned_power = np.array(raw_power, dtype=float)
+        cleaned_power[1] = np.nan
+        cleaned = {(sample_id, curve_id): cleaned_power}
+
+        def item(variable):
+            items = dm.get_selected_curve_data(
+                dm.curves, dm.sample_ids, [sample_id], variable, cleaned=cleaned
+            )
+            return next(i for i in items if i["curve_id"] == curve_id)["data"]
+
+        for variable in ("power_density", "voltage", "current_density"):
+            data = item(variable)
+            assert np.isnan(data[1]), variable
+            assert np.isfinite(np.delete(data, 1)).all(), variable
+
+    def test_other_curves_and_raw_voltage_are_untouched(self, loaded_manager):
+        dm = loaded_manager
+        sample_id = dm.sample_ids[0]
+        curve_id = dm.get_curve_ids_for_sample(dm.curves, dm.sample_ids, sample_id)[0]
+        _, raw_power = dm.get_raw_curve(dm.curves, dm.sample_ids, sample_id, curve_id)
+        cleaned_power = np.array(raw_power, dtype=float)
+        cleaned_power[0] = np.nan
+        before = dm.get_selected_curve_data(dm.curves, dm.sample_ids, [sample_id], "voltage")
+        dm.get_selected_curve_data(
+            dm.curves,
+            dm.sample_ids,
+            [sample_id],
+            "voltage",
+            cleaned={(sample_id, curve_id): cleaned_power},
         )
-        voltage = dm.get_selected_curve_data(
-            dm.curves, dm.sample_ids, [sample_id], "voltage", cleaned=cleaned
-        )
-        assert all(np.all(item["data"] == 7.0) for item in power if item["curve_id"] == curve_id)
-        assert not any(np.all(item["data"] == 7.0) for item in voltage)
+        after = dm.get_selected_curve_data(dm.curves, dm.sample_ids, [sample_id], "voltage")
+        assert all(np.array_equal(b["data"], a["data"]) for b, a in zip(before, after))
+
+    def test_mask_removed_points_keeps_points_that_were_already_nan(self):
+        from data_manager import mask_removed_points
+
+        raw = np.array([1.0, np.nan, 3.0, 4.0])
+        cleaned = np.array([1.0, np.nan, np.nan, 4.0])
+        out = mask_removed_points([10.0, 20.0, 30.0, 40.0], raw, cleaned)
+        assert out[0] == 10.0 and out[1] == 20.0 and np.isnan(out[2]) and out[3] == 40.0
 
     def test_cleaning_drops_stale_fits_and_restore_clears_layer(self):
         state = AppState()
@@ -142,3 +174,35 @@ class TestNaNSeeds:
             seeds = dict.fromkeys(model.columns[: model.n_params], np.nan)
             fit = fit_curve(t, y, model, (0, None), seeds)
             assert fit is not None, model.abbreviated_name
+
+
+class TestFitResultsTablePixelColumn:
+    """The Detailed Fit Results table names the pixel, not only the numeric curve_id."""
+
+    def _gui(self, loaded_manager):
+        import importlib.util
+        from pathlib import Path
+
+        import pytest
+
+        pytest.importorskip("ipywidgets")
+        path = Path(__file__).parents[2] / "apps" / "MPPT_Analysis" / "gui_components.py"
+        spec = importlib.util.spec_from_file_location("gui_mppt_pixel", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = AppState()
+        dm = loaded_manager
+        state.data.update(
+            curves=dm.curves,
+            sample_ids=dm.sample_ids,
+            entries=dm.entries,
+            selected_samples=list(dm.sample_ids)[:1],
+        )
+        return module.GUIComponents(state, dm, None), dm
+
+    def test_not_fitted_rows_show_the_pixel_next_to_the_sample(self, loaded_manager):
+        gui, dm = self._gui(loaded_manager)
+        df = gui._build_full_fit_results_df()
+        assert list(df.columns[:3]) == ["sample_id", "pixel", "curve_id"]
+        for _, row in df.iterrows():
+            assert row["pixel"] == dm.get_curve_label(dm.entries, row["sample_id"], row["curve_id"])
