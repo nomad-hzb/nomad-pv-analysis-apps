@@ -110,11 +110,25 @@ class Variable:
         if self.type == VariableType.CATEGORICAL:
             return self.categories
         elif self.type == VariableType.DISCRETE:
-            n_steps = int((self.max_value - self.min_value) / self.step_size) + 1
-            return [self.min_value + i * self.step_size for i in range(n_steps)]
+            # round, not truncate: (0.3 - 0.0) / 0.1 is 2.9999999999999996, which made the
+            # old int() drop the top level; and round the values (0.30000000000000004 -> 0.3)
+            n_steps = int(round((self.max_value - self.min_value) / self.step_size)) + 1
+            decimals = _decimals_for_step(self.step_size, self.min_value)
+            return [round(self.min_value + i * self.step_size, decimals) for i in range(n_steps)]
         else:
             # For continuous variables, return a reasonable sample
             return list(np.linspace(self.min_value, self.max_value, 10))
+
+
+def _decimals_for_step(step: float, minimum: float = 0.0) -> int:
+    """Decimal places needed to write min + i * step exactly, from how the step and the minimum
+    are written (0.1 -> 1, 0.25 -> 2, 5 -> 0), capped at 10."""
+
+    def places(number: float) -> int:
+        text = f"{number:.10f}".rstrip("0")
+        return len(text.split(".")[1]) if "." in text else 0
+
+    return min(10, max(places(step), places(minimum)))
 
 
 class DataManager:

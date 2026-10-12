@@ -515,7 +515,13 @@ def test_finalize_design_adds_centre_points_replicates_blocks_and_run_order():
     )
 
     assert len(out) == (6 + 2) * 2
-    assert list(out.columns[:4]) == ["run_order", "block", "point_type", "replicate"]
+    assert list(out.columns[:5]) == [
+        "run_order",
+        "experiment_id",
+        "block",
+        "point_type",
+        "replicate",
+    ]
     assert list(out["run_order"]) == list(range(1, 17))
     centre = out[out["point_type"] == "centre"]
     assert (centre["x"] == 5.0).all()
@@ -556,3 +562,209 @@ def test_advanced_options_reach_the_algorithm_under_its_parameter_name(algorithm
     gui.update_advanced_options(algorithm)
 
     assert param in gui.get_sampling_parameters()
+
+
+# ---------------------------------------------------------------------------
+# 5.5 remaining: fractional levels, one Generate handler, run ids and protocol, bad inputs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("lo", "hi", "step", "expected"),
+    [
+        (0.0, 0.3, 0.1, [0.0, 0.1, 0.2, 0.3]),  # (0.3 - 0) / 0.1 is 2.9999999999999996
+        (0.0, 0.7, 0.1, [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
+        (0.5, 2.0, 0.5, [0.5, 1.0, 1.5, 2.0]),
+        (5.0, 20.0, 5.0, [5.0, 10.0, 15.0, 20.0]),
+        (0.0, 1.0, 0.25, [0.0, 0.25, 0.5, 0.75, 1.0]),
+        (1.0, 4.0, 1.0, [1.0, 2.0, 3.0, 4.0]),
+    ],
+)
+def test_discrete_levels_include_the_top_level_and_carry_no_float_noise(lo, hi, step, expected):
+    values = _discrete("v", lo, hi, step).get_discrete_values()
+    assert values == expected  # exact: no 0.30000000000000004 or 0.6000000000000001
+
+
+def test_every_algorithm_can_reach_the_top_fractional_level():
+    variables = [_discrete("conc", 0.0, 0.3, 0.1), _continuous("t", 0.0, 1.0)]
+    design = SamplingEngine().generate_samples(variables, "Uniform Grid Sampling", 12)
+    assert 0.3 in set(design["conc"])
+    assert set(design["conc"]) <= {0.0, 0.1, 0.2, 0.3}
+
+
+def test_run_ids_only_appear_when_the_order_changes():
+    se = SamplingEngine()
+    variables = [_continuous("x", 0.0, 10.0)]
+    design = se.generate_samples(variables, "Latin Hypercube Sampling", 6, random_state=1)
+    plain = se.finalize_design(design, variables)
+    assert "experiment_id" not in plain.columns  # unchanged with the defaults
+    shuffled = se.finalize_design(design, variables, randomize=True, random_state=4)
+    assert list(shuffled.columns[:2]) == ["run_order", "experiment_id"]
+
+
+def test_experiment_id_traces_a_shuffled_run_back_to_its_generated_row():
+    """The randomised protocol was renumbered, so 'Experiment 3' was not row 3 of the table."""
+    se = SamplingEngine()
+    variables = [_continuous("x", 0.0, 10.0), _discrete("n", 1.0, 4.0, 1.0)]
+    design = se.generate_samples(variables, "Latin Hypercube Sampling", 8, random_state=2)
+    shuffled = se.finalize_design(design, variables, randomize=True, random_state=9)
+    assert list(shuffled["run_order"]) == list(range(1, 9))
+    assert sorted(shuffled["experiment_id"]) == list(range(1, 9))
+    original = shuffled.sort_values("experiment_id").reset_index(drop=True)
+    pd.testing.assert_frame_equal(
+        original[["x", "n"]], design[["x", "n"]].reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_two_designs_of_the_same_size_get_different_run_orders_from_their_own_seed():
+    se = SamplingEngine()
+    variables = [_continuous("x", 0.0, 10.0)]
+    design = se.generate_samples(variables, "Latin Hypercube Sampling", 10, random_state=1)
+    a = se.finalize_design(design, variables, randomize=True, random_state=1)
+    b = se.finalize_design(design, variables, randomize=True, random_state=2)
+    assert list(a["experiment_id"]) != list(b["experiment_id"])  # not a fixed seed of 42
+
+
+def test_protocol_follows_the_table_order_and_numbers_instead_of_reshuffling():
+    from gui_components import GUIComponents
+
+    se = SamplingEngine()
+    variables = [_continuous("x", 0.0, 10.0)]
+    design = se.generate_samples(variables, "Latin Hypercube Sampling", 6, random_state=1)
+    table = se.finalize_design(design, variables, randomize=True, random_state=5)
+
+    gui = GUIComponents()
+    gui.current_samples = table
+    gui.current_variables = variables
+    gui.current_algorithm = "Latin Hypercube Sampling"
+    gui.current_random_seed = 5
+    protocol = gui._generate_experimental_protocol()
+
+    assert "RANDOMIZED (seed 5)" in protocol
+    runs = [line for line in protocol.splitlines() if line.startswith("Run ")]
+    assert len(runs) == 6
+    for (_, row), line in zip(table.iterrows(), runs):
+        assert line.startswith(
+            f"Run {int(row['run_order'])} (experiment_id {int(row['experiment_id'])})"
+        )
+    first_block = protocol.split("Run 1 ")[1].split("Run 2 ")[0]
+    assert f"x: {table.iloc[0]['x']}" in first_block  # run 1 shows the first TABLE row
+
+
+def test_protocol_of_an_unshuffled_design_is_sequential():
+    from gui_components import GUIComponents
+
+    se = SamplingEngine()
+    variables = [_continuous("x", 0.0, 10.0)]
+    table = se.generate_samples(variables, "Latin Hypercube Sampling", 4, random_state=1)
+    gui = GUIComponents()
+    gui.current_samples = table
+    gui.current_variables = variables
+    gui.current_algorithm = "Latin Hypercube Sampling"
+    assert "SEQUENTIAL" in gui._generate_experimental_protocol()
+
+
+def _gui_with_row(min_text, max_text, step_text="1.0", var_type="discrete"):
+    from gui_components import GUIComponents
+
+    gui = GUIComponents()
+    gui.create_variable_configurator()
+    row = gui._create_variable_widget(_discrete("x", 1.0, 5.0, 1.0))
+    row.name_input.value = "x"
+    row.type_selector.value = var_type
+    row.min_input.value, row.max_input.value, row.step_input.value = min_text, max_text, step_text
+    gui.variable_widgets = [row]
+    return gui
+
+
+@pytest.mark.parametrize("bad", ["1O0", "1e", "abc", ""])
+def test_a_typo_in_a_number_is_reported_not_turned_into_zero(bad):
+    """'1O0' (letter O) became 0.0, so the design spanned 0..max with no message."""
+    gui = _gui_with_row(bad, "200")
+    variables = gui.get_variables_from_widgets()
+    assert variables == []
+    assert any("Min" in error and repr(bad) in error for error in gui.variable_errors)
+
+
+def test_comma_decimals_still_parse():
+    gui = _gui_with_row("0,5", "2,5", "0,5")
+    variables = gui.get_variables_from_widgets()
+    assert gui.variable_errors == []
+    assert (variables[0].min_value, variables[0].max_value, variables[0].step_size) == (
+        0.5,
+        2.5,
+        0.5,
+    )
+
+
+def test_an_invalid_range_is_reported_as_an_error_too():
+    gui = _gui_with_row("10", "5")
+    assert gui.get_variables_from_widgets() == []
+    assert gui.variable_errors
+
+
+def test_generate_button_has_exactly_one_handler():
+    """Registered twice, every click generated twice (Maximin: 3 minutes became 6)."""
+    import app as doe_app
+
+    instance = doe_app.DoEApplication()
+    handlers = instance.gui_components.generate_button._click_handlers.callbacks
+    assert len(handlers) == 1
+
+
+def test_a_variable_error_stops_generation_before_any_design_is_made(monkeypatch):
+    import app as doe_app
+
+    instance = doe_app.DoEApplication()
+    gui = instance.gui_components
+    gui.variable_widgets = []
+    monkeypatch.setattr(
+        gui,
+        "get_variables_from_widgets",
+        lambda: setattr(gui, "variable_errors", ["x: Min '1O0' is not a number"]) or [],
+    )
+    called = []
+    monkeypatch.setattr(
+        instance.sampling_engine, "generate_samples", lambda *a, **k: called.append(1)
+    )
+    instance._on_generate_samples(None)
+    assert called == []
+
+
+def test_pyproject_does_not_force_upgrades_of_the_shared_environment():
+    import re
+    from pathlib import Path
+
+    text = (
+        Path(__file__).parents[2] / "apps" / "DesignOfExperiments" / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    assert "[tool.hatch.build.targets.wheel]" in text
+    for forbidden in ("numpy>=2", "pandas>=3", "scipy>=1.17", "matplotlib", "seaborn", "scikit"):
+        assert forbidden not in text, forbidden
+    assert re.search(r'"numpy>=1\.\d+"', text)
+
+
+def test_warnings_from_a_run_are_shown_with_the_design_and_not_silenced_globally():
+    """warnings.filterwarnings('ignore') at import hid fallbacks and balance warnings from
+    everything in the kernel."""
+    import warnings
+
+    import app as doe_app
+
+    instance = doe_app.DoEApplication()
+    original = instance.sampling_engine.generate_samples
+
+    def noisy(*args, **kwargs):
+        warnings.warn("Sobol balance properties hold only for a power of 2", UserWarning)
+        return original(*args, **kwargs)
+
+    instance.sampling_engine.generate_samples = noisy
+    variables = [_continuous("x", 0.0, 1.0)]
+    instance.gui_components.get_variables_from_widgets = lambda: variables
+    instance._on_generate_samples(None)
+
+    assert instance.current_samples is not None
+    notes = instance.current_samples.attrs.get("notes", [])
+    assert any("power of 2" in note and note.startswith("Warning:") for note in notes)
+    # nothing sets a process-wide "ignore" filter any more
+    assert not any(f[0] == "ignore" and f[1] is None and f[2] is Warning for f in warnings.filters)
