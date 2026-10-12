@@ -605,6 +605,16 @@ def test_get_uploads_path_derives_from_cwd(monkeypatch):
     assert get_uploads_path() == "uploads/upload123/apps"
 
 
+def test_get_uploads_path_for_a_git_cloned_repo_keeps_the_upload_id(monkeypatch):
+    """Fixed-depth parent walking returned the repo folder as the upload (broken DoE link)."""
+    monkeypatch.setattr(
+        "os.getcwd",
+        lambda: "/home/jovyan/uploads/upload123/nomad-pv-analysis-apps/apps/Global_analyzer",
+    )
+
+    assert get_uploads_path() == "uploads/upload123/nomad-pv-analysis-apps/apps"
+
+
 def test_build_doe_voila_url_includes_user_and_uploads_path():
     url = build_doe_voila_url("jdoe", "uploads/upload123/apps")
 
