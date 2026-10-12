@@ -605,6 +605,16 @@ def test_get_uploads_path_derives_from_cwd(monkeypatch):
     assert get_uploads_path() == "uploads/upload123/apps"
 
 
+def test_get_uploads_path_for_a_git_cloned_repo_keeps_the_upload_id(monkeypatch):
+    """Fixed-depth parent walking returned the repo folder as the upload (broken DoE link)."""
+    monkeypatch.setattr(
+        "os.getcwd",
+        lambda: "/home/jovyan/uploads/upload123/nomad-pv-analysis-apps/apps/Global_analyzer",
+    )
+
+    assert get_uploads_path() == "uploads/upload123/nomad-pv-analysis-apps/apps"
+
+
 def test_build_doe_voila_url_includes_user_and_uploads_path():
     url = build_doe_voila_url("jdoe", "uploads/upload123/apps")
 
@@ -1983,3 +1993,16 @@ def test_bo_constraints_only_returns_enabled_rows():
     enable.value, column.value, op.value, value.value = True, "voc", ">=", 1.1
 
     assert gui.get_bo_constraints() == [{"col": "voc", "op": ">=", "value": 1.1}]
+
+
+def test_doe_link_is_styled_as_a_link():
+    """The link sat in plain text; it must be underlined and coloured so it reads as clickable."""
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[2] / "apps" / "Global_analyzer" / "gui_components.py"
+    ).read_text(encoding="utf-8")
+    anchor = re.search(r"<a href=\"\{doe_voila_url\}\"[^>]*?style=\"([^\"]*)\"", source)
+    assert anchor, "DoE link has no inline style"
+    assert "underline" in anchor.group(1) and "color" in anchor.group(1)

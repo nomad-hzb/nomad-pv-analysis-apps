@@ -1568,8 +1568,9 @@ class GUIManager:
                     "Random forest (Wikipedia)</a></p>"
                 ),
                 widgets.HTML(
-                    f'<p><a href="{doe_voila_url}" target="_blank" title="{doe_full_url}">'
-                    "Open Design of Experiments tool</a> to plan the next batch of "
+                    f'<p><a href="{doe_voila_url}" target="_blank" title="{doe_full_url}" '
+                    'style="color:#1a6fd4; font-weight:600; text-decoration:underline;">'
+                    "Open Design of Experiments tool &#8599;</a> to plan the next batch of "
                     "samples based on these results.</p>"
                 ),
                 widgets.HBox(
