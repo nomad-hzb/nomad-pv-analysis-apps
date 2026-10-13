@@ -246,7 +246,7 @@ class FilterUI:
 
         # Store data and selections for sample-based approach
         self.sample_data = None
-        self.selected_samples = set()  # Set of selected "batch_sample" keys
+        self.selected_samples = set()  # Set of selected (batch, sample) pairs
         self.sample_checkboxes = {}  # Dict of sample checkboxes
 
         # Status widgets
@@ -406,8 +406,7 @@ class FilterUI:
                 selected_count = 0
                 for index, info in batch_sample_info.iterrows():
                     batch, sample, condition = index
-                    sample_key = f"{batch}_{sample}"
-                    self.selected_samples.add(sample_key)
+                    self.selected_samples.add((batch, sample))
                     selected_count += 1
 
                 self._update_sample_display()
@@ -434,13 +433,8 @@ class FilterUI:
                     .rename(columns={"cell": "num_cells", "sample": "num_measurements"})
                 )
 
-                # Get display batch name if available
-                display_batch = batch
-                if "display_batch" in batch_df.columns:
-                    display_batch = batch_df["display_batch"].iloc[0]
-
                 # Create batch header
-                batch_header = widgets.HTML(f"<h5>📁 Batch: {display_batch}</h5>")
+                batch_header = widgets.HTML(f"<h5>📁 Batch: {batch}</h5>")
 
                 # Create sample checkboxes for this batch
                 sample_widgets = []
@@ -458,7 +452,7 @@ class FilterUI:
                         layout=widgets.Layout(margin="2px 0 2px 20px", width="auto"),
                     )
 
-                    sample_key = f"{batch}_{sample}"
+                    sample_key = (batch, sample)
 
                     # Handler for sample selection
                     def create_sample_checkbox_handler(sample_key):
@@ -493,8 +487,7 @@ class FilterUI:
             self.selected_samples = set()
             for index, info in batch_sample_info.iterrows():
                 batch, sample, condition = index
-                sample_key = f"{batch}_{sample}"
-                self.selected_samples.add(sample_key)
+                self.selected_samples.add((batch, sample))
             self._update_sample_status()
 
     def _update_sample_display(self):
@@ -517,8 +510,7 @@ class FilterUI:
             total_measurements = 0
             total_cells = 0
 
-            for sample_key in self.selected_samples:
-                batch, sample = sample_key.split("_", 1)
+            for batch, sample in self.selected_samples:
                 sample_df = df[(df["batch"] == batch) & (df["sample"] == sample)]
                 if not sample_df.empty:
                     condition = sample_df["condition"].iloc[0]
@@ -554,11 +546,16 @@ class FilterUI:
 
     def get_selected_items(self):
         """Get list of selected sample_cell combinations from sample selection"""
-        if not hasattr(self, "selected_samples") or not self.selected_samples:
+        # None: no sample selector was built (nothing to filter by). An empty list: the user
+        # cleared every sample, so nothing is selected.
+        if not getattr(self, "sample_checkboxes", None):
             return None
 
         if not self.sample_data or "jvc" not in self.sample_data:
             return None
+
+        if not self.selected_samples:
+            return []
 
         df = self.sample_data["jvc"]
         selected_cell_combinations = []
@@ -571,16 +568,12 @@ class FilterUI:
         )
 
         # Create a mapping from sample_key to (batch, sample)
-        sample_key_mapping = {}
-        for index, info in batch_sample_groups.iterrows():
-            batch, sample, condition = index
-            sample_key = f"{batch}_{sample}"
-            sample_key_mapping[sample_key] = (batch, sample)
+        known = {(batch, sample) for batch, sample, _condition in batch_sample_groups.index}
 
         # Process each selected sample
         for sample_key in self.selected_samples:
-            if sample_key in sample_key_mapping:
-                batch, sample = sample_key_mapping[sample_key]
+            if sample_key in known:
+                batch, sample = sample_key
 
                 # Get all cells for this sample
                 sample_df = df[(df["batch"] == batch) & (df["sample"] == sample)]

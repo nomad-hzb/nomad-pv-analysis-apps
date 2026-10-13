@@ -84,6 +84,15 @@ def _parse_custom_order(order_str):
     return groups if groups else None
 
 
+def _tag_omitted(figures, names):
+    """Mark combination figures built from the omitted rows, so they are not mistaken for the
+    kept data."""
+    for figure in figures:
+        title = figure.layout.title.text or ""
+        figure.update_layout(title_text=f"{title} (omitted data)".strip())
+    return figures, [f"{name} (omitted)" for name in names]
+
+
 def plotting_string_action(
     plot_list,
     data,
@@ -159,6 +168,14 @@ def plotting_string_action(
         # Extract variables from plot code
         var_x = next((varx_dict[key] for key in varx_dict if key in pl), None)
         var_y = next((vary_dict[key] for key in vary_dict if key in pl), None)
+        # "J..." codes are the omitted-data variants: the same plots built from the rows the
+        # filters removed (they used to fall into the kept-data branches below)
+        omitted_plot = pl.startswith("J")
+        combo_data, combo_other = (
+            (omitted_jv, [filtered_jv, filter_pars])
+            if omitted_plot
+            else (filtered_jv, [omitted_jv, filter_pars])
+        )
 
         try:
             if pl in ("BCORR", "BCORR_ALL"):
@@ -206,8 +223,10 @@ def plotting_string_action(
             elif "csg" in pl and var_y:
                 # Direction, Status and Variable combination plots
                 figs, fig_names_combo = plot_manager.create_triple_combination_plots(
-                    filtered_jv, var_y, "csg", [omitted_jv, filter_pars], colors=color_scheme
+                    combo_data, var_y, "csg", combo_other, colors=color_scheme
                 )
+                if omitted_plot:
+                    figs, fig_names_combo = _tag_omitted(figs, fig_names_combo)
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_combo)
                 continue
@@ -260,24 +279,30 @@ def plotting_string_action(
             elif "sg" in pl and var_y:
                 # Status and Variable combination plots
                 figs, fig_names_combo = plot_manager.create_combination_plots(
-                    filtered_jv, var_y, "sg", [omitted_jv, filter_pars], colors=color_scheme
+                    combo_data, var_y, "sg", combo_other, colors=color_scheme
                 )
+                if omitted_plot:
+                    figs, fig_names_combo = _tag_omitted(figs, fig_names_combo)
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_combo)
                 continue
             elif "cg" in pl and var_y:
                 # Direction and Variable combination plots
                 figs, fig_names_combo = plot_manager.create_combination_plots(
-                    filtered_jv, var_y, "cg", [omitted_jv, filter_pars], colors=color_scheme
+                    combo_data, var_y, "cg", combo_other, colors=color_scheme
                 )
+                if omitted_plot:
+                    figs, fig_names_combo = _tag_omitted(figs, fig_names_combo)
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_combo)
                 continue
             elif "bg" in pl and var_y:
                 # Cell and Variable combination plots
                 figs, fig_names_combo = plot_manager.create_combination_plots(
-                    filtered_jv, var_y, "bg", [omitted_jv, filter_pars], colors=color_scheme
+                    combo_data, var_y, "bg", combo_other, colors=color_scheme
                 )
+                if omitted_plot:
+                    figs, fig_names_combo = _tag_omitted(figs, fig_names_combo)
                 fig_list.extend(figs)
                 fig_names.extend(fig_names_combo)
                 continue
@@ -973,96 +998,69 @@ class PlotManager:
         best_rev_row = df_rev.loc[df_rev["PCE(%)"].idxmax()] if not df_rev.empty else None
         best_for_row = df_for.loc[df_for["PCE(%)"].idxmax()] if not df_for.empty else None
 
-        if not df_rev.empty and not df_for.empty:
-            # Extract values
-            char_vals = ["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)"]
-            char_rev = []
-            char_for = []
+        char_vals = ["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)"]
 
-            for cv in char_vals:
-                if cv in df_rev.columns:
-                    char_rev.append(best_rev_row[cv])
-                else:
-                    char_rev.append(0)
-                if cv in df_for.columns:
-                    char_for.append(best_for_row[cv])
-                else:
-                    char_for.append(0)
+        def _characteristics(row):
+            return [row[cv] if cv in row.index else 0 for cv in char_vals]
 
-            # Add MPP points if available
-            if "V_mpp(V)" in df_for.columns and "J_mpp(mA/cm2)" in df_for.columns:
-                v_f = best_for_row["V_mpp(V)"]
-                j_f = best_for_row["J_mpp(mA/cm2)"]
-                if flip_current:
-                    j_f = -j_f
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=[v_f],
-                        y=[j_f],
-                        mode="markers",
-                        marker=dict(color="red", size=10),
-                        name="Forward MPP",
-                        hoverinfo="text",
-                        hovertext=f"MPP Forward<br>V: {v_f:.3f} V<br>J: {j_f:.3f} mA/cm²",
-                    )
+        # Each scan direction that exists gets its own MPP marker and summary; a device
+        # measured in one direction only used to crash this plot.
+        for label, row, symbol in (
+            ("Forward", best_for_row, "circle"),
+            ("Reverse", best_rev_row, "x"),
+        ):
+            if row is None or "V_mpp(V)" not in row.index or "J_mpp(mA/cm2)" not in row.index:
+                continue
+            v_mpp = row["V_mpp(V)"]
+            j_mpp = -row["J_mpp(mA/cm2)"] if flip_current else row["J_mpp(mA/cm2)"]
+            fig.add_trace(
+                go.Scatter(
+                    x=[v_mpp],
+                    y=[j_mpp],
+                    mode="markers",
+                    marker=dict(color="red", size=10, symbol=symbol),
+                    name=f"{label} MPP",
+                    hoverinfo="text",
+                    hovertext=f"MPP {label}<br>V: {v_mpp:.3f} V<br>J: {j_mpp:.3f} mA/cm²",
                 )
-
-            if "V_mpp(V)" in df_rev.columns and "J_mpp(mA/cm2)" in df_rev.columns:
-                v_r = best_rev_row["V_mpp(V)"]
-                j_r = best_rev_row["J_mpp(mA/cm2)"]
-                if flip_current:
-                    j_r = -j_r
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=[v_r],
-                        y=[j_r],
-                        mode="markers",
-                        marker=dict(color="red", size=10, symbol="x"),
-                        name="Reverse MPP",
-                        hoverinfo="text",
-                        hovertext=f"MPP Reverse<br>V: {v_r:.3f} V<br>J: {j_r:.3f} mA/cm²",
-                    )
-                )
+            )
 
         if show_summary:
-            # Add JV information as annotations (initially visible)
-            text_rev = f"""Rev:
-        <br>Voc: {char_rev[0]:>5.2f}
-        <br>Jsc:  {char_rev[1]:>5.1f}
-        <br>FF:   {char_rev[2]:>5.1f}
-        <br>PCE: {char_rev[3]:>5.1f}"""
-
-            text_for = f"For:<br>{char_for[0]:.2f} V<br>{char_for[1]:.1f} mA/cm²<br>{char_for[2]:.1f}%<br>{char_for[3]:.1f}%"  # noqa: E501
-
             # Anchor the text block by its top/bottom edge (instead of centering it on
             # annot_y) and start it a couple of units clear of the y=0 line, so it never
             # sits on top of the zero-reference line drawn above.
             annot_y = 2 if flip_current else -2
             annot_yanchor = "bottom" if flip_current else "top"
-            # Add annotations for values
-            fig.add_annotation(
-                x=0.24,
-                y=annot_y,
-                yanchor=annot_yanchor,
-                text=text_rev,
-                showarrow=False,
-                font=dict(size=12),
-                align="left",
-                name="summary_rev",
-            )
-
-            fig.add_annotation(
-                x=0.55,
-                y=annot_y,
-                yanchor=annot_yanchor,
-                text=text_for,
-                showarrow=False,
-                font=dict(size=12),
-                align="left",
-                name="summary_for",
-            )
+            if best_rev_row is not None:
+                char_rev = _characteristics(best_rev_row)
+                text_rev = f"""Rev:
+        <br>Voc: {char_rev[0]:>5.2f}
+        <br>Jsc:  {char_rev[1]:>5.1f}
+        <br>FF:   {char_rev[2]:>5.1f}
+        <br>PCE: {char_rev[3]:>5.1f}"""
+                fig.add_annotation(
+                    x=0.24,
+                    y=annot_y,
+                    yanchor=annot_yanchor,
+                    text=text_rev,
+                    showarrow=False,
+                    font=dict(size=12),
+                    align="left",
+                    name="summary_rev",
+                )
+            if best_for_row is not None:
+                char_for = _characteristics(best_for_row)
+                text_for = f"For:<br>{char_for[0]:.2f} V<br>{char_for[1]:.1f} mA/cm²<br>{char_for[2]:.1f}%<br>{char_for[3]:.1f}%"  # noqa: E501
+                fig.add_annotation(
+                    x=0.55,
+                    y=annot_y,
+                    yanchor=annot_yanchor,
+                    text=text_for,
+                    showarrow=False,
+                    font=dict(size=12),
+                    align="left",
+                    name="summary_for",
+                )
 
         # Default axis windows requested for this plot. As long as the measured data
         # fits inside them, keep them fixed (so repeat views of different devices are
