@@ -207,3 +207,43 @@ def test_gui_panels_offer_every_measurement():
     assert [value for _, value in single._sample_dd.options] == manager.measurement_ids
     overlay = gui.OverlayPlotPanel(manager)
     assert list(overlay._color_pickers) == manager.measurement_ids
+
+
+def test_large_spectra_are_decimated_for_display_but_keep_their_peak_tops():
+    """22 MB of full-resolution spectra broke the Voila websocket and the app reset."""
+    from plot_manager import MAX_PLOT_POINTS, decimate_minmax
+
+    x = np.linspace(12, -2, 65536)
+    y = np.random.default_rng(0).normal(0, 0.01, x.size)
+    y[30000] = 5.0  # one narrow peak
+    y[40000] = -3.0  # and a dip
+    xd, yd = decimate_minmax(x, y)
+    assert len(xd) <= MAX_PLOT_POINTS + 2
+    assert yd.max() == 5.0 and yd.min() == -3.0  # extremes survive
+    assert xd[0] == x[0] and xd[-1] == x[-1]  # ends are kept
+    assert np.all(np.diff(np.searchsorted(-x, -xd)) >= 0)  # original order preserved
+
+
+def test_small_spectra_are_not_touched_by_decimation():
+    from plot_manager import decimate_minmax
+
+    x = np.linspace(10, 0, 500)
+    y = np.sin(x)
+    xd, yd = decimate_minmax(x, y)
+    assert np.array_equal(xd, x) and np.array_equal(yd, y)
+
+
+def test_decimation_copes_with_nan_and_analysis_still_uses_full_data():
+    from plot_manager import decimate_minmax
+
+    y = np.random.default_rng(1).normal(0, 1, 20000)
+    y[100:130] = np.nan
+    xd, yd = decimate_minmax(np.arange(y.size), y)
+    assert len(yd) < y.size
+    manager = NMRDataManager()
+    shifts = list(np.linspace(10, 0, 20000))
+    assert manager._build_from_raw({"S": [_spectrum(shifts, [1.0] * 20000)]}, {})
+    result = NMRPlotManager.compute_integral(shifts, [1.0] * 20000, 2.0, 4.0)
+    assert result["integral"] == pytest.approx(2.0, rel=1e-3)  # full resolution
+    fig = NMRPlotManager.plot_overlay(manager.data, colors={})
+    assert len(fig.data[0].x) <= 4002
