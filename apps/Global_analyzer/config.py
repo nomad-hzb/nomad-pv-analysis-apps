@@ -86,6 +86,27 @@ PARAMETER_BLACKLIST = {
 # their median instead of suggesting values for them. Matched on the base
 # name, so the process-type suffix added when sources are merged
 # (e.g. "relative_humidity_Inkjet Printing") is covered too.
+# Numeric columns that describe the sample or the run, not a setting someone chose. They stay
+# available in the Analysis Data tab but start UNCHECKED, so Correlations, Random Forest, Bayesian
+# Optimization and PCA do not pick them up as process parameters: position_in_plan follows the
+# run order (drift and batch effects then show up as an "important parameter", and BO
+# suggests a value for it), the others are device geometry. Matched on the base name, so the
+# suffix added when sources are merged is covered too.
+ANALYSIS_UNCHECKED_BY_DEFAULT = (
+    "position_in_plan",
+    "number_of_pixels",
+    "pixel_area",
+    "solar_cell_area",
+)
+
+
+def is_identifier_like(column: str) -> bool:
+    """True for a column in ANALYSIS_UNCHECKED_BY_DEFAULT, or its merge-suffixed copy."""
+    return any(
+        column == base or column.startswith(base + "_") for base in ANALYSIS_UNCHECKED_BY_DEFAULT
+    )
+
+
 MEASURED_PARAMETERS = {
     "relative_humidity",
     "pressure_start",

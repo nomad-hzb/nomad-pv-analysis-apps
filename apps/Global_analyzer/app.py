@@ -38,12 +38,14 @@ from data_manager import (
     apply_row_filters,
     average_rows_per_sample,
     exclude_samples,
+    filter_plot_data,
     get_categorical_columns,
     get_layer_type_options,
     merge_results_per_sample,
     merged_result_column_names,
     parse_uploaded_analysis_csv,
     process_type_label,
+    samples_with_several_rows,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
     variation_warning,
@@ -134,6 +136,7 @@ class SampleDataExplorer:
             bo_loo_widget=self.gui.bo_loo_widget,
             rf_pdp_output=self.gui.rf_pdp_output,
         )
+        self.plot_manager.column_resolver = self.data_manager.resolve_result_column
 
         # Application state
         self.current_batches = []
@@ -156,7 +159,11 @@ class SampleDataExplorer:
         self.analysis_results_groups: dict = {}
         # Same for process metadata columns ("Spin Coating", ...).
         self.analysis_metadata_groups: dict = {}
+        # row_filters is what the Filters tab shows (staged); the applied copies are what
+        # every tab reads, and only change when the user clicks Confirm filters.
         self.row_filters: list = []  # [{"id", "column", "op", "value"}, ...]
+        self._applied_filters: list = []
+        self._applied_excluded: set = set()
         self._next_filter_id = 1
         self._last_correlation_result = None
         self._last_rf_result = None
@@ -192,6 +199,7 @@ class SampleDataExplorer:
                 "upload_analysis_csv": self._on_upload_analysis_csv,
                 "upload_results_columns_changed": self._on_upload_results_columns_changed,
                 "add_row_filter": self._on_add_row_filter,
+                "confirm_filters": self._on_confirm_filters,
                 "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
@@ -401,6 +409,7 @@ class SampleDataExplorer:
         self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
 
         process_df = self._build_process_dataframe()
+        self._multi_row_samples = samples_with_several_rows(process_df)
         results_df = self._build_results_dataframe()
 
         if process_df is None or results_df is None:
@@ -447,6 +456,7 @@ class SampleDataExplorer:
             else []
         )
         self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._applied_excluded = set()  # a rebuilt checklist starts with every sample included
         self._apply_filters()
         self._refresh_variation_warning()
 
@@ -461,12 +471,60 @@ class SampleDataExplorer:
         if self.full_analysis_df is None:
             self.analysis_df = None
         else:
-            filtered = apply_row_filters(self.full_analysis_df, self.row_filters)
-            filtered = exclude_samples(filtered, self.gui.get_excluded_sample_ids())
+            filtered = apply_row_filters(self.full_analysis_df, self._applied_filters)
+            filtered = exclude_samples(filtered, self._applied_excluded)
             self.analysis_df = filtered
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
+        self._update_filter_summary()
+        self._refresh_filters_pending()
+
+    def _refresh_filters_pending(self):
+        """Show whether the Filters tab holds edits that are not applied yet."""
+        staged = [(f["column"], f["op"], f["value"]) for f in self.row_filters]
+        applied = [(f["column"], f["op"], f["value"]) for f in self._applied_filters]
+        pending = staged != applied or self.gui.get_excluded_sample_ids() != self._applied_excluded
+        self.gui.set_filters_pending(pending)
+
+    def _on_confirm_filters(self, button):
+        """Apply the staged row filters and sample exclusions to every tab."""
+        self._applied_filters = [dict(f) for f in self.row_filters]
+        self._applied_excluded = set(self.gui.get_excluded_sample_ids())
+        self._apply_filters()
+        self._rerun_active_analyses()
+
+    def _update_filter_summary(self):
+        """The Filters tab's one-line summary of what passes (analysis rows and samples)."""
+        if self.full_analysis_df is None or self.analysis_df is None:
+            self.gui.set_filter_summary("")
+            return
+        samples_all = self.full_analysis_df["sample_id"].nunique()
+        samples_kept = self.analysis_df["sample_id"].nunique()
+        self.gui.set_filter_summary(
+            f"<b>{samples_kept} of {samples_all} samples</b> and {len(self.analysis_df)} of "
+            f"{len(self.full_analysis_df)} analysis rows pass the filters "
+            f"({len(self._applied_filters)} row filter(s), "
+            f"{len(self._applied_excluded)} excluded sample(s))."
+        )
+
+    def _plot_source_df(self) -> Optional[pd.DataFrame]:
+        """The Plotting tab's table with the Filters tab's filters and exclusions applied; sets
+        self._plot_filter_note to what was kept and which filters did not apply."""
+        merged = self.data_manager.merged_data
+        self._plot_filter_note = ""
+        if merged is None:
+            return None
+        excluded = self._applied_excluded
+        if not self._applied_filters and not excluded:
+            return merged
+        filtered, skipped = filter_plot_data(merged, self._applied_filters, excluded)
+        note = f"filters kept {len(filtered)} of {len(merged)} rows"
+        if skipped:
+            names = ", ".join(f"{f['column']} {f['op']} {f['value']:g}" for f in skipped)
+            note += f"; not applied (column not in this plot's data): {names}"
+        self._plot_filter_note = note
+        return filtered
 
     def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
         """The exact rows/columns currently feeding Correlations/Random Forest/
@@ -540,21 +598,20 @@ class SampleDataExplorer:
             }
         )
         self._next_filter_id += 1
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_remove_row_filter(self, filter_id):
         """Drop one active row filter (by id) and re-apply the rest."""
         self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_sample_exclusion_toggled(self, change):
         """A sample's checkbox in "Exclude specific samples" was checked or
-        unchecked - re-apply immediately (no separate Recalculate needed) and
+        unchecked - staged until Confirm filters; otherwise (before, it re-applied at once) and
         re-run whichever of Correlations/RF/BO is already showing a result."""
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self._refresh_filters_pending()
 
     def _refresh_variation_warning(self):
         """Show an advisory (never blocking) warning for checked metadata columns
@@ -569,6 +626,16 @@ class SampleDataExplorer:
                 print(
                     "⚠️ For better results, use parameters with more variation "
                     f"(aim for 6+ distinct values): {', '.join(low_variation)}"
+                )
+            if getattr(self, "_multi_row_samples", None) and self._uploaded_df is None:
+                shown = ", ".join(self._multi_row_samples[:5])
+                more = len(self._multi_row_samples) - 5
+                print(
+                    f"⚠️ {len(self._multi_row_samples)} sample(s) have more than one entry of "
+                    "the same process step (e.g. two spin-coating steps): their rows are "
+                    "repeated in this table, once per entry, so the parameters of one step are "
+                    "paired with the other's. Choose a layer type or check the entries: "
+                    f"{shown}{f' (+{more} more)' if more > 0 else ''}"
                 )
             if self._collapsed_result_types and self._uploaded_df is None:
                 print(
@@ -699,6 +766,8 @@ class SampleDataExplorer:
         """Re-run whichever of Correlations/RF/BO already produced a result, so
         Recalculate and row-filter changes visibly update whatever the user
         has open without requiring a trip back through each tab's own button."""
+        if getattr(self, "_plot_created", False):
+            self._on_create_plot(None)
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)
         if self._last_rf_result is not None:
@@ -1341,8 +1410,13 @@ class SampleDataExplorer:
 
     def _on_create_plot(self, button):
         """Handle plot creation."""
-        if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+        merged = self.data_manager.merged_data
+        if merged is None or merged.empty:
             self._update_status("❌ No data available for plotting.")
+            return
+        source_df = self._plot_source_df()
+        if source_df.empty:
+            self._update_status("❌ No rows left after the Filters tab's filters.")
             return
 
         x_param = self.gui.x_param_selector.value
@@ -1358,7 +1432,7 @@ class SampleDataExplorer:
             # Prepare plot data
             plot_type = self.gui.plot_type_selector.value
             plot_df, x_col, y_col, color_col = self.plot_manager.prepare_plot_data(
-                self.data_manager.merged_data,
+                source_df,
                 x_param,
                 y_param,
                 color_param,
@@ -1436,6 +1510,9 @@ class SampleDataExplorer:
             status_msg = f"✓ Plot created with {len(plot_df)} data points!"
             if self.gui.group_by_subbatch.value:
                 status_msg += " (grouped by subbatch)"
+            if self._plot_filter_note:
+                status_msg += f" ({self._plot_filter_note})"
+            self._plot_created = True
 
             # Debug output
             if self.gui.debug_checkbox.value:
@@ -1458,7 +1535,8 @@ class SampleDataExplorer:
         with self.gui.download_output:
             clear_output()
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+            source_df = self._plot_source_df()
+            if source_df is None or source_df.empty:
                 print("⚠️ No data loaded to download.")
                 return
 
@@ -1473,7 +1551,7 @@ class SampleDataExplorer:
 
             try:
                 plot_df, x_col, y_col, _ = self.plot_manager.prepare_plot_data(
-                    self.data_manager.merged_data,
+                    source_df,
                     x_param,
                     y_param,
                     color_param,
