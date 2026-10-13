@@ -124,8 +124,9 @@ dropped. Route it through an `Output()` that stays in the displayed tree
 - `T20` (print) is not enabled on purpose: ~650 legacy prints plus the Output() pattern.
 - Usage logs (`hysprint_utils.usage_tracking`) go to `shared/log/` of the upload, one pair of
   files for every app in it; uploads on different Oasis or users are still separate (issue #7).
-- The parked `Electrochemical_analysis` notebooks have no bootstrap cell, so they get no
-  deployment environment (Oasis URL, proxy) on a non-HZB Oasis.
+- The parked `Electrochemical_analysis` notebooks bootstrap in cell 0 now, but still star-import
+  `Manuel_echem_function` and a local `nomad_api_calls.py` (4 functions only it has: not yet moved to
+  `hysprint_utils`); `Untitled`, `DRT_tools` and the vendored pyDRTtools tutorial are untouched.
 - Oasis-specific content has three ad-hoc mechanisms (per-item env override in App_dashboard,
   the deliberate SE pin in PeroDatabase_downloader, derivation from `hysprint_utils.config`),
   and the Excel_creator guide link (`sheet_data_entry_guide.py`) awaits a decision. Don't add
