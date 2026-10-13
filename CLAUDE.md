@@ -128,6 +128,9 @@ dropped. Route it through an `Output()` that stays in the displayed tree
   deployment environment (Oasis URL, proxy) on a non-HZB Oasis.
 - Which apps the dashboard shows is a per-deployment env choice, not code:
   `HYSPRINT_DASHBOARD_HIDE_APPS` / `HYSPRINT_DASHBOARD_SHOW_APPS` (`DEPLOYMENT.md`).
+- The parked `Electrochemical_analysis` notebooks bootstrap in cell 0 now, but still star-import
+  `Manuel_echem_function` and a local `nomad_api_calls.py` (4 functions only it has: not yet moved to
+  `hysprint_utils`); `Untitled`, `DRT_tools` and the vendored pyDRTtools tutorial are untouched.
 - Oasis-specific content has three ad-hoc mechanisms (per-item env override in App_dashboard,
   the deliberate SE pin in PeroDatabase_downloader, derivation from `hysprint_utils.config`),
   and the Excel_creator guide link (`sheet_data_entry_guide.py`) awaits a decision. Don't add
