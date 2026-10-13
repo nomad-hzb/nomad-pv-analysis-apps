@@ -183,6 +183,7 @@ secrets.py
 # (oasis_local_config.<oasis>.py). Only the exact name is read by
 # bootstrap.py, so renaming one is how you deactivate it locally.
 oasis_local_config*.py
+!oasis_local_config.example.py
 *.zip
 *.tar.gz
 
