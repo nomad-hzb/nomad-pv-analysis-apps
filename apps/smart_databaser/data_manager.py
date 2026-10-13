@@ -8,14 +8,12 @@ import json
 import logging
 import re
 import statistics
-import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import requests
 from alias_config import resolve_progress_units
 from excel_creator_modules import ExperimentExcelBuilder, add_experiment_sheet
 from openpyxl import Workbook
@@ -29,6 +27,7 @@ from hysprint_utils.api_calls import (
     get_entryid,
     get_ids_in_batch,
     get_processing_steps,
+    upload_raw_file_and_wait,
 )
 from hysprint_utils.process_specs import (
     ATMOSPHERIC_CONFIG_KEY,  # noqa: F401 (re-exported for gui_components)
@@ -2053,8 +2052,6 @@ def build_experiment_filename(state: "ExperimentState | None" = None) -> str:
 # ---------------------------------------------------------------------------
 
 UPLOAD_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-# (connect, read) seconds for every upload request; a hung server must not freeze the kernel
-UPLOAD_TIMEOUT = (10, 60)
 
 
 def upload_experiment_excel(
@@ -2066,48 +2063,22 @@ def upload_experiment_excel(
     poll_interval_seconds: float = 2.0,
     max_poll_seconds: float = 120.0,
 ) -> None:
-    """PUTs the Excel's raw bytes into upload_id's /raw/ endpoint, triggers processing,
-    then polls until data.process_running is False. Raises requests.HTTPError if the PUT
-    itself fails, or TimeoutError if processing doesn't finish within max_poll_seconds.
+    """PUTs the Excel into upload_id and waits for NOMAD to process it (the shared
+    hysprint_utils.api_calls.upload_raw_file_and_wait). Raises requests.HTTPError if the PUT
+    fails, RuntimeError if NOMAD reports the processing as failed and TimeoutError if it does not
+    finish within max_poll_seconds.
 
-    The POST to /action/process deliberately does NOT raise_for_status(): live-reported
-    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that this call can return 400 even
-    though the upload proceeds and finishes processing normally - most likely because
-    PUTting the file already triggers processing automatically on this NOMAD version,
-    making the explicit trigger redundant/rejected. apps/File_Uploader/gui_components.py's
-    _process_upload (a real, working upload flow, live-verified independently) already
-    established this exact tolerant pattern - fire the POST, ignore its response, and
-    treat the polling loop below as the actual source of truth for success/failure."""
-    put_response = requests.put(
-        f"{url}/uploads/{upload_id}/raw/",
-        data={"wait_for_processing": False},
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": (filename, excel_bytes, UPLOAD_MIME_TYPE)},
-        timeout=UPLOAD_TIMEOUT,
+    The explicit /action/process request after the PUT is tolerated to fail: live-reported
+    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that it can return 400 although the upload
+    finishes processing normally, because the PUT already starts processing on this NOMAD version.
+    The poll is the source of truth."""
+    upload_raw_file_and_wait(
+        url,
+        token,
+        upload_id,
+        filename,
+        excel_bytes,
+        UPLOAD_MIME_TYPE,
+        poll_interval=poll_interval_seconds,
+        max_wait=max_poll_seconds,
     )
-    put_response.raise_for_status()
-
-    requests.post(
-        f"{url}/uploads/{upload_id}/action/process",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=UPLOAD_TIMEOUT,
-    )
-
-    elapsed = 0.0
-    while elapsed < max_poll_seconds:
-        time.sleep(poll_interval_seconds)
-        elapsed += poll_interval_seconds
-        status_response = requests.get(
-            f"{url}/uploads/{upload_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=UPLOAD_TIMEOUT,
-        )
-        status_response.raise_for_status()
-        upload = status_response.json()["data"]
-        if not upload["process_running"]:
-            if upload.get("process_status") == "FAILURE":
-                detail = upload.get("last_status_message") or "no message from NOMAD"
-                raise RuntimeError(f"NOMAD could not process {filename}: {detail}")
-            return
-
-    raise TimeoutError(f"Upload {upload_id} processing did not finish within {max_poll_seconds}s")

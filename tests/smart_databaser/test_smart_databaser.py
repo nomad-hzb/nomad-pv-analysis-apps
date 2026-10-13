@@ -92,6 +92,7 @@ from gui_components import (
     create_whole_experiment_template_picker,
 )
 
+from hysprint_utils.api_calls import REQUEST_TIMEOUT
 from hysprint_utils.process_specs import (
     build_field_paths,
     build_field_value_multipliers,
@@ -3370,13 +3371,13 @@ def _mock_response(json_data=None, raise_error=False):
 
 def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()) as mock_put,
-        patch("data_manager.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()) as mock_put,
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
@@ -3393,20 +3394,20 @@ def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
 
 def test_upload_experiment_excel_triggers_process_action_after_put():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()) as mock_post,
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()) as mock_post,
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
     mock_post.assert_called_once_with(
         "https://nomad.example/api/v1/uploads/UP1/action/process",
         headers={"Authorization": "Bearer tok"},
-        timeout=(10, 60),
+        timeout=REQUEST_TIMEOUT,
     )
 
 
@@ -3417,10 +3418,10 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
         _mock_response({"data": {"process_running": False}}),
     ]
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()),
-        patch("data_manager.requests.get", side_effect=poll_responses) as mock_get,
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get", side_effect=poll_responses) as mock_get,
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
@@ -3428,16 +3429,18 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
     mock_get.assert_called_with(
         "https://nomad.example/api/v1/uploads/UP1",
         headers={"Authorization": "Bearer tok"},
-        timeout=(10, 60),
+        timeout=REQUEST_TIMEOUT,
     )
 
 
 def test_upload_experiment_excel_raises_on_put_failure():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response(raise_error=True)),
-        patch("data_manager.requests.post", return_value=_mock_response()),
-        patch("data_manager.requests.get"),
-        patch("data_manager.time.sleep"),
+        patch(
+            "hysprint_utils.api_calls.requests.put", return_value=_mock_response(raise_error=True)
+        ),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get"),
+        patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(requests.HTTPError),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
@@ -3450,13 +3453,15 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
     NOMAD version. Must not raise here (matches apps/File_Uploader/gui_components.py's
     proven _process_upload pattern) - the polling loop is the real source of truth."""
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response(raise_error=True)),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.post", return_value=_mock_response(raise_error=True)
+        ),
+        patch(
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ) as mock_get,
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
@@ -3465,13 +3470,13 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
 
 def test_upload_experiment_excel_raises_timeout_if_never_finishes():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": True}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(TimeoutError),
     ):
         upload_experiment_excel(
@@ -4330,10 +4335,10 @@ def test_upload_reports_a_failed_processing_instead_of_success():
         }
     )
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()),
-        patch("data_manager.requests.get", return_value=failed),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get", return_value=failed),
+        patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(RuntimeError, match="bad sheet"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "t.xlsx", b"x")
