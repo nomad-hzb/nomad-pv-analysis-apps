@@ -124,8 +124,6 @@ dropped. Route it through an `Output()` that stays in the displayed tree
 - `T20` (print) is not enabled on purpose: ~650 legacy prints plus the Output() pattern.
 - Usage logs (`hysprint_utils.usage_tracking`) go to `shared/log/` of the upload, one pair of
   files for every app in it; uploads on different Oasis or users are still separate (issue #7).
-- The parked `Electrochemical_analysis` notebooks have no bootstrap cell, so they get no
-  deployment environment (Oasis URL, proxy) on a non-HZB Oasis.
 - Which apps the dashboard shows is a per-deployment env choice, not code:
   `HYSPRINT_DASHBOARD_HIDE_APPS` / `HYSPRINT_DASHBOARD_SHOW_APPS` (`DEPLOYMENT.md`).
 - The parked `Electrochemical_analysis` notebooks bootstrap in cell 0 now, but still star-import
