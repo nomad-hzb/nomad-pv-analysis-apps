@@ -330,3 +330,21 @@ def test_parameter_panel_only_offers_inputs_the_analysis_uses():
         "denoise",
     }
     assert "fitting_interval" not in panel.collect_row_params()[0]
+
+
+def test_plots_are_wrapped_to_fill_the_page_and_the_noise_line_needs_a_noise():
+    import gui_components as gui
+    import ipywidgets as widgets
+
+    box = gui._responsive(go.Figure(go.Scatter(x=[1, 2], y=[1, 2])))
+    assert isinstance(box, widgets.Box)
+    assert box.layout.width == "100%" and box.layout.height.endswith("px")
+    assert "trpl-plot" in box._dom_classes
+    assert "width: 100% !important" in gui.PLOT_CSS
+
+    frame = pd.DataFrame(
+        {"sample_id": ["a"], "time": [[0.0, 1e-9]], "counts": [[5.0, 4.0]], "noise": [0.0]}
+    )
+    assert not TRPLPlotManager.trpl_traces(frame).layout.shapes  # no line at 0 on a log axis
+    frame["noise"] = [0.5]
+    assert len(TRPLPlotManager.trpl_traces(frame).layout.shapes) == 1

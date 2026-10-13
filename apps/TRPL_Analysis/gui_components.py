@@ -12,7 +12,9 @@ import logging
 import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
+import plotly.graph_objects as go
 from data_manager import MEASUREMENT_TYPE, TRPLDataManager, analyse_traces
+from IPython.display import HTML, Javascript
 from IPython.display import display as ipydisplay
 
 from hysprint_utils.api_calls import get_all_batches_wth_data
@@ -21,6 +23,26 @@ from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
 
 logger = logging.getLogger(__name__)
+
+PLOT_HEIGHT_PX = 520
+
+
+def _responsive(fig: go.Figure) -> widgets.Widget:
+    """A figure that fills the width of its container and has a real height.
+
+    A plain go.Figure shown with display() inside an Output rendered tiny under Voila: nothing
+    gave it a width or a height. Same approach as JV-Analysis: a FigureWidget (rendered through
+    the widget comm, not a mimetype renderer), no explicit size on the figure itself, and a
+    sized wrapper box whose inner Plotly div is forced to 100% by PLOT_CSS."""
+    fig.update_layout(autosize=True, width=None, height=None)
+    widget = go.FigureWidget(fig)
+    widget._config = {"responsive": True, "displaylogo": False}
+    box = widgets.Box([widget], layout=widgets.Layout(width="100%", height=f"{PLOT_HEIGHT_PX}px"))
+    box.add_class("trpl-plot")
+    return box
+
+
+PLOT_CSS = "<style>.trpl-plot > div { width: 100% !important; height: 100% !important; }</style>"
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +218,15 @@ class AnalysisPanel:
     def __init__(self, data_manager: TRPLDataManager, param_panel: ParameterPanel) -> None:
         self._dm = data_manager
         self._pp = param_panel
-        self._output = WidgetFactory.create_output(min_height="large", scrollable=True)
+        # Full width and no fixed height: a scrollable Output has a fixed pixel size, which
+        # boxed every plot into a few hundred pixels.
+        self._output = WidgetFactory.create_output(min_height="large")
+        self._output.layout.width = "100%"
+        self._output.layout.height = "auto"
+        self._output.layout.overflow = "visible"
         btn = WidgetFactory.create_button("Run Analysis", button_style="success")
         btn.on_click(self._run)
-        self.widget = widgets.VBox([btn, self._output])
+        self.widget = widgets.VBox([btn, self._output], layout=widgets.Layout(width="100%"))
 
     def _run(self, _b) -> None:
         with self._output:
@@ -211,10 +238,11 @@ class AnalysisPanel:
                     self._pp.collect_row_params(),
                 )
                 # Raw trace plot, in counts per second
+                ipydisplay(HTML(PLOT_CSS))
                 fig_raw = pm.TRPLPlotManager.trpl_traces(
                     frame, y_col="counts", y_title="PL rate [counts/s]"
                 )
-                ipydisplay(fig_raw)
+                ipydisplay(_responsive(fig_raw))
 
                 done = [r for r in results if not r.error]
                 for failed in (r for r in results if r.error):
@@ -227,13 +255,17 @@ class AnalysisPanel:
                     tau_diffs = [r.tau_diff_s for r in done]
                     labels = [r.sample_id for r in done]
                     ipydisplay(
-                        pm.TRPLPlotManager.differential_lifetime_time(
-                            tau_diffs, [r.time_s for r in done], labels
+                        _responsive(
+                            pm.TRPLPlotManager.differential_lifetime_time(
+                                tau_diffs, [r.time_s for r in done], labels
+                            )
                         )
                     )
                     ipydisplay(
-                        pm.TRPLPlotManager.differential_lifetime_density(
-                            tau_diffs, [r.density_cm3 for r in done], labels
+                        _responsive(
+                            pm.TRPLPlotManager.differential_lifetime_density(
+                                tau_diffs, [r.density_cm3 for r in done], labels
+                            )
                         )
                     )
                     ErrorHandler.log_success(
@@ -242,6 +274,14 @@ class AnalysisPanel:
                     )
                 else:
                     ErrorHandler.log_error("No trace could be analysed.", None, self._output)
+
+                # Plotly lays a responsive figure out at its 700 px default until the window
+                # fires a resize; trigger one once the plots are in the page.
+                ipydisplay(
+                    Javascript(
+                        "setTimeout(function(){window.dispatchEvent(new Event('resize'));}, 400);"
+                    )
+                )
 
             except Exception as exc:
                 ErrorHandler.log_error(

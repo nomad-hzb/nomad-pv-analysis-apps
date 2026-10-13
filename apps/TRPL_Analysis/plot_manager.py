@@ -62,7 +62,9 @@ class TRPLPlotManager:
                 )
             )
             # Noise level line when noise column is populated
-            if "noise" in row.index and row["noise"] is not None:
+            # (a noise of 0 is "no background subtracted": a line at 0 on the log axis stretched
+            # the axis down to 1e-21)
+            if "noise" in row.index and row["noise"] is not None and row["noise"] > 0:
                 fig.add_hline(
                     y=row["noise"],
                     line_dash="dash",
