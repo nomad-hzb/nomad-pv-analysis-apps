@@ -117,7 +117,12 @@ class AbsPlDataManager:
     # ------------------------------------------------------------------
 
     def load(self, batch_ids: list[str]) -> bool:
-        """Load AbsPL data for the given batch IDs. Returns True on success."""
+        """Load AbsPL data for the given batch IDs. Returns True on success; API errors are
+        raised for the caller to show.
+
+        Units: wavelength is in nm and bandgap / QFLS in eV as stored in NOMAD (checked on real
+        HySprint_AbsPLMeasurement entries: wavelength 550.0, 550.4 ..., QFLS 1.17, bandgap 1.55),
+        so the values are plotted as they are."""
         sample_ids = get_ids_in_batch(self.url, self.token, list(batch_ids))
         descriptions = get_sample_description(self.url, self.token, list(sample_ids))
         raw = _get_all_abspl(self.url, self.token, sample_ids, eqe_type=MEASUREMENT_TYPE)
@@ -223,12 +228,15 @@ class AbsPlDataManager:
         return buf.getvalue()
 
     def get_pivot_table(self, value_col: str, group_by_col: str) -> pd.DataFrame:
-        """Return a pivot DataFrame with group_by_col values as columns."""
-        pivot = pd.DataFrame()
-        for group_val in self.data[group_by_col].unique():
-            subset = self.data[self.data[group_by_col] == group_val]
-            pivot[group_val] = subset[value_col].reset_index(drop=True)
-        return pivot
+        """A table with one column per group and one row per measurement in it. Groups of
+        different sizes keep every measurement (shorter ones are padded with empty cells); a
+        measurement without a group is listed under "(none)"."""
+        groups = self.data.groupby(group_by_col, dropna=False, sort=False)[value_col]
+        columns = {
+            ("(none)" if pd.isna(key) else key): values.reset_index(drop=True)
+            for key, values in groups
+        }
+        return pd.concat(columns, axis=1) if columns else pd.DataFrame()
 
     def pivot_to_csv_string(self, value_col: str, group_by_col: str) -> str:
         """Return pivot table as a CSV string."""

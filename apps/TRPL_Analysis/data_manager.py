@@ -249,13 +249,15 @@ class TRPLDataManager:
         return self.data[scalar_cols].to_csv()
 
     def get_pivot_table(self, value_col: str, group_col: str) -> pd.DataFrame:
-        """Pivot scalar data: rows = sample index, columns = group_col values."""
-        return self.data.pivot_table(
-            values=value_col,
-            index=self.data.index,
-            columns=group_col,
-            aggfunc="mean",
-        )
+        """A table with one column per group and one row per measurement in it. Groups of
+        different sizes keep every measurement (shorter ones are padded with empty cells); a
+        measurement without a group is listed under "(none)"."""
+        groups = self.data.groupby(group_col, dropna=False, sort=False)[value_col]
+        columns = {
+            ("(none)" if pd.isna(key) else key): values.reset_index(drop=True)
+            for key, values in groups
+        }
+        return pd.concat(columns, axis=1) if columns else pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------
