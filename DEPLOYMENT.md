@@ -30,7 +30,9 @@ Look for:
 
 CE-AME was probed and returns NOMAD 1.4.2, the `hysprint_package` schema, and
 both `voila` and `jupyter2`, so no schema work is needed. If your Oasis runs a
-different schema package, `ENTRY_TYPES` is the single place to remap the names.
+different schema package, `ENTRY_TYPES` remaps the entry-type names for the apps that use it.
+Global_analyzer and Entry_Auditor still hardcode about 90 `HySprint_*` names, so they need those
+edited by hand on such an Oasis.
 
 Also note the API base path. CE-AME serves at `/nomad-oasis` like HZB; if yours
 differs, see the known gap on path literals at the end of this document.
