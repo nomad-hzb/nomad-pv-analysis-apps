@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import re
 import time
 from collections import Counter
@@ -17,6 +18,7 @@ from urllib.parse import quote
 
 import pandas as pd
 import requests
+import yaml
 from pydantic import BaseModel
 
 from hysprint_utils.api_calls import get_sample_entry_links
@@ -505,51 +507,114 @@ def load_generic_data(
 
 
 # ---------------------------------------------------------------------------
-# Correction mechanism - raw-text regex replace on the downloaded archive file,
-# deliberately not a JSON parse/dump, so NOMAD's unit/quantity wrapper structure and
-# m_def references are never disturbed. Re-uploads the whole file and verifies the
-# result.
+# Correction mechanism - the downloaded archive file is parsed (JSON or YAML), exactly ONE
+# value is changed at the exact path the audited column names, and the file is written back.
+# A raw-text regex on the last key segment (the earlier approach) rewrote every field that
+# shared that leaf name (issue #56). The edit follows the same path rules as _flatten, so a
+# column always maps to one place in the file; anything ambiguous is refused, never guessed.
 # ---------------------------------------------------------------------------
 
-# Maps flattened DataFrame column names to their actual key in the JSON/YAML file, for
-# the (rare) cases where load_generic_data's dot-path flattening produces a compound
-# name that doesn't match the raw key (e.g. "annealing.atmosphere" flattens fine, but a
-# caller working from an already-merged/renamed column needs the real leaf key).
-COLUMN_TO_JSON_KEY: dict[str, str] = {
-    "annealing_atmosphere": "atmosphere",
-    "annealing_temperature": "temperature",
-    "annealing_time": "time",
-}
+
+def _parse_archive_text(text: str, mainfile: str) -> Any:
+    """Parsed content of an archive file, or None when it is not valid JSON/YAML."""
+    try:
+        if mainfile.endswith(".json"):
+            return json.loads(text)
+        return yaml.safe_load(text)
+    except (ValueError, yaml.YAMLError):
+        logger.warning("Could not parse %s", mainfile)
+        return None
+
+
+def _dump_archive_text(data: Any, mainfile: str, original_text: str) -> str:
+    """Serialise back, keeping key order; JSON keeps the original indentation style."""
+    if mainfile.endswith(".json"):
+        lines = original_text.splitlines()
+        indent: int | None = None
+        if len(lines) > 1:
+            leading = len(lines[1]) - len(lines[1].lstrip(" "))
+            indent = leading or None
+        text = json.dumps(data, indent=indent, ensure_ascii=False)
+        return text + ("\n" if original_text.endswith("\n") else "")
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
+
+
+def _set_at_flat_path(
+    obj: Any, parts: list[str], old_value: str, new_value: str
+) -> tuple[Any, int]:
+    """Replace the string at the flattened path `parts` when it equals old_value; returns
+    (obj, n_changed) with n_changed 0 or 1. Mirrors _flatten: a single-item list is
+    transparent (consumes no path part), a longer list consumes its 1-based index."""
+    if isinstance(obj, list):
+        if len(obj) == 1:
+            obj[0], changed = _set_at_flat_path(obj[0], parts, old_value, new_value)
+            return obj, changed
+        if len(obj) > 1 and parts and parts[0].isdigit():
+            index = int(parts[0]) - 1
+            if 0 <= index < len(obj):
+                obj[index], changed = _set_at_flat_path(obj[index], parts[1:], old_value, new_value)
+                return obj, changed
+        return obj, 0
+    if isinstance(obj, dict):
+        if parts and parts[0] in obj:
+            obj[parts[0]], changed = _set_at_flat_path(
+                obj[parts[0]], parts[1:], old_value, new_value
+            )
+            return obj, changed
+        return obj, 0
+    if isinstance(obj, str) and not parts and obj == old_value:
+        return new_value, 1
+    return obj, 0
+
+
+def _data_root(parsed: Any) -> Any:
+    """The part of a parsed archive file the audit table was built from.
+
+    The table is flattened from the entry's `data` section, but the raw .archive.json/.yaml wraps
+    that section in a top-level "data" key, so a column path starts one level below the file root.
+    A file without the wrapper is treated as its own data section."""
+    if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
+        return parsed["data"]
+    return parsed
+
+
+def get_value_at_flat_path(file_text: str, mainfile: str, column: str) -> str | None:
+    """The string value the flattened `column` points at in this file, or None."""
+    data = _parse_archive_text(file_text, mainfile)
+    if data is None:
+        return None
+    flat: dict[str, str] = {}
+    _flatten(_data_root(data), "", flat)
+    return flat.get(column)
 
 
 def modify_file_field(
-    file_text: str, mainfile: str, column_name: str, old_value: str, new_value: str
+    file_text: str, mainfile: str, column: str, old_value: str, new_value: str
 ) -> tuple[str, int]:
-    """Targeted string replacement on raw file text. Works for both .archive.json and
-    .archive.yaml. Returns (modified_text, n_replacements)."""
-    actual_key = COLUMN_TO_JSON_KEY.get(column_name, column_name.split(".")[-1])
-
-    if mainfile.endswith(".json"):
-        pattern = re.compile(
-            r'("' + re.escape(actual_key) + r'"\s*:\s*")' + re.escape(str(old_value)) + r'"'
-        )
-        modified, count = pattern.subn(r"\g<1>" + str(new_value) + '"', file_text)
+    """Change the one value at `column` (a flattened dot path) from old_value to new_value
+    in the archive file's text. Works for .archive.json and .archive.yaml. Returns
+    (new_text, 1) on success, or (file_text unchanged, 0) when the file does not parse, the
+    path does not exist, or the value there is not old_value."""
+    data = _parse_archive_text(file_text, mainfile)
+    if data is None:
+        return file_text, 0
+    root = _data_root(data)
+    root, changed = _set_at_flat_path(root, column.split("."), str(old_value), str(new_value))
+    if root is not data and isinstance(data, dict):
+        data["data"] = root
     else:
-        pattern = re.compile(
-            r"^(\s*" + re.escape(actual_key) + r"\s*:\s*)" + re.escape(str(old_value)) + r"\s*$",
-            re.MULTILINE,
-        )
-        modified, count = pattern.subn(r"\g<1>" + str(new_value), file_text)
-
+        data = root
     logger.debug(
-        "modify_file_field: key=%s old=%s new=%s matches=%d file=%s",
-        actual_key,
+        "modify_file_field: column=%s old=%s new=%s changed=%d file=%s",
+        column,
         old_value,
         new_value,
-        count,
+        changed,
         mainfile,
     )
-    return modified, count
+    if not changed:
+        return file_text, 0
+    return _dump_archive_text(data, mainfile, file_text), changed
 
 
 def fetch_entry_files(
@@ -637,20 +702,32 @@ class UploadPublishedError(Exception):
     upload."""
 
 
+OUTCOME_VERIFIED = "verified"  # processed successfully and the new value is at the path
+OUTCOME_UNVERIFIED = "unverified"  # written, but processing timed out or could not be read back
+OUTCOME_FAILED = "failed"  # processing failed, or the file does not hold the new value
+
+
+def _raw_url(url: str, upload_id: str, mainfile: str) -> str:
+    return f"{url}/uploads/{upload_id}/raw/{quote(mainfile, safe='/')}"
+
+
 def upload_corrected_file(
     url: str,
     token: str,
     upload_id: str,
     mainfile: str,
     content: str,
-    old_value: str | None = None,
+    column: str | None = None,
     new_value: str | None = None,
-) -> bool:
-    """PUTs the corrected raw file back, waits for processing, then verifies the new
-    value is present (or the old one is gone). Returns True if verification confirmed
-    the new value; False if verification was inconclusive - a failed/inconclusive
-    verification is logged, not raised, since it does not necessarily mean the write
-    itself failed."""
+) -> str:
+    """PUT the corrected file back into the folder it came from (a file sent to the upload
+    root would become a second entry), wait for NOMAD to process it, then read it back.
+
+    Returns OUTCOME_VERIFIED only when processing ended in SUCCESS and the file holds
+    new_value at `column`; OUTCOME_FAILED when processing failed or the stored value is not
+    the new one; OUTCOME_UNVERIFIED when processing timed out or the file could not be read
+    back. Raises UploadPublishedError for a published upload, and requests errors when a
+    request itself fails."""
     headers = {"Authorization": f"Bearer {token}"}
 
     state_response = requests.get(f"{url}/uploads/{upload_id}", headers=headers, timeout=15)
@@ -658,37 +735,36 @@ def upload_corrected_file(
     if state_response.json().get("data", {}).get("publish_time"):
         raise UploadPublishedError(f"Upload {upload_id} is published; cannot edit.")
 
+    folder = posixpath.dirname(mainfile)
+    target = f"{url}/uploads/{upload_id}/raw/" + (f"{quote(folder, safe='/')}/" if folder else "")
+    content_type = "application/json" if mainfile.endswith(".json") else "application/x-yaml"
     put_response = requests.put(
-        f"{url}/uploads/{upload_id}/raw/",
+        target,
         headers=headers,
         data={"wait_for_processing": False},
-        files={"file": (Path(mainfile).name, content.encode("utf-8"), "application/json")},
+        files={"file": (posixpath.basename(mainfile), content.encode("utf-8"), content_type)},
         timeout=30,
     )
     put_response.raise_for_status()
 
-    wait_for_processing(url, token, upload_id)
+    status = wait_for_processing(url, token, upload_id)
+    if status is None:
+        logger.warning("Processing of %s did not finish in time", mainfile)
+        return OUTCOME_UNVERIFIED
+    if status != "SUCCESS":
+        logger.error("Processing of %s ended with status %s", mainfile, status)
+        return OUTCOME_FAILED
 
-    verify_response = requests.get(
-        f"{url}/uploads/{upload_id}/raw/{quote(mainfile, safe='/')}",
-        headers=headers,
-        timeout=15,
-    )
-    if not verify_response.ok:
-        logger.warning(
-            "Could not verify correction for upload %s: status %d",
-            upload_id,
-            verify_response.status_code,
-        )
-        return False
-    if new_value and str(new_value) in verify_response.text:
-        logger.info("Verification passed: %s confirmed in %s", new_value, mainfile)
-        return True
-    if old_value and str(old_value) in verify_response.text:
-        logger.error("Verification FAILED: old value still present in %s", mainfile)
-        return False
-    logger.warning("Verification inconclusive for %s", mainfile)
-    return False
+    verify_response = requests.get(_raw_url(url, upload_id, mainfile), headers=headers, timeout=15)
+    if not verify_response.ok or column is None or new_value is None:
+        logger.warning("Could not read back %s for verification", mainfile)
+        return OUTCOME_UNVERIFIED
+    stored = get_value_at_flat_path(verify_response.text, mainfile, column)
+    if stored == str(new_value):
+        logger.info("Verified: %s = %s in %s", column, new_value, mainfile)
+        return OUTCOME_VERIFIED
+    logger.error("Verification FAILED: %s holds %r in %s", column, stored, mainfile)
+    return OUTCOME_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -701,6 +777,21 @@ def upload_corrected_file(
 # ---------------------------------------------------------------------------
 
 CORRECTION_LOG_PATH = Path(__file__).parent / "entry_auditor_correction_log.txt"
+BACKUP_DIR = Path(__file__).parent / "entry_auditor_backups"
+"""Original file text of every entry before it is changed, as
+<upload_id>/<mainfile path>.<timestamp>, so a wrong correction can be put back by hand."""
+
+
+def save_backup(
+    upload_id: str, mainfile: str, original_text: str, backup_dir: Path = BACKUP_DIR
+) -> Path:
+    """Write the original file text under backup_dir and return its path. Raises OSError
+    when it cannot be written, in which case the caller must not change the entry."""
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    path = backup_dir / upload_id / f"{mainfile}.{stamp}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(original_text, encoding="utf-8")
+    return path
 
 
 def append_correction_to_log(
@@ -735,6 +826,8 @@ def build_corrections_dict(log_path: Path = CORRECTION_LOG_PATH) -> dict[str, li
             if not line or line.startswith("#"):
                 continue
             parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 2:
+                continue
             correct, wrong = parts[0], parts[1]
             corrections.setdefault(correct, [])
             if wrong not in corrections[correct]:
@@ -743,13 +836,80 @@ def build_corrections_dict(log_path: Path = CORRECTION_LOG_PATH) -> dict[str, li
 
 
 class CorrectionResult(BaseModel):
-    success: int = 0
+    success: int = 0  # verified: processed successfully and read back with the new value
+    unverified: int = 0  # written, but processing timed out or could not be confirmed
     failed: int = 0
     skipped: int = 0
+    succeeded_entry_ids: list[str] = []
+    unverified_entry_ids: list[str] = []
 
     @property
     def total(self) -> int:
-        return self.success + self.failed + self.skipped
+        return self.success + self.unverified + self.failed + self.skipped
+
+
+def _correction_targets(
+    url: str,
+    token: str,
+    df: pd.DataFrame,
+    column: str,
+    old_value: str,
+    entry_type: str,
+    only_entry_id: str | None,
+) -> list[tuple[str, str, str]]:
+    """[(entry_id, upload_id, mainfile)] of the entries a correction would touch."""
+    affected_rows = df[df[column] == old_value]
+    if only_entry_id and "_entry_id" in affected_rows.columns:
+        affected_rows = affected_rows[affected_rows["_entry_id"] == only_entry_id]
+
+    if "_entry_id" in df.columns:
+        return [
+            (row["_entry_id"], row["_upload_id"], row["_mainfile"])
+            for _, row in affected_rows.iterrows()
+            if row.get("_entry_id") and row.get("_upload_id") and row.get("_mainfile")
+        ]
+    affected_sample_ids = list(affected_rows["sample_id"].unique())
+    return fetch_entry_files(url, token, affected_sample_ids, entry_type)
+
+
+def preview_correction(
+    url: str,
+    token: str,
+    df: pd.DataFrame,
+    column: str,
+    old_value: str,
+    new_value: str,
+    entry_type: str,
+    only_entry_id: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    """What apply_correction would do, without writing anything: one dict per entry with
+    entry_id, upload_id, mainfile, and status "change" (the value at `column` is old_value
+    and would become new_value), "no_match" (not at that path) or "error" (with `detail`).
+    Downloads only."""
+    entry_files = _correction_targets(url, token, df, column, old_value, entry_type, only_entry_id)
+    preview: list[dict[str, Any]] = []
+    total = len(entry_files)
+    for index, (entry_id, upload_id, mainfile) in enumerate(entry_files, start=1):
+        if progress_callback is not None:
+            progress_callback(index, total)
+        item = {
+            "entry_id": entry_id,
+            "upload_id": upload_id,
+            "mainfile": mainfile,
+            "before": old_value,
+            "after": new_value,
+        }
+        try:
+            file_text = download_file(url, token, upload_id, mainfile)
+            _, changed = modify_file_field(file_text, mainfile, column, old_value, new_value)
+            item["status"] = "change" if changed else "no_match"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Preview failed for entry %s", entry_id)
+            item["status"] = "error"
+            item["detail"] = str(exc)
+        preview.append(item)
+    return preview
 
 
 def apply_correction(
@@ -763,33 +923,20 @@ def apply_correction(
     log_path: Path = CORRECTION_LOG_PATH,
     only_entry_id: str | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    backup_dir: Path = BACKUP_DIR,
 ) -> CorrectionResult:
-    """Corrects every occurrence of old_value in column across df's underlying NOMAD
-    entries: downloads each entry's raw file, regex-replaces the value, re-uploads, and
-    verifies. Uses df's own _entry_id/_upload_id/_mainfile columns when present (already
-    resolved by load_generic_data); otherwise resolves them via fetch_entry_files from
-    the affected rows' sample_ids. Logs successful corrections via
-    append_correction_to_log. Never raises on a per-entry failure - failures are counted
-    in the returned CorrectionResult instead, so one bad entry doesn't abort the batch.
-    If only_entry_id is given, the correction is narrowed to that single entry instead
-    of every row matching old_value - lets a user fix one occurrence without touching
-    other entries that currently happen to share the same (otherwise consistent) value.
-    progress_callback, if given, is invoked as (index, total) before each entry is
-    processed - gui_components uses it to drive a progress bar without this module
-    importing any widget library."""
-    affected_rows = df[df[column] == old_value]
-    if only_entry_id and "_entry_id" in affected_rows.columns:
-        affected_rows = affected_rows[affected_rows["_entry_id"] == only_entry_id]
-
-    if "_entry_id" in df.columns:
-        entry_files = [
-            (row["_entry_id"], row["_upload_id"], row["_mainfile"])
-            for _, row in affected_rows.iterrows()
-            if row.get("_entry_id") and row.get("_upload_id") and row.get("_mainfile")
-        ]
-    else:
-        affected_sample_ids = list(affected_rows["sample_id"].unique())
-        entry_files = fetch_entry_files(url, token, affected_sample_ids, entry_type)
+    """Change the value at `column` from old_value to new_value in every matching entry:
+    download the entry's raw file, save a backup of it, change exactly that one value, PUT
+    it back into its own folder, and read it back. An entry counts as updated (and is
+    logged) only when NOMAD processed it successfully and it holds the new value; a timeout
+    or unreadable result is counted as unverified, a failed processing or any error as
+    failed, and a file where the value is not at that path as skipped. Never raises on a
+    per-entry failure, so one bad entry does not abort the batch. Uses df's own
+    _entry_id/_upload_id/_mainfile columns when present, else resolves them via
+    fetch_entry_files. If only_entry_id is given, only that entry is touched.
+    progress_callback is invoked as (index, total) before each entry, so the GUI can drive
+    a progress bar without this module importing a widget library."""
+    entry_files = _correction_targets(url, token, df, column, old_value, entry_type, only_entry_id)
 
     result = CorrectionResult()
     total = len(entry_files)
@@ -798,24 +945,26 @@ def apply_correction(
             progress_callback(index, total)
         try:
             file_text = download_file(url, token, upload_id, mainfile)
-            modified_text, n_replacements = modify_file_field(
+            modified_text, n_changed = modify_file_field(
                 file_text, mainfile, column, old_value, new_value
             )
-            if n_replacements == 0:
-                logger.warning("No match for %s=%s in entry %s", column, old_value, entry_id)
+            if n_changed == 0:
+                logger.warning("%s is not %r in entry %s", column, old_value, entry_id)
                 result.skipped += 1
                 continue
-            upload_corrected_file(
-                url,
-                token,
-                upload_id,
-                mainfile,
-                modified_text,
-                old_value=old_value,
-                new_value=new_value,
+            save_backup(upload_id, mainfile, file_text, backup_dir)
+            outcome = upload_corrected_file(
+                url, token, upload_id, mainfile, modified_text, column=column, new_value=new_value
             )
-            logger.info("Corrected entry %s (%d replacement(s))", entry_id, n_replacements)
-            result.success += 1
+            if outcome == OUTCOME_VERIFIED:
+                logger.info("Corrected entry %s", entry_id)
+                result.success += 1
+                result.succeeded_entry_ids.append(entry_id)
+            elif outcome == OUTCOME_UNVERIFIED:
+                result.unverified += 1
+                result.unverified_entry_ids.append(entry_id)
+            else:
+                result.failed += 1
         except Exception:
             logger.exception("Failed to correct entry %s", entry_id)
             result.failed += 1
