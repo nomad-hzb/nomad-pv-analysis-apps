@@ -1,3 +1,4 @@
+import pytest
 from experiment_excel_builder import ExperimentExcelBuilder
 
 PROCESS_SEQUENCE = [
@@ -253,3 +254,117 @@ def test_shipped_templates_only_use_config_keys_the_catalogue_knows():
                 (name, step["process"], k) for k in step.get("config", {}) if k not in known
             ]
     assert unknown == []
+
+
+# ---------------------------------------------------------------------------
+# 6.3: shown config == generated config, template validation, no destructive fallback,
+# visible errors, Ink Recycling headers, Nomad ID formula
+# ---------------------------------------------------------------------------
+
+
+def _app_module():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parents[2] / "apps" / "Excel_creator" / "voila_experiment_app.py"
+    spec = importlib.util.spec_from_file_location("voila_experiment_app_ec2", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sheet_values(sequence, is_testing=True):
+    builder = ExperimentExcelBuilder(sequence, is_testing=is_testing)
+    builder.build_excel()
+    ws = builder.workbook["Experiment Data"]
+    return ws, [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+
+
+def test_a_template_step_without_spinsteps_shows_and_generates_one_step():
+    """The control showed "Steps: 1" (its minimum) but the sheet had no rotation columns."""
+    module = _app_module()
+    app = module.MinimalistExperimentBuilder()
+    step = {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1}}
+    app._create_process_row(1, step)
+    assert step["config"]["spinsteps"] == 1
+    _ws, values = _sheet_values([{"process": "Experiment Info", "config": {}}, step])
+    assert any("Rotation speed" in v for v in values)
+
+
+def test_every_shipped_template_is_valid_and_renders_its_rows():
+    module = _app_module()
+    app = module.MinimalistExperimentBuilder()
+    assert len(app.templates) >= 8  # none of the shipped templates was skipped
+    for key, template in app.templates.items():
+        assert module.validate_template(template) == [], key
+        app.current_sequence = [dict(step) for step in template["process_sequence"]]
+        app._update_process_display()  # raised a TraitError for the unknown "Seq-Evaporation"
+
+
+def test_validate_template_names_the_problem():
+    module = _app_module()
+    bad = {"name": "x", "process_sequence": [{"process": "Seq-Evaporation"}]}
+    assert "Seq-Evaporation" in module.validate_template(bad)[0]
+    assert module.validate_template({"process_sequence": [{"process": "Spin Coating"}]}) == [
+        "it has no name"
+    ]
+
+
+def test_an_unreadable_templates_file_is_not_overwritten(tmp_path):
+    module = _app_module()
+    path = tmp_path / "process_templates.json"
+    path.write_text("{ this is not json", encoding="utf-8")
+    app = module.MinimalistExperimentBuilder(templates_file=path)
+    assert path.read_text(encoding="utf-8") == "{ this is not json"
+    assert app.templates  # the built-in templates are used in memory
+    assert "Empty Template" in app.template_dropdown.options
+
+
+def test_an_invalid_template_is_left_out_and_the_others_survive(tmp_path):
+    import json
+
+    module = _app_module()
+    path = tmp_path / "process_templates.json"
+    templates = {
+        "good": {"name": "Good", "process_sequence": [{"process": "Experiment Info"}]},
+        "broken": {"process_sequence": [{"process": "Experiment Info"}]},
+    }
+    path.write_text(json.dumps({"templates": templates}), encoding="utf-8")
+    app = module.MinimalistExperimentBuilder(templates_file=path)
+    assert list(app.templates) == ["good"]
+    assert json.loads(path.read_text(encoding="utf-8"))["templates"] == templates
+
+
+def test_a_failed_generation_shows_the_error_and_offers_no_download(monkeypatch, capsys):
+    module = _app_module()
+    app = module.MinimalistExperimentBuilder()
+
+    class Broken:
+        def __init__(self, *args, **kwargs):
+            raise ValueError("no columns")
+
+    monkeypatch.setattr(module, "ExperimentExcelBuilder", Broken)
+    app._on_generate_excel(None)
+    assert app.download_area.value == ""
+    assert "no columns" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("solvents", [0, 1, 3])
+def test_ink_recycling_has_one_datetime_and_operator_column(solvents):
+    sequence = [
+        {"process": "Experiment Info", "config": {}},
+        {
+            "process": "Ink Recycling",
+            "config": {"solvents": solvents, "solutes": 1, "precursors": 1},
+        },
+    ]
+    ws, _values = _sheet_values(sequence)
+    headers = [c.value for c in ws[2] if c.value]
+    assert headers.count("Datetime") == 1  # one per process, not one per solvent
+    assert headers.count("Operator") == 1
+
+
+def test_the_nomad_id_formula_is_written_to_every_data_row():
+    ws, _ = _sheet_values(PROCESS_SEQUENCE, is_testing=False)
+    for row in (3, 4, 50):
+        assert str(ws[f"F{row}"].value).startswith(f'=IF(B{row}="","",CONCATENATE("HZB_"')

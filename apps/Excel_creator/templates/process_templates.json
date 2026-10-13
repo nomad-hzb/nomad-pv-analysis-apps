@@ -134,7 +134,7 @@
         {"process": "Experiment Info"},
         {"process": "Cleaning O2-Plasma", "config": {"solvents": 2}},
         {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 1, "spinsteps": 1, "antisolvent": false}},
-        {"process": "Seq-Evaporation", "config": {"materials": 2}},
+        {"process": "Co-Evaporation", "config": {"materials": 2}},
         {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 3, "spinsteps": 1, "antisolvent": false}},
         {"process": "Spin Coating", "config": {"solvents": 1, "solutes": 2, "spinsteps": 1, "antisolvent": false}},
         {"process": "Evaporation"},
