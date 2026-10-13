@@ -110,7 +110,7 @@ class PeakControlPanel:
             value=max_i * 0.1,
             min=0.0,
             max=max_i,
-            step=max(1.0, max_i / 200),
+            step=max_i / 200 if max_i > 0 else 1.0,
             description="Min Height:",
             style={"description_width": "80px"},
             layout=widgets.Layout(width="300px"),
@@ -119,7 +119,7 @@ class PeakControlPanel:
             value=max_i * 0.05,
             min=0.0,
             max=max_i,
-            step=max(1.0, max_i / 200),
+            step=max_i / 200 if max_i > 0 else 1.0,
             description="Prominence:",
             style={"description_width": "80px"},
             layout=widgets.Layout(width="300px"),
@@ -175,7 +175,10 @@ class PeakControlPanel:
             if positions:
                 print(f"Found {len(positions)} peak(s):")
                 for i, (p, intensity, area) in enumerate(zip(positions, intensities, areas)):
-                    print(f"  Peak {i + 1}: 2θ = {p:.2f}°  I = {intensity:.1f}  Area = {area:.1f}")
+                    print(
+                        f"  Peak {i + 1}: 2θ = {p:.2f}°  I = {intensity:.1f}  "
+                        f"Area = {area:.1f} (intensity × degrees)"
+                    )
             else:
                 print("No peaks detected.")
 

@@ -134,3 +134,8 @@ def test_to_csv_string_is_valid_csv(loaded_manager):
 
 def test_measurement_type_constant():
     assert MEASUREMENT_TYPE == "HySprint_XRD_XY"
+
+
+def test_headerless_xy_file_keeps_its_first_data_point():
+    x, y, meta = parse_xy_file("10 1\n20 2\n30 3", "plain.xy")
+    assert (x, y, meta) == ([10.0, 20.0, 30.0], [1.0, 2.0, 3.0], {})

@@ -1,6 +1,8 @@
 """test_plot_manager.py — XRDPlotManager figure and trace checks."""
 
+import numpy as np
 import plotly.graph_objects as go
+import pytest
 from plot_manager import XRDPlotManager
 
 ENTRY = {
@@ -118,3 +120,31 @@ def test_suggested_stagger_range_returns_tuple():
     assert slider_max > 0
     assert default_val <= slider_max
     assert step > 0
+
+
+# ---------------------------------------------------------------------------
+# 6.8: overlapping peaks, headerless files, slider scale
+# ---------------------------------------------------------------------------
+
+
+def test_overlapping_peaks_are_not_counted_twice():
+    """Two Gaussians at 30.0 and 30.5 deg (sigma 0.1; true areas 250.7 and 200.5) reported
+    442.9 and 164.4: the first window contained most of the second peak."""
+    x = np.linspace(28, 32, 801)
+    y = 1000 * np.exp(-((x - 30.0) ** 2) / (2 * 0.1**2)) + 800 * np.exp(
+        -((x - 30.5) ** 2) / (2 * 0.1**2)
+    )
+    positions, _, areas, segments = XRDPlotManager.detect_peaks(list(x), list(y))
+    assert len(positions) == 2
+    assert areas[0] == pytest.approx(250.7, rel=0.25)  # splitting at the valley is approximate
+    assert areas[1] == pytest.approx(200.5, rel=0.25)
+    assert 0.8 * (250.7 + 200.5) < sum(areas) < 1.05 * (250.7 + 200.5)  # was 607 (+35 %)
+    # the two windows share no points
+    assert segments[0][0][-1] <= segments[1][0][0]
+
+
+def test_stagger_slider_follows_the_data_scale():
+    low = XRDPlotManager.suggested_stagger_range({"s": {"intensity": [0.0, 0.4, 1.0]}})
+    high = XRDPlotManager.suggested_stagger_range({"s": {"intensity": [0.0, 4000.0]}})
+    assert low[2] == pytest.approx(0.01)  # a step of 1 on data that ends at 1 was unusable
+    assert high[2] == pytest.approx(100.0)

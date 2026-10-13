@@ -60,8 +60,9 @@ def parse_xy_file(file_content: str, filename: str) -> tuple[list[float], list[f
     """Parse a .xy text file and return (x_data, y_data, metadata)."""
     lines = file_content.strip().split("\n")
     metadata: dict = {}
+    has_metadata_line = bool(lines) and lines[0].startswith("'Id:")
 
-    if lines and lines[0].startswith("'Id:"):
+    if has_metadata_line:
         metadata_line = lines[0].strip("'")
         pattern = r'(\w+):\s*"([^"]*)"'
         matches = re.findall(pattern, metadata_line)
@@ -69,7 +70,8 @@ def parse_xy_file(file_content: str, filename: str) -> tuple[list[float], list[f
 
     x_data: list[float] = []
     y_data: list[float] = []
-    for line in lines[1:]:
+    # a file without the 'Id:' metadata line starts with data: do not skip its first point
+    for line in lines[1 if has_metadata_line else 0 :]:
         if line.strip():
             try:
                 parts = line.split()
