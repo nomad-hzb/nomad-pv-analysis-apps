@@ -23,3 +23,4 @@ def _load(unique_name: str, filename: str):
 
 _load("utils_bitmap_maker", "utils")
 _load("gui_components_bitmap_maker", "gui_components")
+_load("app_bitmap_maker", "app")
