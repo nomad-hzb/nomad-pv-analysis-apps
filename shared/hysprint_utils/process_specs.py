@@ -344,6 +344,7 @@ PROCESSES = {
     },
     "Cleaning O2-Plasma": {
         "meta": {
+            "family": "cleaning",
             "material_gated": False,
             "numeric_config": [("solvents", "Solvents", 0, 20)],
             "boolean_config": [],
@@ -390,6 +391,7 @@ PROCESSES = {
     },
     "Cleaning UV-Ozone": {
         "meta": {
+            "family": "cleaning",
             "material_gated": False,
             "numeric_config": [("solvents", "Solvents", 0, 20)],
             "boolean_config": [],
@@ -426,6 +428,7 @@ PROCESSES = {
     },
     "Spin Coating": {
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [
                 ("solvents", "Solvents", 0, 20),
@@ -539,6 +542,7 @@ PROCESSES = {
         # when this module was first built (they could never have matched a real
         # field_spec, since the columns they'd map from were never generated).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [],
@@ -588,6 +592,7 @@ PROCESSES = {
         # dead by this migration's before/after diff. Not carried over (same for
         # Inkjet Printing's identical phantom entry below).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [],
             "boolean_config": [],
@@ -667,6 +672,7 @@ PROCESSES = {
         # never exposed, not a phantom one, but removed anyway to match Slot Die
         # Coating's treatment.
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [("gasquenching", "Gas Quenching")],
@@ -749,6 +755,7 @@ PROCESSES = {
         # removed (not needed for this process), and Antisolvent was never added
         # (that's Spin-Coating-only).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [
@@ -852,6 +859,7 @@ PROCESSES = {
     },
     "Inkjet Printing": {
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [("gavd", "GAVD")],
@@ -1668,6 +1676,12 @@ def build_boolean_config_probes(
         if probes:
             result[process_type] = probes
     return result
+
+
+def process_family(process_name: str) -> str | None:
+    """ "coating" or "cleaning" for the process types whose sheet columns share one
+    assembly (prefix, solvents/solutes, process-specific block, suffix); None otherwise."""
+    return PROCESSES.get(process_name, {}).get("meta", {}).get("family")
 
 
 def build_configurable_process_types() -> set[str]:

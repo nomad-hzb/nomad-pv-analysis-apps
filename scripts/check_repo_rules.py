@@ -28,7 +28,7 @@ KNOWN_EXCEPTIONS = {
     ("pyproject", "apps/DesignOfExperiments/pyproject.toml"),
     # Link written into every generated workbook; where it should point is an open
     # decision (CLAUDE.md "Known gaps").
-    ("url", "apps/Excel_creator/sheet_data_entry_guide.py:213"),
+    ("url", "apps/Excel_creator/sheet_data_entry_guide.py:126"),
     # Deliberate: the SE Oasis is a fixed data source to download from, like the public
     # central server (CLAUDE.md "Known gaps").
     ("url", "apps/PeroDatabase_downloader/config.py:28"),
