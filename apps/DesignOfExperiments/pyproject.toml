@@ -1,20 +1,18 @@
 [project]
 name = "designofexperiments"
-version = "0.2.0"
+version = "0.2.1"
 description = "HySPRINT DesignOfExperiments app"
 requires-python = ">=3.10"
 dependencies = [
     "hysprint-utils",
     "ipython>=8.12",
     "ipywidgets>=8.1",
-    "matplotlib>=3.10",
     "notebook>=7.0",
-    "numpy>=2.4",
+    "numpy>=1.24",
     "openpyxl>=3.1",
-    "pandas>=3.0",
+    "pandas>=2.0",
     "plotly>=5.24",
-    "scipy>=1.17",
-    "seaborn>=0.13",
+    "scipy>=1.10",
     "voila>=0.5",
 ]
 
@@ -24,3 +22,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

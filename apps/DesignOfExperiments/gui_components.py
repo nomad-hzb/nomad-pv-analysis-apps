@@ -40,6 +40,7 @@ class GUIComponents:
         self.current_metrics = {}
         self.current_algorithm = ""
         self.current_random_seed = 42
+        self.variable_errors: list[str] = []
 
         # Styling constants
         self.BUTTON_STYLE = {"description_width": "initial"}
@@ -47,7 +48,7 @@ class GUIComponents:
         self.WIDE_INPUT_STYLE = {"description_width": "150px"}
 
     def _parse_float(self, value_str):
-        """Parse float value handling comma as decimal separator."""
+        """Parse float value handling comma as decimal separator; None if it is not a number."""
         if isinstance(value_str, (int, float)):
             return float(value_str)
 
@@ -56,7 +57,7 @@ class GUIComponents:
             clean_str = str(value_str).replace(",", ".")
             return float(clean_str)
         except (ValueError, TypeError):
-            return 0.0
+            return None  # a typo such as "1O0" must not become 0.0 and silently change the range
 
     def create_algorithm_selector(self) -> widgets.Widget:
         """Create algorithm selection interface."""
@@ -196,19 +197,28 @@ class GUIComponents:
         protocol_lines.append("EXPERIMENTAL CONDITIONS:")
         protocol_lines.append("-" * 25)
 
-        # Get experimental order
+        # The protocol lists the runs in the order of the exported table, with the same numbers.
+        # (It used to shuffle again with a fixed seed of 42 and renumber "Experiment 1..N", so
+        # "Experiment 3" was not row 3 of the CSV and results were filed under the wrong
+        # settings. The design's own run order and seed are set in the design options.)
         samples = self.current_samples.copy()
-        if self.randomize_order.value:
-            samples = samples.sample(frac=1, random_state=42).reset_index(drop=True)
-            protocol_lines.append("Execution order: RANDOMIZED")
+        if "run_order" in samples.columns:
+            protocol_lines.append(
+                f"Execution order: RANDOMIZED (seed {self.current_random_seed}); run in the "
+                "order listed, numbers are the run_order column of the exported table"
+            )
         else:
-            protocol_lines.append("Execution order: SEQUENTIAL")
+            protocol_lines.append("Execution order: SEQUENTIAL (as in the exported table)")
 
         protocol_lines.append("")
 
         # Sample details
-        for idx, (_, row) in enumerate(samples.iterrows(), 1):
-            protocol_lines.append(f"Experiment {idx}:")
+        for position, (_, row) in enumerate(samples.iterrows(), 1):
+            run = int(row["run_order"]) if "run_order" in row else position
+            label = f"Run {run}"
+            if "experiment_id" in row:
+                label += f" (experiment_id {int(row['experiment_id'])})"
+            protocol_lines.append(f"{label}:")
             for var in self.current_variables:
                 if var.name in row:
                     protocol_lines.append(f"  {var.name}: {row[var.name]}")
@@ -575,8 +585,16 @@ class GUIComponents:
         )
 
         # Store reference to generation controls for event binding
-        self._generation_controls = widgets.HBox(
-            [self.generate_button, widgets.HTML("&nbsp;" * 3), self.regenerate_button]
+        # Errors of a generation appear right below the buttons, where the user is looking
+        # (they used to show only in the status line under the page title, far above).
+        self.generation_message = widgets.HTML("")
+        self._generation_controls = widgets.VBox(
+            [
+                widgets.HBox(
+                    [self.generate_button, widgets.HTML("&nbsp;" * 3), self.regenerate_button]
+                ),
+                self.generation_message,
+            ]
         )
 
         return self._generation_controls
@@ -617,9 +635,10 @@ class GUIComponents:
 
     def create_protocol_section(self) -> widgets.Widget:
         """Create experimental protocol section."""
-        # Randomization options
-        self.randomize_order = widgets.Checkbox(
-            value=True, description="Randomize experimental order", style=self.INPUT_STYLE
+        order_note = widgets.HTML(
+            "<i>The protocol follows the run order of the design. Tick 'Randomize run order' "
+            "in the design options to randomize it (seeded, recorded in the run_order "
+            "column).</i>"
         )
 
         # Export protocol button
@@ -635,7 +654,7 @@ class GUIComponents:
 
         self.protocol_display = widgets.HTML()
 
-        return widgets.VBox([self.randomize_order, export_protocol_button, self.protocol_display])
+        return widgets.VBox([order_note, export_protocol_button, self.protocol_display])
 
     def create_visualization_controls(self) -> widgets.Widget:
         """Create visualization control interface."""
@@ -758,12 +777,12 @@ class GUIComponents:
         # Add validation handlers that trigger on Enter or when losing focus
         def create_validator(widget, default_val):
             def on_submit(sender):
-                try:
-                    # Parse using your existing method that handles commas
-                    parsed_val = self._parse_float(widget.value)
+                parsed_val = self._parse_float(widget.value)
+                if parsed_val is None:
+                    widget.layout.border = "2px solid #c0392b"  # keep the text, mark the typo
+                else:
+                    widget.layout.border = ""
                     widget.value = str(parsed_val)
-                except Exception:
-                    widget.value = str(default_val)
 
             return on_submit
 
@@ -921,36 +940,55 @@ class GUIComponents:
                 )
 
     def get_variables_from_widgets(self) -> List[Variable]:
-        """Extract variables from current widget state."""
+        """Extract variables from current widget state.
+
+        Anything that cannot be turned into a valid variable (a number that does not parse, a
+        range that fails validation) is listed in self.variable_errors; the caller must not
+        generate a design while it is not empty."""
         variables = []
+        self.variable_errors = []
 
         for widget in self.variable_widgets:
+            name = widget.name_input.value.strip()
             try:
-                name = widget.name_input.value.strip()
                 if not name:
                     continue
 
                 var_type = VariableType(widget.type_selector.value)
                 description = widget.desc_input.value.strip()
 
+                def number(field, label, _widget=widget, _name=name):
+                    value = self._parse_float(getattr(_widget, field).value)
+                    if value is None:
+                        shown = getattr(_widget, field).value
+                        self.variable_errors.append(f"{_name}: {label} {shown!r} is not a number")
+                    return value
+
                 if var_type == VariableType.CONTINUOUS:
+                    minimum, maximum = number("min_input", "Min"), number("max_input", "Max")
+                    if None in (minimum, maximum):
+                        continue
                     variable = Variable(
                         name=name,
                         type=var_type,
                         description=description,
-                        min_value=self._parse_float(widget.min_input.value),
-                        max_value=self._parse_float(widget.max_input.value),
+                        min_value=minimum,
+                        max_value=maximum,
                         log_scale=widget.log_input.value,
                     )
 
                 elif var_type == VariableType.DISCRETE:
+                    minimum, maximum = number("min_input", "Min"), number("max_input", "Max")
+                    step = number("step_input", "Step")
+                    if None in (minimum, maximum, step):
+                        continue
                     variable = Variable(
                         name=name,
                         type=var_type,
                         description=description,
-                        min_value=self._parse_float(widget.min_input.value),
-                        max_value=self._parse_float(widget.max_input.value),
-                        step_size=self._parse_float(widget.step_input.value),
+                        min_value=minimum,
+                        max_value=maximum,
+                        step_size=step,
                     )
 
                 elif var_type == VariableType.CATEGORICAL:
@@ -969,9 +1007,11 @@ class GUIComponents:
                     variables.append(variable)
                 else:
                     logger.warning("Invalid variable %r: %s", name, error_msg)
+                    self.variable_errors.append(f"{name}: {error_msg}")
 
             except Exception as e:
                 logger.warning("Error processing variable: %s", e)
+                self.variable_errors.append(f"{name or 'a variable'}: {e}")
 
         return variables
 

@@ -25,7 +25,6 @@ OASIS_HOSTS = ("nomad-hzb-se", "helmholtz-berlin.de")
 KNOWN_EXCEPTIONS = {
     # Installing it would apply its very new numpy/pandas/scipy pins to the shared
     # container; fix together with the pins (audit phase 5.5).
-    ("pyproject", "apps/DesignOfExperiments/pyproject.toml"),
     # Link written into every generated workbook; where it should point is an open
     # decision (CLAUDE.md "Known gaps").
     ("url", "apps/Excel_creator/sheet_data_entry_guide.py:126"),

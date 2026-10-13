@@ -22,8 +22,6 @@ from scipy.spatial.distance import cdist, pdist
 from scipy.stats import qmc
 from utils import ValidationUtils
 
-warnings.filterwarnings("ignore")
-
 logger = logging.getLogger(__name__)
 
 # Exponent of the Morris-Mitchell criterion used by maximin_selection.
@@ -790,8 +788,9 @@ class SamplingEngine:
         randomize: random run order within each block, from random_state, so
             drift over time does not line up with a variable.
 
-        Adds only the columns an option needs (point_type, replicate, block,
-        run_order); with the defaults the design is returned unchanged.
+        Adds only the columns an option needs (point_type, replicate, block, run_order, and
+        experiment_id once the order is changed); with the defaults the design is returned
+        unchanged.
         """
         notes = get_notes(samples)
         design = samples.copy()
@@ -812,6 +811,11 @@ class SamplingEngine:
             design = pd.concat(
                 [design.assign(replicate=r + 1) for r in range(n_replicates)], ignore_index=True
             )
+
+        if randomize or n_blocks > 1:
+            # runs are about to be reordered: keep a stable id so a result can always be
+            # traced back to the row (and settings) it was generated as
+            design.insert(0, "experiment_id", np.arange(1, len(design) + 1))
 
         rng = np.random.default_rng(random_state)
         if n_blocks > 1:
@@ -842,7 +846,11 @@ class SamplingEngine:
         elif "block" in design:
             design = design.sort_values("block", kind="stable").reset_index(drop=True)
 
-        leading = [c for c in ("run_order", "block", "point_type", "replicate") if c in design]
+        leading = [
+            c
+            for c in ("run_order", "experiment_id", "block", "point_type", "replicate")
+            if c in design
+        ]
         design = design[leading + [c for c in design.columns if c not in leading]]
         design.attrs["notes"] = notes
         return design
