@@ -3,6 +3,7 @@
 # they hand to build_ui, so everything below is variant driven rather than duplicated.
 
 import logging
+import os
 
 import config
 import data_manager
@@ -146,8 +147,16 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
             session["current"].dispose()
             session["current"] = None
 
-        source = open_source(target, variant, pixel_width.value)
-        contents = build_sections(source, variant)
+        try:
+            source = open_source(target, variant, pixel_width.value)
+            contents = build_sections(source, variant)
+        except Exception as exc:  # noqa: BLE001 - a bad h5 must not leave a spinner behind
+            logger.exception("Opening %s failed", target)
+            session["current"] = None
+            out.clear_output()
+            with out:
+                print(f"Could not open {os.path.basename(target)}: {exc}")
+            return
         # Publish before rendering, so a link opened from the rendered page finds the file.
         handover = handover_row(target, user, pixel_width.value, variant)
         if handover is not None:
@@ -215,10 +224,21 @@ def preselect_from_store(
 
     sample_name = data_manager.sample_name_in_h5(h5_path)
     if sample_name:
-        for option in samples.options:
-            if data_manager.sample_id_from_option(option) in sample_name:
-                samples.value = option
-                break
+        # the sample whose lab_id is the h5's sample name; failing that the one with the longest
+        # lab_id contained in it ("HZB_X_1" is inside "HZB_X_10" and must not win over it)
+        matching = [
+            option
+            for option in samples.options
+            if data_manager.sample_id_from_option(option) in sample_name
+        ]
+        if matching:
+            samples.value = max(
+                matching,
+                key=lambda option: (
+                    data_manager.sample_id_from_option(option) == sample_name,
+                    len(data_manager.sample_id_from_option(option)),
+                ),
+            )
 
     if h5_path in [option[1] for option in measurements.options]:
         measurements.value = h5_path
@@ -254,7 +274,7 @@ def handover_row(
     if variant.selection == config.SELECTION_UPLOAD:
         return None
     data_manager.store_for_linked_notebooks(target, screenwidth)
-    return build_link_row(target, user, variant.link_key)
+    return build_link_row(target, user, variant.link_key, screenwidth)
 
 
 def section_builders(source, variant: config.Variant) -> dict:
@@ -307,12 +327,14 @@ def overview_widgets(previewer: PERFECTPREVIEWER, variant: config.Variant) -> li
     return [built["giwaxs_content"], built["ui"], built["optical_content"]]
 
 
-def build_link_row(h5_path: str, user: str, exclude: str | None = None) -> widgets.Widget | None:
+def build_link_row(
+    h5_path: str, user: str, exclude: str | None = None, screenwidth: int | None = None
+) -> widgets.Widget | None:
     """The row of "open that other notebook" links this h5 qualifies for.
 
     exclude is the calling variant's own link key, so a notebook does not link to itself.
     """
-    links = data_manager.available_links(h5_path, user, exclude)
+    links = data_manager.available_links(h5_path, user, exclude, screenwidth)
     if not links:
         return None
     html = " ".join(
