@@ -834,6 +834,11 @@ class SampleDataExplorer:
             # Get batch data
             self.current_batches = list(self.gui.batch_selector.value)
             self.current_sample_ids = get_ids_in_batch(self.url, self.token, self.current_batches)
+            # the "batch" column is the batch each sample was selected from
+            self.data_manager.sample_batch = {}
+            for batch_id in self.current_batches:
+                for sample_id in get_ids_in_batch(self.url, self.token, [batch_id]):
+                    self.data_manager.sample_batch.setdefault(sample_id, batch_id)
 
             if not self.current_sample_ids:
                 self._update_status("❌ No samples found in selected batches.")
