@@ -3,6 +3,7 @@
 import numpy as np
 import plot_manager as pm
 import plotly.graph_objects as go
+import pytest
 
 # ---------------------------------------------------------------------------
 # solvent_3d
@@ -142,3 +143,90 @@ class TestPerovskite3D:
         assert "Stable" in legend_names
         assert "Semi-stable" in legend_names
         assert "Not stable" in legend_names
+
+
+# ---------------------------------------------------------------------------
+# 6.5: envelope colours, Hansen-scaled spheres, Sheet3 columns, downloads
+# ---------------------------------------------------------------------------
+
+
+def _inks(order):
+    import pandas as pd
+
+    rows = []
+    for solute in order:
+        for k in range(3):
+            rows.append(
+                {
+                    "Solutes": solute,
+                    "D": 16.0 + k,
+                    "P": 8.0 + k,
+                    "H": 6.0 + k,
+                    "formatted_solvents": "x",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_envelope_colour_is_the_colour_of_the_solutes_points():
+    """Points are coloured in order of appearance, the envelopes were coloured alphabetically."""
+    fig = pm.inks_3d(_inks(["Zeta", "Alpha"]))
+    point_colour = {t.name: t.marker.color for t in fig.data if t.type == "scatter3d"}
+    for trace in fig.data:
+        if trace.type == "surface":
+            solute = trace.name.removesuffix("_envelope")
+            assert trace.colorscale[0][1].lower() == point_colour[solute].lower()
+
+
+def test_inks_are_plotted_in_hansen_scaled_space_with_the_real_d_in_the_hover():
+    fig = pm.inks_3d(_inks(["Alpha"]))
+    points = next(t for t in fig.data if t.type == "scatter3d")
+    assert list(points.x) == [32.0, 34.0, 36.0]  # 2 * D
+    assert list(points.customdata[:, 1]) == [16.0, 17.0, 18.0]  # D itself
+    assert fig.layout.scene.xaxis.title.text == "2·D"
+
+
+def test_enclosing_sphere_radius_is_a_hansen_distance_when_d_is_weighted():
+    import data_manager as dm
+    import pandas as pd
+
+    group = pd.DataFrame({"D": [0.0, 2.0], "P": [0.0, 0.0], "H": [0.0, 0.0]})
+    centre, radius = dm.calculate_enclosing_sphere(group, d_scale=dm.HANSEN_D_WEIGHT)
+    assert list(centre) == [2.0, 0.0, 0.0]  # centre in the 2*D space
+    assert radius == pytest.approx(2.0 * 1.05)  # |2 * (0 - 1)| = Ra between the points / 2
+
+
+def test_sheet3_column_names_are_normalised_to_the_sheet2_names():
+    import data_manager as dm
+    import pandas as pd
+
+    raw = pd.DataFrame(
+        {
+            "Solutes": ["A"],
+            "Solvents": ["DMF"],
+            "D": [1],
+            "P": [2],
+            "H": [3],
+            "bp": [150],
+            "Hov Temp": [25],
+            "MW": [73],
+            "Vis Temp": [20],
+        }
+    )
+    out = dm.normalise_perovskite_columns(raw)
+    assert {"Solute", "Solvent", "BP", "hov_temp", "mw", "vis_temp"} <= set(out.columns)
+    manager = dm.PerovskiteDataManager()
+    manager.sheet3 = out
+    assert manager.solute_list("Sheet3") == ["A"]
+    assert "BP" in manager.color_columns("Sheet3")
+
+
+def test_download_link_is_a_data_uri_with_the_csv():
+    import base64
+
+    import gui_components as gc
+
+    link = gc._download_link("a,b\n1,2\n", "x.csv").data
+    assert 'download="x.csv"' in link
+    payload = link.split("base64,")[1].split('"')[0]
+    assert base64.b64decode(payload).decode() == "a,b\n1,2\n"

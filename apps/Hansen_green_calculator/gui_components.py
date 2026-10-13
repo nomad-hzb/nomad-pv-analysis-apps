@@ -6,6 +6,8 @@ No physics/data logic – delegates to data_manager and plot_manager.
 
 from __future__ import annotations
 
+import base64
+import html
 import io
 import logging
 from datetime import datetime
@@ -15,9 +17,33 @@ import data_manager as dm
 import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
+from IPython.display import HTML
 from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
+
+# One tolerance for "the percentages add up to 100": the status line and Calculate both use it.
+PERCENT_TOLERANCE = 0.5
+
+
+def _say(out: widgets.Output, text: str, kind: str = "info") -> None:
+    """Show a message in an Output (logging alone is never rendered under Voila)."""
+    color = {"error": "#c0392b", "warning": "#b36b00", "success": "#2c7a4b"}.get(kind, "#555")
+    with out:
+        out.clear_output()
+        ipydisplay(HTML(f"<p style='color:{color}'>{html.escape(text)}</p>"))
+    logger.log(logging.WARNING if kind in ("warning", "error") else logging.INFO, text)
+
+
+def _download_link(csv_text: str, filename: str) -> HTML:
+    """A real browser download (a data URI), instead of a file written on the server."""
+    payload = base64.b64encode(csv_text.encode("utf-8")).decode()
+    return HTML(
+        f'<a download="{html.escape(filename)}" href="data:text/csv;base64,{payload}" '
+        f'style="font-weight:bold">Download {html.escape(filename)}</a>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared widget factory (lightweight, no hysprint_utils dependency)
 # ---------------------------------------------------------------------------
@@ -100,7 +126,7 @@ class SolventExplorerPanel:
             with self._info_out:
                 self._info_out.clear_output()
                 if matches.empty:
-                    logger.info("No compounds found for '%s'.", term)
+                    ipydisplay(HTML(f"<i>No compounds found for '{html.escape(term)}'.</i>"))
                 else:
                     cols = [c for c in ["Name", "CAS", "D", "P", "H"] if c in matches.columns]
                     ipydisplay(matches[cols].head(10))
@@ -332,7 +358,7 @@ class BlendCalculatorPanel:
 
     def _on_calc(self, _):
         if not self._selected:
-            logger.warning("No solvents selected.")
+            _say(self._result_out, "No solvents selected: add at least one solvent.", "warning")
             return
         sel_df = pd.DataFrame([info["data"] for info in self._selected.values()])
         target = [self._d_sl.value, self._p_sl.value, self._h_sl.value]
@@ -384,8 +410,13 @@ class BlendCalculatorPanel:
             ipydisplay(fig)
 
     def _on_save(self, _):
+        self._download_area.clear_output()
         if self._last_result is None:
-            logger.warning("No blend result to save; run optimisation first.")
+            _say(
+                self._download_area,
+                "No blend result to save yet: run the optimisation first.",
+                "warning",
+            )
             return
         csv_str = dm.export_blend_csv(
             self._last_result["target"],
@@ -395,10 +426,8 @@ class BlendCalculatorPanel:
             self._last_result["sel_df"],
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"blend_results_{timestamp}.csv"
-        with open(fname, "w") as f:
-            f.write(csv_str)
-        logger.info("Blend results saved to %s", fname)
+        with self._download_area:
+            ipydisplay(_download_link(csv_str, f"blend_results_{timestamp}.csv"))
 
 
 # ---------------------------------------------------------------------------
@@ -533,12 +562,12 @@ class MixtureCalculatorPanel:
         total = sum(info["percentage"] for info in self._selected.values())
         if not self._selected:
             self._status.value = '<p style="color:gray">No solvents selected.</p>'
-        elif abs(total - 100) < 0.01:
+        elif abs(total - 100) <= PERCENT_TOLERANCE:
             self._status.value = f'<p style="color:green">✓ Total: {total:.1f} %</p>'
         else:
             self._status.value = (
                 f'<p style="color:{"orange" if total < 100 else "red"}">'
-                f"Total: {total:.1f} % (must be 100 %)</p>"
+                f"Total: {total:.1f} % (must be 100 %, within {PERCENT_TOLERANCE} %)</p>"
             )
 
     def _on_clear(self, _):
@@ -548,11 +577,15 @@ class MixtureCalculatorPanel:
 
     def _on_calc(self, _):
         if not self._selected:
-            logger.warning("No solvents added to mixture.")
+            _say(self._result_out, "No solvents added to the mixture.", "warning")
             return
         total = sum(info["percentage"] for info in self._selected.values())
-        if abs(total - 100) > 0.5:
-            logger.warning("Percentages sum to %.1f %%; adjust to 100 %%.", total)
+        if abs(total - 100) > PERCENT_TOLERANCE:
+            _say(
+                self._result_out,
+                f"The percentages add up to {total:.1f} %: adjust them to 100 %.",
+                "warning",
+            )
             return
 
         avgs = dm.weighted_average(self._selected, self._dm.data)
@@ -568,8 +601,13 @@ class MixtureCalculatorPanel:
             ipydisplay(pd.DataFrame(rows))
 
     def _on_save(self, _):
+        self._download_area.clear_output()
         if not self._last_results:
-            logger.warning("No mixture result to save; calculate first.")
+            _say(
+                self._download_area,
+                "No mixture result to save yet: click Calculate first.",
+                "warning",
+            )
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         fname = f"mixture_averages_{timestamp}.csv"
@@ -589,9 +627,8 @@ class MixtureCalculatorPanel:
                 if v is not None
             ]
         ).to_csv(buf, index=False)
-        with open(fname, "w") as f:
-            f.write(buf.getvalue())
-        logger.info("Mixture averages saved to %s", fname)
+        with self._download_area:
+            ipydisplay(_download_link(buf.getvalue(), fname))
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +747,7 @@ class PerovskitePanel:
         solutes = list(self._solute_box.value)
         df = self._dm.get_sheet(sheet)
         if df.empty:
-            logger.warning("Sheet '%s' not loaded or empty.", sheet)
+            _say(self._plot_out, f"Sheet '{sheet}' is not loaded or has no rows.", "error")
             return
         fig = pm.perovskite_3d(df, color_by=color, selected_solutes=solutes or None)
         with self._plot_out:
