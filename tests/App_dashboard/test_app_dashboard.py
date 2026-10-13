@@ -237,3 +237,23 @@ def test_unknown_name_warns_and_changes_nothing(caplog):
         selection = select_dashboard(CATEGORIES, hide={"jv-analyzis"})
     assert selection.categories == CATEGORIES
     assert "jv-analyzis" in caplog.text
+
+
+def test_default_project_cards_only_use_full_upload_folder_names():
+    """A bare 22-character id cannot be opened (404); such cards are hidden by default."""
+    for project in PROJECTS:
+        for app in project.apps:
+            assert "-" in app.upload_id and len(app.upload_id.rsplit("-", 1)[1]) == 22, app.name
+
+
+def test_urls_are_percent_encoded():
+    entry = AppEntry("My App", "a b#c(1).ipynb", "x", "d", "fa-x")
+    url = build_voila_url(entry, "edgar", "uploads/up-1/apps")
+    assert url.endswith("/uploads/up-1/apps/My%20App/a%20b%23c%281%29.ipynb")
+
+
+def test_the_oasis_prefix_comes_from_the_api_endpoint():
+    import data_manager as dm_module
+
+    assert dm_module.OASIS_PREFIX == dm_module.API_ENDPOINT.split("/api/")[0]
+    assert dm_module.VOILA_PATH_TEMPLATE.startswith(dm_module.OASIS_PREFIX + "/north/user/")

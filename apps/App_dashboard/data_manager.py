@@ -1,13 +1,15 @@
 import logging
 import os
 from dataclasses import dataclass
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 try:
-    from hysprint_utils.config import URL_BASE
+    from hysprint_utils.config import API_ENDPOINT, URL_BASE
 except ImportError:
     URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
+    API_ENDPOINT = "/nomad-oasis/api/v1"
     logging.getLogger(__name__).warning(
         "hysprint_utils.config not found; using hardcoded URL fallback"
     )
@@ -21,8 +23,11 @@ except ImportError:
         return None
 
 
-VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
-JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/lab/tree"
+# The Oasis path prefix ("/nomad-oasis" on the HZB Oasis) comes from the configured API endpoint,
+# so an Oasis mounted elsewhere gets working links.
+OASIS_PREFIX = API_ENDPOINT.split("/api/")[0]
+VOILA_PATH_TEMPLATE = OASIS_PREFIX + "/north/user/{user}/voila/voila/render"
+JUPYTER_PATH_TEMPLATE = OASIS_PREFIX + "/north/user/{user}/voila/lab/tree"
 """Deliberately the "voila" NORTH tool, not a separate "jupyter2" tool -- the
 latter isn't provisioned on this Oasis (confirmed via a Jupyter-Server-level
 404 on a real upload where the target file genuinely existed); the voila
@@ -390,10 +395,9 @@ def _build_projects() -> list[Project]:
                 "2. Feature Extraction",
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
-                ),
+                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
+                # 404). Set the env variable to the full folder name to show this card.
+                upload_id=_project_upload_id("HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", ""),
             ),
             AppEntry(
                 "",
@@ -401,10 +405,9 @@ def _build_projects() -> list[Project]:
                 "3. PL Defect Analysis",
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
-                ),
+                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
+                # 404). Set the env variable to the full folder name to show this card.
+                upload_id=_project_upload_id("HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", ""),
             ),
             AppEntry(
                 "",
@@ -412,10 +415,9 @@ def _build_projects() -> list[Project]:
                 "4. ML Model",
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
-                ),
+                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
+                # 404). Set the env variable to the full folder name to show this card.
+                upload_id=_project_upload_id("HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", ""),
             ),
             AppEntry(
                 "",
@@ -423,10 +425,9 @@ def _build_projects() -> list[Project]:
                 "5. Correlation Analysis",
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
-                ),
+                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
+                # 404). Set the env variable to the full folder name to show this card.
+                upload_id=_project_upload_id("HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", ""),
             ),
             AppEntry(
                 "",
@@ -435,10 +436,9 @@ def _build_projects() -> list[Project]:
                 "Map PL-imaged ROIs to per-device JV curves and export the joined "
                 "dataset back to NOMAD.",
                 "fa-object-group",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
-                upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
-                ),
+                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
+                # 404). Set the env variable to the full folder name to show this card.
+                upload_id=_project_upload_id("HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", ""),
             ),
         )
         if entry.upload_id
@@ -560,7 +560,7 @@ def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
     base_path = VOILA_PATH_TEMPLATE.format(user=user)
     path = f"uploads/{entry.upload_id}" if entry.upload_id else uploads_path
     folder = f"{entry.folder}/" if entry.folder else ""
-    return f"{base_path}/{path}/{folder}{entry.notebook}"
+    return f"{base_path}/{quote(f'{path}/{folder}{entry.notebook}', safe='/')}"
 
 
 def build_jupyter_url(entry: LearningEntry, user: str, upload_id: str) -> str:
@@ -573,7 +573,7 @@ def build_jupyter_url(entry: LearningEntry, user: str, upload_id: str) -> str:
     override the way AppEntry.upload_id provides for apps living in a separate upload.
     """
     base_path = JUPYTER_PATH_TEMPLATE.format(user=user)
-    return f"{base_path}/uploads/{upload_id}/{entry.path}"
+    return f"{base_path}/{quote(f'uploads/{upload_id}/{entry.path}', safe='/')}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:
