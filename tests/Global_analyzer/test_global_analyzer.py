@@ -2174,3 +2174,120 @@ def test_samples_with_several_entries_of_one_process_are_listed():
     assert samples_with_several_rows(df.drop_duplicates("sample_id")) == []
     assert samples_with_several_rows(None) == []
     assert samples_with_several_rows(pd.DataFrame({"rpm": [1]})) == []
+
+
+# --- MPP results: every figure of merit becomes a column ----------------------------------
+
+
+def _mpp_entry(results=None, properties=None):
+    entry = {
+        "name": "HZB_X_C-1",
+        "datetime": "2026-01-01",
+        "time": [0.0, 1.0],  # arrays at the top level are not columns
+        "properties": properties if properties is not None else {"time": 3629877.0},
+    }
+    if results is not None:
+        entry["results"] = results
+    return entry
+
+
+def test_mpp_rows_carry_every_scalar_figure_of_merit_and_the_duration():
+    """Simple MPP showed only `time`: T80, T95, Ts80, LEY... sit in `results`."""
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(
+        _mpp_entry(
+            [
+                {
+                    "T80": 1708239.0,
+                    "T95": 68283.0,
+                    "PCE_after_1000_h": 5.0,
+                    "lifetime_energy_yield": 12.5,
+                    "fit_method": "Exponential",
+                    "fitted_time": [0.0, 1.0],  # an array: not a column
+                }
+            ]
+        ),
+        ["datetime", "name"],
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["T80"] == 1708239.0 and row["T95"] == 68283.0
+    assert row["lifetime_energy_yield"] == 12.5 and row["fit_method"] == "Exponential"
+    assert row["time"] == 3629877.0 and row["name"] == "HZB_X_C-1"
+    assert "fitted_time" not in row and not any(isinstance(v, list) for v in row.values())
+
+
+def test_mpp_fit_parameters_become_prefixed_columns_with_their_errors():
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(
+        _mpp_entry(
+            [
+                {
+                    "T80": 10.0,
+                    "fit_parameters": [
+                        {"name": "A", "value": 20.0, "unit": "mW/cm^2", "error": 0.5},
+                        {"name": "tau", "value": 3600.0, "unit": "s"},
+                    ],
+                }
+            ]
+        ),
+        [],
+    )
+    row = rows[0]
+    assert row["fit_A"] == 20.0 and row["fit_A_error"] == 0.5
+    assert row["fit_tau"] == 3600.0 and "fit_tau_error" not in row
+    assert "fit_parameters" not in row
+
+
+def test_mpp_entry_without_results_still_gives_its_properties():
+    from data_manager import mpp_result_rows
+
+    assert mpp_result_rows(_mpp_entry(None), ["name"]) == [{"time": 3629877.0, "name": "HZB_X_C-1"}]
+    assert mpp_result_rows(_mpp_entry([]), []) == [{"time": 3629877.0}]
+
+
+def test_mpp_entry_with_several_results_gives_one_row_each():
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(_mpp_entry([{"T80": 1.0}, {"T80": 2.0}]), [])
+    assert [r["T80"] for r in rows] == [1.0, 2.0]
+
+
+def test_loading_results_uses_the_mpp_extraction_for_both_mpp_types(monkeypatch):
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.data_loader = type(
+        "FakeLoader",
+        (),
+        {
+            name: staticmethod(lambda *a, **k: None)
+            for name in (
+                "load_inkjet_printing_data",
+                "load_cleaning_data",
+                "load_substrate_data",
+                "load_evaporation_data",
+                "load_slot_die_coating_data",
+                "load_spin_coating_data",
+                "load_ald_data",
+                "load_blade_coating_data",
+                "load_dip_coating_data",
+                "load_laser_scribing_data",
+                "load_annealing_data",
+            )
+        }
+        | {"url": "http://example.test", "token": "token"},
+    )()
+
+    def fake_get_all_eqe(url, token, sample_ids, measurement_type):
+        if measurement_type != "HySprint_SimpleMPPTracking":
+            return None
+        return {"S1": [(_mpp_entry([{"T80": 100.0, "T95": 10.0}]), {})]}
+
+    monkeypatch.setattr("data_manager.get_all_eqe", fake_get_all_eqe, raising=False)
+    dm.load_all_data_for_summary(["S1"], {"S1": ""})
+
+    frame = dm.current_results["simple_mpp_tracking"]
+    assert {"T80", "T95", "time"} <= set(frame.columns)
+    options = dm.get_parameter_options(dm.current_results, "x_parameters", is_results=True)
+    assert "T80 (Simple MPP)" in options and "T95 (Simple MPP)" in options

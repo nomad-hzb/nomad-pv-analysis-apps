@@ -85,6 +85,53 @@ def plot_suffix(result_type: str) -> str:
     return _PLOT_SUFFIXES.get(result_type, result_type.replace("_measurement", "").upper())
 
 
+MPP_RESULT_TYPES = ("mpp_tracking", "simple_mpp_tracking")
+
+
+def _is_scalar(value) -> bool:
+    return isinstance(value, (int, float, str, bool))
+
+
+def mpp_result_rows(measurement_data: dict, top_level_fields: List[str]) -> List[dict]:
+    """The rows one MPP (maximum power point tracking) entry contributes to the results table.
+
+    The figures of merit the MPPT_Analysis app writes back (T80, T95, Ts80, Ts95,
+    initial_stabilization_time, PCE_after_1000_h, lifetime_energy_yield, power densities, fit
+    method and R^2...) live in the entry's `results` list, and the measurement duration in
+    `properties`; only `properties` used to be read, so the table held just `time`. One row per
+    `results` item carries every scalar of it, plus the scalar `properties` and the entry's
+    top-level fields. The `fit_parameters` bag ({name, value, unit, error} items, a different set
+    per fit model) becomes `fit_<name>` / `fit_<name>_error` columns. Arrays (the measured and
+    fitted curves) are not columns. An entry that was never fitted still gives one row, with
+    just its properties."""
+    base = {k: v for k, v in (measurement_data.get("properties") or {}).items() if _is_scalar(v)}
+    for field in top_level_fields:
+        if field in measurement_data and field not in base:
+            base[field] = measurement_data[field]
+    results = measurement_data.get("results")
+    if isinstance(results, dict):
+        results = [results]
+    if not results:
+        return [base]
+    rows = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        row = dict(base)
+        for key, value in result.items():
+            if key == "fit_parameters" and isinstance(value, list):
+                for parameter in value:
+                    if isinstance(parameter, dict) and parameter.get("name"):
+                        name = f"fit_{parameter['name']}"
+                        row[name] = parameter.get("value")
+                        if parameter.get("error") is not None:
+                            row[f"{name}_error"] = parameter["error"]
+            elif _is_scalar(value):
+                row[key] = value
+        rows.append(row)
+    return rows or [base]
+
+
 def result_type_label(result_type: str) -> str:
     """Display label of a result schema key, e.g. 'mpp_tracking' -> 'MPP Tracking'."""
     return RESULT_TYPE_LABELS.get(result_type, result_type.replace("_measurement", "").upper())
@@ -646,6 +693,14 @@ class DataManager:
                             # dropped from the analysis (issue #34).
                             for measurement_entry in measurements:
                                 measurement_data = measurement_entry[0]
+
+                                if measurement_key in MPP_RESULT_TYPES:
+                                    for mpp_row in mpp_result_rows(
+                                        measurement_data, top_level_fields
+                                    ):
+                                        mpp_row["sample_id"] = sample_id
+                                        rows.append(mpp_row)
+                                    continue
 
                                 if data_key and data_key in measurement_data:
                                     extracted = measurement_data[data_key]
