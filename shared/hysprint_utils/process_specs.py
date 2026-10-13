@@ -182,53 +182,71 @@ _COATING_SOLUTE_INDEXED = {
 }
 
 _GAS_QUENCHING_FIELDS = {
-    "Gas": {"test": "Nitrogen", "path": ["quenching", "gas"]},
+    "Gas": {"quenching_kind": "gas", "test": "Nitrogen", "path": ["quenching", "gas"]},
     "Gas quenching start time [s]": {
+        "quenching_kind": "gas",
         "test": 5,
         "path": ["quenching", "starting_delay"],
         "unit_verified": False,
     },
     "Gas quenching duration [s]": {
+        "quenching_kind": "gas",
         "test": 15,
         "path": ["quenching", "duration"],
         "unit_verified": False,
     },
     "Gas quenching flow rate [ml/s]": {
+        "quenching_kind": "gas",
         "test": 20,
         "path": ["quenching", "flow_rate"],
         "unit_verified": False,
     },
     "Gas quenching pressure [bar]": {
+        "quenching_kind": "gas",
         "test": 1.2,
         "path": ["quenching", "pressure"],
         "unit_verified": False,
     },
     "Gas quenching velocity [m/s]": {
+        "quenching_kind": "gas",
         "test": 2.5,
         "path": ["quenching", "velocity"],
         "unit_verified": False,
     },
     "Gas quenching height [mm]": {
+        "quenching_kind": "gas",
         "test": 10,
         "path": ["quenching", "height"],
         "unit_verified": False,
     },
-    "Nozzle shape": {"test": "Round", "path": ["quenching", "nozzle_shape"]},
-    "Nozzle size [mm²]": {"test": 3, "path": ["quenching", "nozzle_size"], "unit_verified": False},
+    "Nozzle shape": {
+        "quenching_kind": "gas",
+        "test": "Round",
+        "path": ["quenching", "nozzle_shape"],
+    },
+    "Nozzle size [mm²]": {
+        "quenching_kind": "gas",
+        "test": 3,
+        "path": ["quenching", "nozzle_size"],
+        "unit_verified": False,
+    },
 }
 
 _VACUUM_QUENCHING_FIELDS = {
     "Vacuum quenching start time [s]": {
+        "quenching_kind": "vacuum",
         "test": 8,
         "path": ["quenching", "start_time"],
         "unit_verified": False,
     },
     "Vacuum quenching duration [s]": {
+        "quenching_kind": "vacuum",
         "test": 20,
         "path": ["quenching", "duration"],
         "unit_verified": False,
     },
     "Vacuum quenching pressure [bar]": {
+        "quenching_kind": "vacuum",
         "test": 0.01,
         "path": ["quenching", "pressure"],
         "unit_verified": False,
@@ -1608,6 +1626,56 @@ def build_field_value_multipliers(processes: dict | None = None) -> dict[str, di
 # ---------------------------------------------------------------------------
 # data_manager.py-facing API: the six former hand-maintained process-type lists
 # ---------------------------------------------------------------------------
+
+
+def build_quenching_field_kinds() -> dict[str, str]:
+    """{excel_field_key: "gas" | "vacuum"} for the quenching fields that only apply to one
+    kind of `quenching` section. Gas and vacuum quenching are one archive section whose class
+    is either a GasQuenching or a VacuumQuenching (nomad-baseclasses), and "duration" and
+    "pressure" exist on both under the same path: without this, a step with both checkboxes
+    on would autofill the same value into both blocks."""
+    kinds = {}
+    for process_spec in PROCESSES.values():
+        for block in process_spec.get("optional", {}).values():
+            for key, field_spec in block.items():
+                if "quenching_kind" in field_spec:
+                    kinds[key] = field_spec["quenching_kind"]
+    return kinds
+
+
+def build_boolean_config_probes(
+    processes: dict | None = None,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """{process_type: {config_key: (excel_field_key, ...)}}: for every optional block, the
+    fields whose archive path belongs to that block alone within the process (not shared with
+    another optional block or a plain field). Data under one of those paths on a source step
+    means the block was actually used, so smart_databaser widens the target's boolean config
+    to True. Per process on purpose: Gas quenching's "duration" is exclusive in a process that
+    has no vacuum block, but shared (hence no probe) in Spin Coating, which has both."""
+
+    def path_key(field_spec):
+        paths = _field_paths(field_spec)
+        return tuple(tuple(p) for p in paths) if paths else None
+
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for process_type, spec in (processes if processes is not None else PROCESSES).items():
+        optional = spec.get("optional", {})
+        probes = {}
+        for config_key, block in optional.items():
+            taken = {path_key(f) for f in spec.get("fields", {}).values()}
+            for other_key, other_block in optional.items():
+                if other_key != config_key:
+                    taken |= {path_key(f) for f in other_block.values()}
+            exclusive = tuple(
+                label
+                for label, f in block.items()
+                if path_key(f) is not None and path_key(f) not in taken
+            )
+            if exclusive:
+                probes[config_key] = exclusive
+        if probes:
+            result[process_type] = probes
+    return result
 
 
 def process_family(process_name: str) -> str | None:
