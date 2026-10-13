@@ -64,31 +64,46 @@ class LCCCalculatorApp:
             )
             return
 
-        self._cost_reference = dm.load_default_cost_reference()
-        self._process_cost_rows = dm.compute_process_cost_rows(
-            self._dm.process_rows, self._dm.batch_sample_counts, self._cost_reference
-        )
-        self._material_cost_rows = dm.compute_material_cost_rows(
-            self._dm.material_rows, self._cost_reference
-        )
-        self._results_panel.setup_labor_inputs(
-            sorted(self._dm.batch_sample_counts), self._on_labor_change
-        )
+        try:
+            self._cost_reference = dm.load_default_cost_reference()
+            self._material_cost_rows = dm.compute_material_cost_rows(
+                self._dm.material_rows, self._cost_reference
+            )
+            self._results_panel.setup_labor_inputs(
+                sorted(self._dm.batch_sample_counts), self._on_labor_change
+            )
+            self._refresh_results()
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+            logger.exception("Error computing costs")
+            self._results_panel.show_status(f"Error computing costs: {exc}")
+            return
 
-        if self._cost_reference is not None and self._cost_reference.total_entries:
+        reference = self._cost_reference
+        if reference is not None and reference.total_entries:
             reference_note = (
-                f"{self._cost_reference.total_entries} known cost entries applied from "
+                f"{reference.total_entries} known cost entries applied from "
                 "the shared cost reference file."
             )
+            if not reference.has_any_cost:
+                reference_note += (
+                    " None of them has a cost filled in yet, so every figure below is "
+                    "unknown (shown as incomplete), not zero."
+                )
+            if reference.problems:
+                shown = "; ".join(reference.problems[:5])
+                more = (
+                    f" (+{len(reference.problems) - 5} more)" if len(reference.problems) > 5 else ""
+                )
+                reference_note += f" Unusable cells, counted as missing: {shown}{more}."
         else:
             reference_note = (
-                "No shared cost reference file found yet - costs will show as blank/unverified."
+                "No shared cost reference file found yet - every cost is unknown "
+                "(shown as incomplete), not zero."
             )
         self._results_panel.show_status(
             f"Loaded {len(batch_ids)} batch(es): {len(self._process_cost_rows)} process type(s), "
             f"{len(self._material_cost_rows)} material(s). {reference_note}"
         )
-        self._refresh_results()
 
     def _on_labor_change(self, _batch_id: str, _role: str, _hours: float) -> None:
         self._refresh_results()
@@ -99,11 +114,21 @@ class LCCCalculatorApp:
             batch_id: dm.compute_labor_cost(role, hours, self._cost_reference)
             for batch_id, (role, hours) in labor_selections.items()
         }
+        labor_hours = {batch_id: hours for batch_id, (_role, hours) in labor_selections.items()}
+        # Recomputed on every change: a per-hour equipment cost depends on the hours entered.
+        self._process_cost_rows = dm.compute_process_cost_rows(
+            self._dm.process_rows,
+            self._dm.batch_sample_counts,
+            self._cost_reference,
+            labor_hours,
+        )
         self._batch_totals = dm.compute_batch_totals(
             self._process_cost_rows,
             self._material_cost_rows,
             self._dm.batch_sample_counts,
             labor_costs,
+            self._cost_reference,
+            labor_hours,
         )
         self._results_panel.show_processes(self._process_cost_rows)
         self._results_panel.show_materials(self._material_cost_rows)
