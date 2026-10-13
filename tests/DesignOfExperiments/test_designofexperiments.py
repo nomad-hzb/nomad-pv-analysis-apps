@@ -768,3 +768,26 @@ def test_warnings_from_a_run_are_shown_with_the_design_and_not_silenced_globally
     assert any("power of 2" in note and note.startswith("Warning:") for note in notes)
     # nothing sets a process-wide "ignore" filter any more
     assert not any(f[0] == "ignore" and f[1] is None and f[2] is Warning for f in warnings.filters)
+
+
+def test_a_generation_error_is_shown_below_the_generate_button_and_cleared_later():
+    import app as doe_app
+
+    instance = doe_app.DoEApplication()
+    near_button = instance.gui_components.generation_message
+    instance._update_status("Error: x: Min '1O0' is not a number", error=True)
+    assert "1O0" in near_button.value and "#c0392b" in near_button.value
+    assert "1O0" in instance.status_label.value  # still in the header too
+    instance._update_status("Generated 25 samples successfully")
+    assert near_button.value == ""
+
+
+def test_the_message_widget_sits_under_the_buttons():
+    import ipywidgets as widgets
+    from gui_components import GUIComponents
+
+    gui = GUIComponents()
+    box = gui.create_generation_controls()
+    assert isinstance(box, widgets.VBox)
+    assert box.children[1] is gui.generation_message
+    assert gui.generate_button in box.children[0].children

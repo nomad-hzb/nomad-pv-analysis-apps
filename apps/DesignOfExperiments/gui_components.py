@@ -585,8 +585,16 @@ class GUIComponents:
         )
 
         # Store reference to generation controls for event binding
-        self._generation_controls = widgets.HBox(
-            [self.generate_button, widgets.HTML("&nbsp;" * 3), self.regenerate_button]
+        # Errors of a generation appear right below the buttons, where the user is looking
+        # (they used to show only in the status line under the page title, far above).
+        self.generation_message = widgets.HTML("")
+        self._generation_controls = widgets.VBox(
+            [
+                widgets.HBox(
+                    [self.generate_button, widgets.HTML("&nbsp;" * 3), self.regenerate_button]
+                ),
+                self.generation_message,
+            ]
         )
 
         return self._generation_controls

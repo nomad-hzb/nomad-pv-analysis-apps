@@ -396,6 +396,15 @@ class DoEApplication:
             f"<div style='text-align: center; color: {color}; font-size: 13px; "
             f"padding-bottom: 6px;'>{message}</div>"
         )
+        # An error is also shown below the Generate button; any other status clears it.
+        near_button = getattr(self.gui_components, "generation_message", None)
+        if near_button is not None:
+            near_button.value = (
+                "<div style='color: #c0392b; background: #fdecea; border-left: 3px solid "
+                f"#c0392b; padding: 6px 10px; margin-top: 8px; font-size: 13px;'>{message}</div>"
+                if error
+                else ""
+            )
 
     # ------------------------------------------------------------------
     # Display updates
