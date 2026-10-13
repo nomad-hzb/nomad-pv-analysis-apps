@@ -208,6 +208,21 @@ def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame
     return filtered.reset_index(drop=True)
 
 
+def filter_plot_data(
+    df: pd.DataFrame, row_filters: List[dict], excluded_sample_ids
+) -> Tuple[pd.DataFrame, List[dict]]:
+    """The Filters tab's row filters and excluded samples applied to the Plotting tab's table.
+
+    Returns (filtered rows, filters that could not be applied). A filter on a column the plot's
+    table does not have (the table holds only the data sources selected on the Plotting tab, and
+    names a process column differently when several sources share it) is skipped and reported,
+    never silently ignored. Sample exclusion works on sample_id, so it always applies."""
+    applicable = [f for f in row_filters if f["column"] in df.columns]
+    skipped = [f for f in row_filters if f["column"] not in df.columns]
+    filtered = apply_row_filters(df, applicable) if applicable else df
+    return exclude_samples(filtered, excluded_sample_ids), skipped
+
+
 def exclude_samples(df: pd.DataFrame, excluded_sample_ids) -> pd.DataFrame:
     """Drop every row belonging to any sample_id in excluded_sample_ids.
 

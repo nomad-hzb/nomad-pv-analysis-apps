@@ -2291,3 +2291,70 @@ def test_loading_results_uses_the_mpp_extraction_for_both_mpp_types(monkeypatch)
     assert {"T80", "T95", "time"} <= set(frame.columns)
     options = dm.get_parameter_options(dm.current_results, "x_parameters", is_results=True)
     assert "T80 (Simple MPP)" in options and "T95 (Simple MPP)" in options
+
+
+# --- the Filters tab: one filter set for Plotting and the analysis tabs ---------------------
+
+
+def _plot_frame():
+    return pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2", "S3"],
+            "efficiency": [18.0, 4.0, 15.0, 9.0],
+            "T80": [10.0, 20.0, 30.0, 40.0],
+        }
+    )
+
+
+def test_filter_plot_data_applies_row_filters_and_sample_exclusion():
+    from data_manager import filter_plot_data
+
+    filters = [{"id": 1, "column": "efficiency", "op": ">=", "value": 10.0}]
+    kept, skipped = filter_plot_data(_plot_frame(), filters, {"S2"})
+    assert list(kept["efficiency"]) == [18.0]  # the 4.0 pixel fails the filter, S2 is excluded
+    assert skipped == []
+
+
+def test_filter_plot_data_reports_a_filter_on_a_column_the_plot_does_not_have():
+    from data_manager import filter_plot_data
+
+    filters = [
+        {"id": 1, "column": "efficiency", "op": ">", "value": 10.0},
+        {"id": 2, "column": "annealing_temperature", "op": ">", "value": 100.0},
+    ]
+    kept, skipped = filter_plot_data(_plot_frame(), filters, set())
+    assert len(kept) == 2  # only the applicable filter ran
+    assert [f["column"] for f in skipped] == ["annealing_temperature"]
+
+
+def test_filter_plot_data_without_filters_returns_everything():
+    from data_manager import filter_plot_data
+
+    kept, skipped = filter_plot_data(_plot_frame(), [], set())
+    assert len(kept) == 4 and skipped == []
+
+
+def test_filters_tab_comes_right_after_parameter_summary_and_owns_the_filter_widgets(monkeypatch):
+    monkeypatch.setattr(
+        "gui_components.get_batch_ids_with_authors",
+        lambda url, token: [{"lab_id": "B_1", "author_name": "me"}],
+    )
+    gui = GUIManager()
+    gui.setup_batch_selection("http://x", "t", lambda *a: None)
+    gui.create_layout()
+    titles = list(gui.main_tabs.titles)
+    assert titles[:3] == ["Parameter Summary", "Filters", "Plotting"]
+    assert "Analysis Data" in titles[3]
+
+    def contains(widget, target):
+        return widget is target or any(contains(c, target) for c in getattr(widget, "children", ()))
+
+    filters_tab = gui.main_tabs.children[1]
+    analysis_tab = gui.main_tabs.children[3]
+    for owned in (gui.add_filter_button, gui.active_filters_box, gui.sample_exclusion_accordion):
+        assert contains(filters_tab, owned)
+        assert not contains(analysis_tab, owned)
+    gui.set_filter_summary("3 of 5 samples")
+    assert "3 of 5 samples" in gui.filter_summary_html.value
+    gui.set_filter_summary("")
+    assert gui.filter_summary_html.value == ""

@@ -1093,6 +1093,15 @@ class GUIManager:
         """Column names currently checked in the Process Metadata checklist."""
         return [cb.description for cb in self.metadata_checklist_box.children if cb.value]
 
+    def set_filter_summary(self, text: str) -> None:
+        """One line on the Filters tab: how many rows and samples pass the filters."""
+        self.filter_summary_html.value = (
+            "<div style='background:#f5f8fc; border-left:3px solid #2E86AB; padding:6px 12px; "
+            f"margin:6px 0; color:#333;'>{text}</div>"
+            if text
+            else ""
+        )
+
     def render_active_filters(self, row_filters: list, on_remove) -> None:
         """(Re)build the Analysis Data tab's active-filters list, one row per
         filter (e.g. "Fill Factor (JV) >= 0.3") with its own Remove button.
@@ -1428,10 +1437,10 @@ class GUIManager:
                     "Summary/Plotting tabs (independent of what's currently selected there). "
                     "<b>This tab, Correlations, Random Forest, Bayesian Optimization, and "
                     "Experimental (marked \U0001f517 in their tab titles) all read the exact "
-                    "same filtered dataset built here</b> - a column you uncheck, a row filter "
-                    "or sample exclusion you set, or a layer/aggregation choice you make below "
-                    "affects all five at once. Plotting and Parameter Summary are separate and "
-                    "unaffected. <b>Targets are always measurement results; supporting "
+                    "same filtered dataset built here</b> - a column you uncheck or a layer/aggregation "
+                    "choice you make below, plus the filters from the Filters tab, "
+                    "affects all five at once. Row filters and excluded samples are set on the "
+                    "Filters tab and apply here too (and to Plotting). <b>Targets are always measurement results; supporting "
                     "variables are always process metadata.</b> Uncheck any column you want "
                     "excluded from all five, then click Recalculate.</p>"
                 ),
@@ -1479,10 +1488,29 @@ class GUIManager:
                 self.variation_warning_output,
                 self.recalculate_button,
                 self.analysis_data_status_output,
+                self.analysis_data_preview_accordion,
+            ],
+            layout={"padding": "20px"},
+        )
+
+        self.filter_summary_html = widgets.HTML("")
+        filters_tab = widgets.VBox(
+            [
+                widgets.HTML(
+                    "<p style='color:#666;'>One set of filters for <b>every tab after this one</b>: "
+                    "Plotting, Analysis Data, Correlations, Random Forest, Bayesian Optimization "
+                    "and Experimental all use the rows and samples that pass here. Set them once, "
+                    "everything follows.</p>"
+                    "<p style='color:#888; font-size:0.9em;'>A row filter compares a column in "
+                    "its own units (Fill Factor is 0-1, not 0-100). In Plotting it applies to the "
+                    "plotted rows (e.g. each pixel under 'All Points'), in the analysis tabs to "
+                    "the per-sample rows built on the Analysis Data tab. A filter on a column "
+                    "that a given plot does not contain is skipped and listed with that plot.</p>"
+                ),
+                self.filter_summary_html,
                 widgets.HTML(
                     "<h4 style='color:#666; margin-top:16px;'>Filter rows</h4>"
-                    "<p style='color:#666;'>Exclude rows from Correlations, Random Forest, "
-                    "Bayesian Optimization, and Experimental by thresholding any checked "
+                    "<p style='color:#666;'>Keep only the rows that pass, by thresholding any checked "
                     "column - e.g. pick 'Fill Factor (JV)', '>=', 0.3 to drop shorted/failed "
                     "cells. Values are compared in the column's own units (Fill Factor is "
                     "0-1, not 0-100).</p>"
@@ -1505,7 +1533,6 @@ class GUIManager:
                     "effect immediately, no Recalculate needed.</p>"
                 ),
                 self.sample_exclusion_accordion,
-                self.analysis_data_preview_accordion,
             ],
             layout={"padding": "20px"},
         )
@@ -1859,6 +1886,7 @@ class GUIManager:
         self.main_tabs = widgets.Tab(
             children=[
                 parameter_summary_tab,
+                filters_tab,
                 plotting_tab,
                 analysis_data_tab,
                 correlations_tab,
@@ -1871,12 +1899,13 @@ class GUIManager:
         # Analysis Data tab) - the shared prefix marks them as one linked
         # group, distinct from Parameter Summary/Plotting which don't.
         self.main_tabs.set_title(0, "Parameter Summary")
-        self.main_tabs.set_title(1, "Plotting")
-        self.main_tabs.set_title(2, "\U0001f517 Analysis Data")
-        self.main_tabs.set_title(3, "\U0001f517 Correlations")
-        self.main_tabs.set_title(4, "\U0001f517 Random Forest")
-        self.main_tabs.set_title(5, "\U0001f517 Bayesian Optimization")
-        self.main_tabs.set_title(6, "\U0001f517 Experimental")
+        self.main_tabs.set_title(1, "Filters")
+        self.main_tabs.set_title(2, "Plotting")
+        self.main_tabs.set_title(3, "\U0001f517 Analysis Data")
+        self.main_tabs.set_title(4, "\U0001f517 Correlations")
+        self.main_tabs.set_title(5, "\U0001f517 Random Forest")
+        self.main_tabs.set_title(6, "\U0001f517 Bayesian Optimization")
+        self.main_tabs.set_title(7, "\U0001f517 Experimental")
 
         return widgets.VBox(
             [

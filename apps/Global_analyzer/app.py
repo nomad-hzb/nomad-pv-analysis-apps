@@ -38,6 +38,7 @@ from data_manager import (
     apply_row_filters,
     average_rows_per_sample,
     exclude_samples,
+    filter_plot_data,
     get_categorical_columns,
     get_layer_type_options,
     merge_results_per_sample,
@@ -470,6 +471,39 @@ class SampleDataExplorer:
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
+        self._update_filter_summary()
+
+    def _update_filter_summary(self):
+        """The Filters tab's one-line summary of what passes (analysis rows and samples)."""
+        if self.full_analysis_df is None or self.analysis_df is None:
+            self.gui.set_filter_summary("")
+            return
+        samples_all = self.full_analysis_df["sample_id"].nunique()
+        samples_kept = self.analysis_df["sample_id"].nunique()
+        self.gui.set_filter_summary(
+            f"<b>{samples_kept} of {samples_all} samples</b> and {len(self.analysis_df)} of "
+            f"{len(self.full_analysis_df)} analysis rows pass the filters "
+            f"({len(self.row_filters)} row filter(s), "
+            f"{len(self.gui.get_excluded_sample_ids())} excluded sample(s))."
+        )
+
+    def _plot_source_df(self) -> Optional[pd.DataFrame]:
+        """The Plotting tab's table with the Filters tab's filters and exclusions applied; sets
+        self._plot_filter_note to what was kept and which filters did not apply."""
+        merged = self.data_manager.merged_data
+        self._plot_filter_note = ""
+        if merged is None:
+            return None
+        excluded = self.gui.get_excluded_sample_ids()
+        if not self.row_filters and not excluded:
+            return merged
+        filtered, skipped = filter_plot_data(merged, self.row_filters, excluded)
+        note = f"filters kept {len(filtered)} of {len(merged)} rows"
+        if skipped:
+            names = ", ".join(f"{f['column']} {f['op']} {f['value']:g}" for f in skipped)
+            note += f"; not applied (column not in this plot's data): {names}"
+        self._plot_filter_note = note
+        return filtered
 
     def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
         """The exact rows/columns currently feeding Correlations/Random Forest/
@@ -712,6 +746,8 @@ class SampleDataExplorer:
         """Re-run whichever of Correlations/RF/BO already produced a result, so
         Recalculate and row-filter changes visibly update whatever the user
         has open without requiring a trip back through each tab's own button."""
+        if getattr(self, "_plot_created", False):
+            self._on_create_plot(None)
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)
         if self._last_rf_result is not None:
@@ -1354,8 +1390,13 @@ class SampleDataExplorer:
 
     def _on_create_plot(self, button):
         """Handle plot creation."""
-        if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+        merged = self.data_manager.merged_data
+        if merged is None or merged.empty:
             self._update_status("❌ No data available for plotting.")
+            return
+        source_df = self._plot_source_df()
+        if source_df.empty:
+            self._update_status("❌ No rows left after the Filters tab's filters.")
             return
 
         x_param = self.gui.x_param_selector.value
@@ -1371,7 +1412,7 @@ class SampleDataExplorer:
             # Prepare plot data
             plot_type = self.gui.plot_type_selector.value
             plot_df, x_col, y_col, color_col = self.plot_manager.prepare_plot_data(
-                self.data_manager.merged_data,
+                source_df,
                 x_param,
                 y_param,
                 color_param,
@@ -1449,6 +1490,9 @@ class SampleDataExplorer:
             status_msg = f"✓ Plot created with {len(plot_df)} data points!"
             if self.gui.group_by_subbatch.value:
                 status_msg += " (grouped by subbatch)"
+            if self._plot_filter_note:
+                status_msg += f" ({self._plot_filter_note})"
+            self._plot_created = True
 
             # Debug output
             if self.gui.debug_checkbox.value:
@@ -1471,7 +1515,8 @@ class SampleDataExplorer:
         with self.gui.download_output:
             clear_output()
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+            source_df = self._plot_source_df()
+            if source_df is None or source_df.empty:
                 print("⚠️ No data loaded to download.")
                 return
 
@@ -1486,7 +1531,7 @@ class SampleDataExplorer:
 
             try:
                 plot_df, x_col, y_col, _ = self.plot_manager.prepare_plot_data(
-                    self.data_manager.merged_data,
+                    source_df,
                     x_param,
                     y_param,
                     color_param,
