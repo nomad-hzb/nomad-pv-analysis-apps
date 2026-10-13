@@ -145,6 +145,8 @@ both places.
 
 ## 3. Create `oasis_local_config.py`
 
+**Shortcut:** copy `oasis_local_config.example.py` (repo root) to `oasis_local_config.py` and un-comment what you need. It lists every supported variable, commented out, with a one-line explanation each (Oasis URL, proxy, hiding dashboard apps, the Projects cards, log folder).
+
 Create it at the repo root of the upload, next to `bootstrap.py`. It is
 gitignored (same pattern as `secrets.py`) because it describes one deployment,
 not the repo - it travels with the upload, and is not committed upstream.
