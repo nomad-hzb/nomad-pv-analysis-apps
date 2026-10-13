@@ -2358,3 +2358,23 @@ def test_filters_tab_comes_right_after_parameter_summary_and_owns_the_filter_wid
     assert "3 of 5 samples" in gui.filter_summary_html.value
     gui.set_filter_summary("")
     assert gui.filter_summary_html.value == ""
+
+
+def test_filters_tab_has_a_confirm_button_that_flags_unconfirmed_edits(monkeypatch):
+    monkeypatch.setattr(
+        "gui_components.get_batch_ids_with_authors",
+        lambda url, token: [{"lab_id": "B_1", "author_name": "me"}],
+    )
+    gui = GUIManager()
+    gui.setup_batch_selection("http://x", "t", lambda *a: None)
+    gui.create_layout()
+    clicked = []
+    gui.connect_callbacks({"confirm_filters": clicked.append})
+    gui.confirm_filters_button.click()
+    assert len(clicked) == 1
+    gui.set_filters_pending(True)
+    assert "Confirm filters" in gui.filters_pending_html.value
+    assert gui.confirm_filters_button.button_style == "warning"
+    gui.set_filters_pending(False)
+    assert gui.filters_pending_html.value == ""
+    assert gui.confirm_filters_button.button_style == "success"

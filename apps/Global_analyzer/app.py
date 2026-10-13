@@ -159,7 +159,11 @@ class SampleDataExplorer:
         self.analysis_results_groups: dict = {}
         # Same for process metadata columns ("Spin Coating", ...).
         self.analysis_metadata_groups: dict = {}
+        # row_filters is what the Filters tab shows (staged); the applied copies are what
+        # every tab reads, and only change when the user clicks Confirm filters.
         self.row_filters: list = []  # [{"id", "column", "op", "value"}, ...]
+        self._applied_filters: list = []
+        self._applied_excluded: set = set()
         self._next_filter_id = 1
         self._last_correlation_result = None
         self._last_rf_result = None
@@ -195,6 +199,7 @@ class SampleDataExplorer:
                 "upload_analysis_csv": self._on_upload_analysis_csv,
                 "upload_results_columns_changed": self._on_upload_results_columns_changed,
                 "add_row_filter": self._on_add_row_filter,
+                "confirm_filters": self._on_confirm_filters,
                 "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
@@ -451,6 +456,7 @@ class SampleDataExplorer:
             else []
         )
         self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._applied_excluded = set()  # a rebuilt checklist starts with every sample included
         self._apply_filters()
         self._refresh_variation_warning()
 
@@ -465,13 +471,28 @@ class SampleDataExplorer:
         if self.full_analysis_df is None:
             self.analysis_df = None
         else:
-            filtered = apply_row_filters(self.full_analysis_df, self.row_filters)
-            filtered = exclude_samples(filtered, self.gui.get_excluded_sample_ids())
+            filtered = apply_row_filters(self.full_analysis_df, self._applied_filters)
+            filtered = exclude_samples(filtered, self._applied_excluded)
             self.analysis_df = filtered
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
         self._update_filter_summary()
+        self._refresh_filters_pending()
+
+    def _refresh_filters_pending(self):
+        """Show whether the Filters tab holds edits that are not applied yet."""
+        staged = [(f["column"], f["op"], f["value"]) for f in self.row_filters]
+        applied = [(f["column"], f["op"], f["value"]) for f in self._applied_filters]
+        pending = staged != applied or self.gui.get_excluded_sample_ids() != self._applied_excluded
+        self.gui.set_filters_pending(pending)
+
+    def _on_confirm_filters(self, button):
+        """Apply the staged row filters and sample exclusions to every tab."""
+        self._applied_filters = [dict(f) for f in self.row_filters]
+        self._applied_excluded = set(self.gui.get_excluded_sample_ids())
+        self._apply_filters()
+        self._rerun_active_analyses()
 
     def _update_filter_summary(self):
         """The Filters tab's one-line summary of what passes (analysis rows and samples)."""
@@ -483,8 +504,8 @@ class SampleDataExplorer:
         self.gui.set_filter_summary(
             f"<b>{samples_kept} of {samples_all} samples</b> and {len(self.analysis_df)} of "
             f"{len(self.full_analysis_df)} analysis rows pass the filters "
-            f"({len(self.row_filters)} row filter(s), "
-            f"{len(self.gui.get_excluded_sample_ids())} excluded sample(s))."
+            f"({len(self._applied_filters)} row filter(s), "
+            f"{len(self._applied_excluded)} excluded sample(s))."
         )
 
     def _plot_source_df(self) -> Optional[pd.DataFrame]:
@@ -494,10 +515,10 @@ class SampleDataExplorer:
         self._plot_filter_note = ""
         if merged is None:
             return None
-        excluded = self.gui.get_excluded_sample_ids()
-        if not self.row_filters and not excluded:
+        excluded = self._applied_excluded
+        if not self._applied_filters and not excluded:
             return merged
-        filtered, skipped = filter_plot_data(merged, self.row_filters, excluded)
+        filtered, skipped = filter_plot_data(merged, self._applied_filters, excluded)
         note = f"filters kept {len(filtered)} of {len(merged)} rows"
         if skipped:
             names = ", ".join(f"{f['column']} {f['op']} {f['value']:g}" for f in skipped)
@@ -577,21 +598,20 @@ class SampleDataExplorer:
             }
         )
         self._next_filter_id += 1
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_remove_row_filter(self, filter_id):
         """Drop one active row filter (by id) and re-apply the rest."""
         self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_sample_exclusion_toggled(self, change):
         """A sample's checkbox in "Exclude specific samples" was checked or
-        unchecked - re-apply immediately (no separate Recalculate needed) and
+        unchecked - staged until Confirm filters; otherwise (before, it re-applied at once) and
         re-run whichever of Correlations/RF/BO is already showing a result."""
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self._refresh_filters_pending()
 
     def _refresh_variation_warning(self):
         """Show an advisory (never blocking) warning for checked metadata columns

@@ -360,6 +360,14 @@ class GUIManager:
             icon="filter",
             layout={"width": "140px"},
         )
+        self.confirm_filters_button = widgets.Button(
+            description="Confirm filters",
+            button_style="success",
+            icon="check",
+            tooltip="Apply the filters and excluded samples below to every tab",
+            layout={"width": "180px"},
+        )
+        self.filters_pending_html = widgets.HTML("")
         self.active_filters_box = widgets.VBox(
             layout={
                 "border": "1px solid #ddd",
@@ -911,6 +919,8 @@ class GUIManager:
             self.analysis_data_upload_results_selector.observe(
                 callbacks["upload_results_columns_changed"], names="value"
             )
+        if "confirm_filters" in callbacks:
+            self.confirm_filters_button.on_click(callbacks["confirm_filters"])
         if "add_row_filter" in callbacks:
             self.add_filter_button.on_click(callbacks["add_row_filter"])
         if "download_analysis_data_preview" in callbacks:
@@ -1092,6 +1102,16 @@ class GUIManager:
     def get_checked_metadata_columns(self) -> list:
         """Column names currently checked in the Process Metadata checklist."""
         return [cb.description for cb in self.metadata_checklist_box.children if cb.value]
+
+    def set_filters_pending(self, pending: bool) -> None:
+        """Flag filter/exclusion edits that Confirm filters has not applied yet."""
+        self.filters_pending_html.value = (
+            "<span style='color:#b36b00; margin-left:12px;'>Unconfirmed changes: click "
+            "<b>Confirm filters</b> to apply them.</span>"
+            if pending
+            else ""
+        )
+        self.confirm_filters_button.button_style = "warning" if pending else "success"
 
     def set_filter_summary(self, text: str) -> None:
         """One line on the Filters tab: how many rows and samples pass the filters."""
@@ -1500,7 +1520,7 @@ class GUIManager:
                     "<p style='color:#666;'>One set of filters for <b>every tab after this one</b>: "
                     "Plotting, Analysis Data, Correlations, Random Forest, Bayesian Optimization "
                     "and Experimental all use the rows and samples that pass here. Set them once, "
-                    "everything follows.</p>"
+                    "everything follows once you click <b>Confirm filters</b>.</p>"
                     "<p style='color:#888; font-size:0.9em;'>A row filter compares a column in "
                     "its own units (Fill Factor is 0-1, not 0-100). In Plotting it applies to the "
                     "plotted rows (e.g. each pixel under 'All Points'), in the analysis tabs to "
@@ -1508,6 +1528,10 @@ class GUIManager:
                     "that a given plot does not contain is skipped and listed with that plot.</p>"
                 ),
                 self.filter_summary_html,
+                widgets.HBox(
+                    [self.confirm_filters_button, self.filters_pending_html],
+                    layout=widgets.Layout(align_items="center"),
+                ),
                 widgets.HTML(
                     "<h4 style='color:#666; margin-top:16px;'>Filter rows</h4>"
                     "<p style='color:#666;'>Keep only the rows that pass, by thresholding any checked "
@@ -1529,8 +1553,8 @@ class GUIManager:
                     "<p style='color:#666;'>Remove a sample from Correlations/Random Forest/"
                     "Bayesian Optimization/Experimental entirely - by identity, regardless of "
                     "its values (e.g. it's known contaminated, mislabeled, or broke during "
-                    "handling). All samples are included by default; unchecking one takes "
-                    "effect immediately, no Recalculate needed.</p>"
+                    "handling). All samples are included by default. Filters and exclusions "
+                    "only take effect once you click <b>Confirm filters</b>.</p>"
                 ),
                 self.sample_exclusion_accordion,
             ],
