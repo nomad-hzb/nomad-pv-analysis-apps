@@ -152,7 +152,7 @@ class MaterialPanel:
         self._theta = widgets.FloatSlider(
             value=0.0,
             min=0.0,
-            max=180.0,
+            max=dm.MAX_THETA,
             step=1.0,
             description="θ (°):",
             continuous_update=False,
@@ -346,17 +346,6 @@ class PlotSettingsPanel:
             description="Title:",
             layout=widgets.Layout(width="320px"),
         )
-        self._correction_exp = widgets.FloatSlider(
-            value=2.0,
-            min=1.0,
-            max=2.0,
-            step=0.01,
-            description="Correction exp:",
-            continuous_update=False,
-            layout=widgets.Layout(width="360px"),
-            style={"description_width": "110px"},
-        )
-
         self._plot_btn = widgets.Button(
             description="Plot",
             button_style="success",
@@ -378,7 +367,6 @@ class PlotSettingsPanel:
             materials=self._dm.materials,
             solvents=self._dm.solvents,
             title=self._title.value,
-            correction_exp=self._correction_exp.value,
         )
         self._plot_panel.show_figure(fig)
 
@@ -394,7 +382,6 @@ class PlotSettingsPanel:
             [
                 _section_header("Plot Settings"),
                 self._title,
-                self._correction_exp,
                 widgets.HBox([self._plot_btn, self._clear_btn], layout=widgets.Layout(gap="8px")),
             ],
             layout=widgets.Layout(padding="8px"),

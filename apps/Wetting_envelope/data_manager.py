@@ -35,8 +35,9 @@ class Material(BaseModel):
     @classmethod
     def clamp_theta(cls, v):
         v = float(v)
-        if not (0.0 <= v <= 180.0):
-            raise ValueError(f"Contact angle must be in [0, 180], got {v}")
+        # at 180 degrees the envelope is infinite (2 / (1 + cos 180) divides by zero)
+        if not (0.0 <= v <= MAX_THETA):
+            raise ValueError(f"Contact angle must be in [0, {MAX_THETA:g}], got {v}")
         return v
 
 
@@ -68,16 +69,25 @@ PRESET_MATERIALS: list[dict] = [
     {"name": "Glass (SiO2)", "polar": 62.00, "dispersive": 22.00, "theta": 0.0},
 ]
 
+# Contact angles up to this are accepted (180 gives an infinite envelope).
+MAX_THETA = 179.0
+
+# Polar and dispersive parts add up to the liquid's surface tension. Ethanol and ethylene glycol
+# follow the Accu Dyne Test table of surface tension components
+# (https://www.accudynetest.com/surface_tension_print.html: ethanol 21.4 = 18.8 + 2.6, ethylene
+# glycol 48 = 29 + 19). Isopropanol and acetone still hold their earlier values, which do not add
+# up to the literature totals (23.0 and 25.2 mN/m, surface-tension.de, 20 C): they need a
+# published split from one source. "Solvent 1/2" are unnamed placeholders.
 PRESET_SOLVENTS: list[dict] = [
     {"name": "Solvent 1", "polar": 18.00, "dispersive": 29.00},
     {"name": "Solvent 2", "polar": 2.30, "dispersive": 25.50},
     {"name": "Water", "polar": 51.00, "dispersive": 21.80},
-    {"name": "Ethanol", "polar": 8.10, "dispersive": 21.40},
+    {"name": "Ethanol", "polar": 2.60, "dispersive": 18.80},
     {"name": "Isopropanol (IPA)", "polar": 8.00, "dispersive": 20.93},
     {"name": "Acetone", "polar": 10.00, "dispersive": 16.35},
     {"name": "Diiodomethane", "polar": 0.00, "dispersive": 50.80},
     {"name": "Formamide", "polar": 18.70, "dispersive": 39.50},
-    {"name": "Ethylene glycol", "polar": 11.00, "dispersive": 29.00},
+    {"name": "Ethylene glycol", "polar": 19.00, "dispersive": 29.00},
     {"name": "Toluene", "polar": 1.40, "dispersive": 28.50},
     {"name": "Hexane", "polar": 0.00, "dispersive": 18.40},
     {"name": "Chloroform", "polar": 3.80, "dispersive": 23.70},
@@ -115,15 +125,17 @@ class WettingCalculator:
         return (numerator / denominator) ** 2
 
     @staticmethod
-    def envelope_xy(
-        material: Material,
-        correction_exp: float = 2.0,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def envelope_xy(material: Material) -> tuple[np.ndarray, np.ndarray]:
+        """The boundary of the liquids that wet the material with at most its contact angle.
+
+        OWRK: gamma_L (1 + cos theta) = 2 (sqrt(gs_d gl_d) + sqrt(gs_p gl_p)). In polar
+        coordinates (x = dispersive, y = polar part of the liquid) this is
+        R = R_base(phi) * (2 / (1 + cos theta))**2, with the exponent exactly 2 (it used to
+        be an adjustable "correction exponent", which traced another angle than the label)."""
         phi = np.linspace(0, np.pi / 2, WettingCalculator.N_POINTS)
         R = WettingCalculator._r_base(phi, material.polar, material.dispersive)
         theta_rad = np.radians(material.theta)
-        correction = (2.0 / (1.0 + np.cos(theta_rad))) ** correction_exp
-        R = R * correction
+        R = R * (2.0 / (1.0 + np.cos(theta_rad))) ** 2
         return R * np.cos(phi), R * np.sin(phi)
 
 

@@ -32,7 +32,7 @@ def test_add_material_invalid_theta_handled_gracefully():
     assert ok is False
     assert dm.has_data is False
     assert len(dm.materials) == 0
-    assert "180" in msg
+    assert "179" in msg
 
 
 def test_remove_material_and_clear():
@@ -81,3 +81,45 @@ def test_wetting_envelope_empty_input_returns_empty_figure():
 
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 0
+
+
+# ---------------------------------------------------------------------------
+# 6.11: physics (a point on the envelope has the material's contact angle), presets, theta
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("theta", [0.0, 30.0, 60.0, 120.0])
+@pytest.mark.parametrize(("polar", "dispersive"), [(5.43, 40.0), (0.0, 18.0), (62.0, 22.0)])
+def test_every_envelope_point_gives_back_the_materials_contact_angle(polar, dispersive, theta):
+    """Invert OWRK for a liquid on the curve: gamma_L (1 + cos theta) = 2 (sqrt(gs_d gl_d) +
+    sqrt(gs_p gl_p)). The old free exponent only agreed at theta = 0."""
+    import numpy as np
+
+    material = Material(name="m", polar=polar, dispersive=dispersive, theta=theta)
+    x, y = WettingCalculator.envelope_xy(material)
+    keep = (x + y) > 0
+    x, y = x[keep][1:-1], y[keep][1:-1]  # liquids with a real polar and dispersive part
+    cos_theta = 2 * (np.sqrt(dispersive * x) + np.sqrt(polar * y)) / (x + y) - 1
+    assert np.degrees(np.arccos(np.clip(cos_theta, -1, 1))) == pytest.approx(theta, abs=1e-3)
+
+
+def test_theta_180_is_rejected_instead_of_giving_an_infinite_curve():
+    dm = WettingDataManager()
+    ok, msg = dm.add_material(name="x", polar=1.0, dispersive=1.0, theta=180.0)
+    assert ok is False and "179" in msg
+    ok, _ = dm.add_material(name="x", polar=1.0, dispersive=1.0, theta=179.0)
+    assert ok is True
+
+
+def test_presets_with_a_sourced_split_add_up_to_the_literature_total():
+    from data_manager import PRESET_SOLVENTS
+
+    totals = {  # mN/m at 20 C, surface-tension.de; water, diiodomethane: standard test liquids
+        "Water": 72.8,
+        "Ethanol": 22.1,
+        "Diiodomethane": 50.8,
+        "Ethylene glycol": 47.7,
+    }
+    by_name = {s["name"]: s for s in PRESET_SOLVENTS}
+    for name, total in totals.items():
+        assert by_name[name]["polar"] + by_name[name]["dispersive"] == pytest.approx(total, abs=1.0)
