@@ -365,15 +365,12 @@ def test_appstate_reset_clears_upload_state(fresh_state):
 # 6.4: type detection by whole tokens, upload gate, outcome and timeouts
 # ---------------------------------------------------------------------------
 
-from unittest.mock import MagicMock, patch  # noqa: E402
 
 import pytest  # noqa: E402
 from data_manager import (  # noqa: E402
     build_archives,
-    get_upload_ids_for_samples,
     type_from_filename,
     unavailable_files,
-    upload_archive,
 )
 
 
@@ -434,77 +431,3 @@ def test_archives_are_built_per_upload_and_samples_without_an_upload_are_reporte
     assert no_upload == ["S2"] and list(archives) == ["up1"]
     names = zipfile.ZipFile(io.BytesIO(archives["up1"])).namelist()
     assert names == ["S1.5_S1_jv.jv.txt"]
-
-
-def test_one_query_finds_every_samples_upload():
-    response = MagicMock()
-    response.json.return_value = {
-        "data": [
-            {"upload_id": "u1", "results": {"eln": {"lab_ids": ["S1", "other"]}}},
-            {"upload_id": "u2", "results": {"eln": {"lab_ids": ["S2"]}}},
-        ]
-    }
-    with patch("data_manager.requests.post", return_value=response) as post:
-        found = get_upload_ids_for_samples("https://x/api/v1", "tok", ["S1", "S2", "S3"])
-    assert found == {"S1": "u1", "S2": "u2"}
-    assert post.call_count == 1 and post.call_args.kwargs["timeout"] == (10, 60)
-
-
-def _ok(payload=None):
-    response = MagicMock()
-    response.json.return_value = payload
-    return response
-
-
-def test_upload_waits_for_processing_and_succeeds():
-    polls = [_ok({"data": {"process_running": True}}), _ok({"data": {"process_running": False}})]
-    with (
-        patch("data_manager.requests.put", return_value=_ok()) as put,
-        patch("data_manager.requests.post", return_value=_ok()) as post,
-        patch("data_manager.requests.get", side_effect=polls),
-        patch("data_manager.time.sleep"),
-    ):
-        upload_archive("https://x/api/v1", "tok", "up1", b"zip")
-    assert put.call_args.kwargs["files"]["file"][2] == "application/zip"
-    assert post.call_count == 1  # one process request, not two
-
-
-def test_a_failed_put_is_an_error_not_done():
-    bad = MagicMock()
-    bad.raise_for_status.side_effect = RuntimeError("401")
-    with (
-        patch("data_manager.requests.put", return_value=bad),
-        patch("data_manager.requests.post") as post,
-        pytest.raises(RuntimeError, match="401"),
-    ):
-        upload_archive("https://x/api/v1", "tok", "up1", b"zip")
-    post.assert_not_called()
-
-
-def test_failed_processing_and_a_stuck_upload_both_raise():
-    failed = _ok(
-        {
-            "data": {
-                "process_running": False,
-                "process_status": "FAILURE",
-                "last_status_message": "bad",
-            }
-        }
-    )
-    with (
-        patch("data_manager.requests.put", return_value=_ok()),
-        patch("data_manager.requests.post", return_value=_ok()),
-        patch("data_manager.requests.get", return_value=failed),
-        patch("data_manager.time.sleep"),
-        pytest.raises(RuntimeError, match="bad"),
-    ):
-        upload_archive("https://x/api/v1", "tok", "up1", b"zip")
-    running = _ok({"data": {"process_running": True}})
-    with (
-        patch("data_manager.requests.put", return_value=_ok()),
-        patch("data_manager.requests.post", return_value=_ok()),
-        patch("data_manager.requests.get", return_value=running),
-        patch("data_manager.time.sleep"),
-        pytest.raises(TimeoutError),
-    ):
-        upload_archive("https://x/api/v1", "tok", "up1", b"zip", poll_interval=1, max_wait=3)

@@ -13,20 +13,21 @@ from data_manager import (
     MEASUREMENT_TYPES,
     TOKEN,
     URL_API,
+    ZIP_MIME_TYPE,
     build_archives,
     categorize_files,
     extract_filenames_from_vuetify,
     get_normalized_type,
-    get_upload_ids_for_samples,
     match_files_to_samples,
     natural_sort_key,
     read_file_from_widget,
     split_json_by_sample,
     state,
     unavailable_files,
-    upload_archive,
 )
 from IPython.display import HTML, display
+
+from hysprint_utils.api_calls import get_upload_ids_for_samples, upload_raw_file_and_wait
 
 try:
     from ipyvuetify.extra import FileInput as _FileInput
@@ -850,7 +851,9 @@ def upload_files_for_samples(sample_files_dict, file_type_dict, uploaded_files_d
             progress.value = base + 0.1 + 0.85 * (1 - 0.5 ** (waited / 10))
 
         try:
-            upload_archive(URL_API, TOKEN, upload_id, zip_bytes, on_poll=on_poll)
+            upload_raw_file_and_wait(
+                URL_API, TOKEN, upload_id, "data.zip", zip_bytes, ZIP_MIME_TYPE, on_poll=on_poll
+            )
             with out_widget:
                 print(f"Upload {upload_id}: processed.")
         except Exception as exc:

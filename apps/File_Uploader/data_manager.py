@@ -10,13 +10,10 @@ import json
 import logging
 import os
 import re
-import time
 from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
-
-import requests
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -459,10 +456,6 @@ def load_json_from_path(file_path):
 # ---------------------------------------------------------------------------
 # Upload: look up the target uploads, build one ZIP per upload, PUT it and wait
 # ---------------------------------------------------------------------------
-# (connect, read) seconds for every request, so a hung server cannot freeze the kernel
-UPLOAD_TIMEOUT = (10, 60)
-PROCESSING_POLL_SECONDS = 2.0
-PROCESSING_MAX_WAIT_SECONDS = 900.0
 ZIP_MIME_TYPE = "application/zip"
 
 
@@ -486,35 +479,6 @@ def unavailable_files(sample_files_dict, uploaded_files_data, file_read_status=N
                 reason = "no content"
             missing.append((sample_id, file_name, reason))
     return missing
-
-
-def get_upload_ids_for_samples(url, token, sample_ids):
-    """{sample lab_id: upload_id} for all samples in one query (it used to be one query and a
-    0.2 s sleep per sample). Samples NOMAD has no entry for are left out."""
-    sample_ids = list(sample_ids)
-    if not sample_ids:
-        return {}
-    response = requests.post(
-        f"{url}/entries/query",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "required": {"include": ["entry_id", "upload_id", "results.eln.lab_ids"]},
-            "owner": "visible",
-            "query": {"results.eln.lab_ids:any": sample_ids},
-            "pagination": {"page_size": 10000},
-        },
-        timeout=UPLOAD_TIMEOUT,
-    )
-    response.raise_for_status()
-    found = {}
-    wanted = set(sample_ids)
-    for entry in response.json().get("data", []):
-        upload_id = entry.get("upload_id")
-        lab_ids = ((entry.get("results") or {}).get("eln") or {}).get("lab_ids") or []
-        for lab_id in lab_ids:
-            if lab_id in wanted and upload_id:
-                found.setdefault(lab_id, upload_id)
-    return found
 
 
 def nomad_file_name(sample_id, file_name, file_data, measurement_type):
@@ -551,50 +515,3 @@ def build_archives(sample_files_dict, file_type_dict, uploaded_files_data, uploa
             with ZipFile(buffer, "a") as archive:
                 archive.writestr(name, file_data["file_content"])
     return {upload_id: buffer.getvalue() for upload_id, buffer in buffers.items()}, no_upload
-
-
-def upload_archive(
-    url,
-    token,
-    upload_id,
-    zip_bytes,
-    on_poll=None,
-    poll_interval=PROCESSING_POLL_SECONDS,
-    max_wait=PROCESSING_MAX_WAIT_SECONDS,
-):
-    """PUT one ZIP into an upload and wait for NOMAD to finish processing it.
-
-    Raises requests.HTTPError when the PUT fails, TimeoutError when processing does not finish
-    within max_wait seconds, and RuntimeError when NOMAD reports the processing as failed.
-    The PUT already starts processing on this NOMAD version; the one explicit process request
-    after it is tolerated to fail (same as smart_databaser), the poll decides the outcome."""
-    headers = {"Authorization": f"Bearer {token}"}
-    put_response = requests.put(
-        f"{url}/uploads/{upload_id}/raw/",
-        data={"wait_for_processing": False},
-        headers=headers,
-        files={"file": ("data.zip", zip_bytes, ZIP_MIME_TYPE)},
-        timeout=UPLOAD_TIMEOUT,
-    )
-    put_response.raise_for_status()
-    requests.post(
-        f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=UPLOAD_TIMEOUT
-    )
-
-    waited = 0.0
-    while waited < max_wait:
-        time.sleep(poll_interval)
-        waited += poll_interval
-        response = requests.get(
-            f"{url}/uploads/{upload_id}", headers=headers, timeout=UPLOAD_TIMEOUT
-        )
-        response.raise_for_status()
-        upload = response.json()["data"]
-        if on_poll is not None:
-            on_poll(waited, max_wait)
-        if not upload["process_running"]:
-            if upload.get("process_status") == "FAILURE":
-                detail = upload.get("last_status_message") or "no message from NOMAD"
-                raise RuntimeError(f"NOMAD could not process the upload: {detail}")
-            return
-    raise TimeoutError(f"processing did not finish within {int(max_wait)} s")
