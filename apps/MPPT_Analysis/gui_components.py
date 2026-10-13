@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 
 def _html_float_format(value):
@@ -344,10 +344,13 @@ class GUIComponents:
         alongside the model's own parameters, so this is also what the
         Download tab's Fit_Results sheet exports (rule: don't silently drop
         the same "say so" provenance the app itself shows)."""
+        from data_manager import stored_fit_row
+
         selected_samples = self.app_state.data.get("selected_samples", [])
         selected_keys = self._selected_curve_keys()
 
         fitted_rows = []
+        stored_rows = []
         not_fitted_keys = []
         for sample_id in selected_samples:
             curve_ids = [cid for sid, cid in selected_keys if sid == sample_id]
@@ -361,7 +364,22 @@ class GUIComponents:
             for curve_id in curve_ids:
                 fit = self.app_state.fitted_curves_data.get((sample_id, curve_id))
                 if fit is None:
-                    not_fitted_keys.append((sample_id, curve_id))
+                    stored = self.data_manager.get_stored_fit(
+                        self.app_state.data["entries"], sample_id, curve_id
+                    )
+                    if stored:
+                        stored_rows.append(
+                            {
+                                "sample_id": sample_id,
+                                "pixel": self.data_manager.get_curve_label(
+                                    self.app_state.data["entries"], sample_id, curve_id
+                                ),
+                                "curve_id": curve_id,
+                                **stored_fit_row(stored),
+                            }
+                        )
+                    else:
+                        not_fitted_keys.append((sample_id, curve_id))
                     continue
                 row = {
                     "sample_id": sample_id,
@@ -377,6 +395,12 @@ class GUIComponents:
                     "note": "⚠️ underdetermined fit" if fit.get("warning") else "",
                 }
                 row.update(fit.get("params", {}))
+                stored = self.data_manager.get_stored_fit(
+                    self.app_state.data["entries"], sample_id, curve_id
+                )
+                if stored:
+                    note = f"NOMAD already holds {stored.get('fit_method') or 'fit'} results"
+                    row["note"] = f"{row['note']}; {note}" if row["note"] else note
                 fitted_rows.append(row)
 
         fitted_df = (
@@ -399,9 +423,14 @@ class GUIComponents:
             row["curve_id"] = curve_id
             not_fitted_rows.append(row)
 
+        parts = [fitted_df]
+        if stored_rows:
+            parts.append(pd.DataFrame(stored_rows))
         if not_fitted_rows:
-            return pd.concat([fitted_df, pd.DataFrame(not_fitted_rows)], ignore_index=True)
-        return fitted_df
+            parts.append(pd.DataFrame(not_fitted_rows))
+        if len(parts) == 1:
+            return fitted_df
+        return pd.concat([p for p in parts if not p.empty], ignore_index=True).fillna("")
 
     def create_fitting_tab(self):
         """Create the curve fitting tab: model/range/parameter controls on the
