@@ -567,13 +567,24 @@ def _set_at_flat_path(
     return obj, 0
 
 
+def _data_root(parsed: Any) -> Any:
+    """The part of a parsed archive file the audit table was built from.
+
+    The table is flattened from the entry's `data` section, but the raw .archive.json/.yaml wraps
+    that section in a top-level "data" key, so a column path starts one level below the file root.
+    A file without the wrapper is treated as its own data section."""
+    if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
+        return parsed["data"]
+    return parsed
+
+
 def get_value_at_flat_path(file_text: str, mainfile: str, column: str) -> str | None:
     """The string value the flattened `column` points at in this file, or None."""
     data = _parse_archive_text(file_text, mainfile)
     if data is None:
         return None
     flat: dict[str, str] = {}
-    _flatten(data, "", flat)
+    _flatten(_data_root(data), "", flat)
     return flat.get(column)
 
 
@@ -587,7 +598,12 @@ def modify_file_field(
     data = _parse_archive_text(file_text, mainfile)
     if data is None:
         return file_text, 0
-    data, changed = _set_at_flat_path(data, column.split("."), str(old_value), str(new_value))
+    root = _data_root(data)
+    root, changed = _set_at_flat_path(root, column.split("."), str(old_value), str(new_value))
+    if root is not data and isinstance(data, dict):
+        data["data"] = root
+    else:
+        data = root
     logger.debug(
         "modify_file_field: column=%s old=%s new=%s changed=%d file=%s",
         column,

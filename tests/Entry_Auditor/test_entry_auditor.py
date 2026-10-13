@@ -832,3 +832,60 @@ def test_changing_the_selection_after_a_preview_withdraws_the_confirmation(monke
     assert panel.confirm_button.layout.display is None
     panel.to_input.value = "Different"
     assert panel._pending is None and panel.confirm_button.layout.display == "none"
+
+
+def _wrapped_archive():
+    """The shape of a real .archive.json: the entry's fields sit under a top-level "data"."""
+    return {
+        "data": {
+            "m_def": "nomad_hysprint.schema_packages.hysprint_package.HySprint_SpinCoating",
+            "name": "spin coating X",
+            "description": "Process notes",
+            "location": "HZB-HySprintBox",
+            "samples": [{"lab_id": "S1", "reference": "../uploads/u/archive/e#data"}],
+            "solution": [{"solvent": [{"name": "DMF"}, {"name": "DMSO"}]}],
+        }
+    }
+
+
+def test_correction_works_on_a_file_with_the_data_wrapper():
+    """Real archive files wrap the audited fields in "data"; a path-exact edit that started at the
+    file root found nothing ("0 will change") so no correction could ever be confirmed."""
+    text = json.dumps(_wrapped_archive(), indent=2)
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "location", "HZB-HySprintBox", "HySpinBox"
+    )
+    assert count == 1
+    result = json.loads(modified)
+    assert result["data"]["location"] == "HySpinBox"
+    assert result["data"]["name"] == "spin coating X"  # nothing else touched
+    assert set(result) == {"data"}
+
+
+def test_wrapped_file_numbered_lists_and_read_back():
+    text = json.dumps(_wrapped_archive())
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "solution.solvent.2.name", "DMSO", "N,N-DMF"
+    )
+    assert count == 1
+    assert (
+        dm.get_value_at_flat_path(modified, "e.archive.json", "solution.solvent.2.name")
+        == "N,N-DMF"
+    )
+    assert dm.get_value_at_flat_path(modified, "e.archive.json", "solution.solvent.1.name") == "DMF"
+    assert dm.get_value_at_flat_path(modified, "e.archive.json", "samples.lab_id") == "S1"
+
+
+def test_wrapped_yaml_file():
+    text = "data:\n  location: Box\n  other: Box\n"
+    modified, count = dm.modify_file_field(text, "e.archive.yaml", "location", "Box", "New")
+    assert count == 1
+    assert dm._parse_archive_text(modified, "e.archive.yaml") == {
+        "data": {"location": "New", "other": "Box"}
+    }
+
+
+def test_a_wrong_path_still_changes_nothing_in_a_wrapped_file():
+    text = json.dumps(_wrapped_archive())
+    modified, count = dm.modify_file_field(text, "e.archive.json", "data.location", "x", "y")
+    assert count == 0 and modified == text
