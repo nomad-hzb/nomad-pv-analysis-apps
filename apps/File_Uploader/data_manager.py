@@ -10,8 +10,13 @@ import json
 import logging
 import os
 import re
+import time
 from collections import defaultdict
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
+
+import requests
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -127,18 +132,39 @@ state = AppState()
 # ---------------------------------------------------------------------------
 # File utility functions
 # ---------------------------------------------------------------------------
+_TYPE_TOKEN_SPLIT = re.compile(r"[._\s-]+")
+
+
+def type_from_filename(file_name, measurement_types=None):
+    """The measurement type a file name names, or None.
+
+    The base name is split into tokens at ".", "_", "-" and spaces and a type must be a whole
+    token (trailing digits allowed: "JV3"), so "HySprint_S1_jv.txt" is a jv file, "S2_hysteresis"
+    and "anhydrous" name no type, and "xrd_assembly" is not "sem". The first token that names
+    a type wins. The generic "hy" is the fallback, never matched."""
+    types = [t for t in (measurement_types or MEASUREMENT_TYPES) if t != "hy"]
+    base = os.path.splitext(file_name)[0].lower()
+    tokens = [t for t in _TYPE_TOKEN_SPLIT.split(base) if t]
+    for index, token in enumerate(tokens):
+        candidates = {token, re.sub(r"\d+$", "", token)}
+        if token == "he" and index + 1 < len(tokens):
+            candidates.add(f"he-{re.sub(chr(92) + 'd+$', '', tokens[index + 1])}")
+        for mtype in types:
+            if mtype in candidates:
+                return "pes" if mtype in PES_ALIASES else mtype
+    return None
+
+
 def get_normalized_type(file_name, file_content=None):
     """Determine measurement type from filename, falling back to content sniffing.
 
-    Filename keyword match takes priority; when it fails and `file_content` is
-    available, the first bytes are checked against CONTENT_TYPE_SIGNATURES
-    (handles files like Keithley JV exports that carry no type hint in the
-    filename at all).
+    Filename tokens take priority (see type_from_filename); when none names a type and
+    `file_content` is available, the first bytes are checked against CONTENT_TYPE_SIGNATURES
+    (handles files like Keithley JV exports that carry no type hint in the filename at all).
     """
-    file_lower = file_name.lower()
-    for mtype in MEASUREMENT_TYPES:
-        if mtype in file_lower:
-            return "pes" if mtype in PES_ALIASES else mtype
+    named = type_from_filename(file_name)
+    if named:
+        return named
     sniffed = detect_type_from_content(file_content)
     if sniffed:
         return sniffed
@@ -173,7 +199,7 @@ def categorize_files(filenames, measurement_types):
         base_name = os.path.splitext(filename)[0]
         if "." in base_name:
             files_with_dots.append(filename)
-        if any(kw in filename.lower() for kw in measurement_types):
+        if type_from_filename(filename, measurement_types):
             recognized.append(filename)
         else:
             unrecognized.append(filename)
@@ -428,3 +454,147 @@ def load_json_from_path(file_path):
     except Exception as exc:
         logger.error("Error loading JSON from %s: %s", file_path, exc)
         return None, {}, False
+
+
+# ---------------------------------------------------------------------------
+# Upload: look up the target uploads, build one ZIP per upload, PUT it and wait
+# ---------------------------------------------------------------------------
+# (connect, read) seconds for every request, so a hung server cannot freeze the kernel
+UPLOAD_TIMEOUT = (10, 60)
+PROCESSING_POLL_SECONDS = 2.0
+PROCESSING_MAX_WAIT_SECONDS = 900.0
+ZIP_MIME_TYPE = "application/zip"
+
+
+def unavailable_files(sample_files_dict, uploaded_files_data, file_read_status=None):
+    """[(sample_id, file_name, reason)] for every assigned file whose content is not available
+    (still reading, failed, timed out or never loaded). Uploading without them would silently
+    leave them out."""
+    file_read_status = file_read_status or {}
+    missing = []
+    for sample_id, file_names in sample_files_dict.items():
+        for file_name in file_names:
+            data = uploaded_files_data.get(file_name)
+            if data is not None and data.get("file_content"):
+                continue
+            status = file_read_status.get(file_name)
+            if data is None:
+                reason = "not loaded"
+            elif status and status != "done":
+                reason = status
+            else:
+                reason = "no content"
+            missing.append((sample_id, file_name, reason))
+    return missing
+
+
+def get_upload_ids_for_samples(url, token, sample_ids):
+    """{sample lab_id: upload_id} for all samples in one query (it used to be one query and a
+    0.2 s sleep per sample). Samples NOMAD has no entry for are left out."""
+    sample_ids = list(sample_ids)
+    if not sample_ids:
+        return {}
+    response = requests.post(
+        f"{url}/entries/query",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "required": {"include": ["entry_id", "upload_id", "results.eln.lab_ids"]},
+            "owner": "visible",
+            "query": {"results.eln.lab_ids:any": sample_ids},
+            "pagination": {"page_size": 10000},
+        },
+        timeout=UPLOAD_TIMEOUT,
+    )
+    response.raise_for_status()
+    found = {}
+    wanted = set(sample_ids)
+    for entry in response.json().get("data", []):
+        upload_id = entry.get("upload_id")
+        lab_ids = ((entry.get("results") or {}).get("eln") or {}).get("lab_ids") or []
+        for lab_id in lab_ids:
+            if lab_id in wanted and upload_id:
+                found.setdefault(lab_id, upload_id)
+    return found
+
+
+def nomad_file_name(sample_id, file_name, file_data, measurement_type):
+    """The name a file gets inside the upload archive."""
+    if file_data.get("is_json"):
+        return f"{sample_id}.{file_data['name']}"
+    base_name = ".".join(file_name.split(".")[:-1])
+    if measurement_type == "jv" and file_data.get("epoch_time"):
+        base_name = f"{file_data['epoch_time']}_{base_name}"
+    return create_nomad_filename(
+        sample_id, base_name, measurement_type, get_file_extension(file_name)
+    )
+
+
+def build_archives(sample_files_dict, file_type_dict, uploaded_files_data, upload_id_by_sample):
+    """({upload_id: zip bytes}, [sample_id without an upload]) for the assigned files.
+
+    Every assigned file must have its content (check unavailable_files first); a sample whose
+    upload could not be found is returned in the second list instead of being dropped."""
+    buffers: dict[str, BytesIO] = {}
+    no_upload = []
+    for sample_id, file_names in sample_files_dict.items():
+        if not file_names:
+            continue
+        upload_id = upload_id_by_sample.get(sample_id)
+        if upload_id is None:
+            no_upload.append(sample_id)
+            continue
+        buffer = buffers.setdefault(upload_id, BytesIO())
+        for file_name in file_names:
+            file_data = uploaded_files_data[file_name]
+            measurement_type = file_type_dict.get(sample_id, {}).get(file_name, "hy")
+            name = nomad_file_name(sample_id, file_name, file_data, measurement_type)
+            with ZipFile(buffer, "a") as archive:
+                archive.writestr(name, file_data["file_content"])
+    return {upload_id: buffer.getvalue() for upload_id, buffer in buffers.items()}, no_upload
+
+
+def upload_archive(
+    url,
+    token,
+    upload_id,
+    zip_bytes,
+    on_poll=None,
+    poll_interval=PROCESSING_POLL_SECONDS,
+    max_wait=PROCESSING_MAX_WAIT_SECONDS,
+):
+    """PUT one ZIP into an upload and wait for NOMAD to finish processing it.
+
+    Raises requests.HTTPError when the PUT fails, TimeoutError when processing does not finish
+    within max_wait seconds, and RuntimeError when NOMAD reports the processing as failed.
+    The PUT already starts processing on this NOMAD version; the one explicit process request
+    after it is tolerated to fail (same as smart_databaser), the poll decides the outcome."""
+    headers = {"Authorization": f"Bearer {token}"}
+    put_response = requests.put(
+        f"{url}/uploads/{upload_id}/raw/",
+        data={"wait_for_processing": False},
+        headers=headers,
+        files={"file": ("data.zip", zip_bytes, ZIP_MIME_TYPE)},
+        timeout=UPLOAD_TIMEOUT,
+    )
+    put_response.raise_for_status()
+    requests.post(
+        f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=UPLOAD_TIMEOUT
+    )
+
+    waited = 0.0
+    while waited < max_wait:
+        time.sleep(poll_interval)
+        waited += poll_interval
+        response = requests.get(
+            f"{url}/uploads/{upload_id}", headers=headers, timeout=UPLOAD_TIMEOUT
+        )
+        response.raise_for_status()
+        upload = response.json()["data"]
+        if on_poll is not None:
+            on_poll(waited, max_wait)
+        if not upload["process_running"]:
+            if upload.get("process_status") == "FAILURE":
+                detail = upload.get("last_status_message") or "no message from NOMAD"
+                raise RuntimeError(f"NOMAD could not process the upload: {detail}")
+            return
+    raise TimeoutError(f"processing did not finish within {int(max_wait)} s")
