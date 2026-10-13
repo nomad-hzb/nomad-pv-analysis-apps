@@ -13,7 +13,12 @@ import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
 import plotly.graph_objects as go
-from data_manager import MEASUREMENT_TYPE, TRPLDataManager, analyse_traces
+from data_manager import (
+    MEASUREMENT_TYPE,
+    AnalysisInputError,
+    TRPLDataManager,
+    analyse_traces,
+)
 from IPython.display import HTML, Javascript
 from IPython.display import display as ipydisplay
 
@@ -283,6 +288,8 @@ class AnalysisPanel:
                     )
                 )
 
+            except AnalysisInputError as exc:
+                print(f"⚠️ {exc}")
             except Exception as exc:
                 ErrorHandler.log_error(
                     "Analysis failed", exc, output_widget=self._output, show_traceback=True

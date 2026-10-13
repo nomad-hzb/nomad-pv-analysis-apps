@@ -401,6 +401,10 @@ class TraceResult:
     error: str = ""
 
 
+class AnalysisInputError(ValueError):
+    """An input the user has to fill in before the analysis can run (shown without a traceback)."""
+
+
 def analyse_traces(data: pd.DataFrame, global_params: dict, row_params: list[dict]):
     """Run the whole TRPL analysis. Returns (processed frame, [TraceResult per row]).
 
@@ -410,8 +414,9 @@ def analyse_traces(data: pd.DataFrame, global_params: dict, row_params: list[dic
     TraceResult.error and does not stop the others."""
     thickness = global_params["thickness"]
     if not thickness:
-        raise ValueError(
-            "Thickness is 0 nm. Set a non-zero value in 'Thickness [nm]' before running analysis."
+        raise AnalysisInputError(
+            "The film thickness is not set. Enter it (in nm) in the 'Thickness [nm]' field of "
+            "the parameter panel above, then click Run Analysis again."
         )
     frame = data.copy()
     denoise = int(global_params["denoise"])

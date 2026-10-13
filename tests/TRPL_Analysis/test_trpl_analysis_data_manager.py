@@ -246,7 +246,7 @@ def test_an_nd_filter_attenuates_the_excitation():
 
 def test_analysis_needs_a_thickness():
     time, counts = _single_exponential()
-    with pytest.raises(ValueError, match="Thickness"):
+    with pytest.raises(trpl.AnalysisInputError, match="Thickness \[nm\]"):
         trpl.analyse_traces(_frame(time, counts), dict(GLOBALS, thickness=0), [ROW])
 
 
