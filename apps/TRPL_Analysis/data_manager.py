@@ -28,6 +28,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
+from hysprint_utils.table_utils import pivot_by_group
 
 logger = logging.getLogger(__name__)
 # Measurement type constant -- imported by gui_components.py
@@ -249,15 +250,8 @@ class TRPLDataManager:
         return self.data[scalar_cols].to_csv()
 
     def get_pivot_table(self, value_col: str, group_col: str) -> pd.DataFrame:
-        """A table with one column per group and one row per measurement in it. Groups of
-        different sizes keep every measurement (shorter ones are padded with empty cells); a
-        measurement without a group is listed under "(none)"."""
-        groups = self.data.groupby(group_col, dropna=False, sort=False)[value_col]
-        columns = {
-            ("(none)" if pd.isna(key) else key): values.reset_index(drop=True)
-            for key, values in groups
-        }
-        return pd.concat(columns, axis=1) if columns else pd.DataFrame()
+        """One column per group, one row per measurement in it (every measurement is kept)."""
+        return pivot_by_group(self.data, value_col, group_col)
 
 
 # ---------------------------------------------------------------------------
