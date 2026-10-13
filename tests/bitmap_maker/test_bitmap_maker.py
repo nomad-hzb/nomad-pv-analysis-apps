@@ -180,3 +180,15 @@ def test_app_shows_errors_and_the_achieved_coverage_in_the_output_area(monkeypat
     monkeypatch.setattr(utils, "create_bitmap", lambda *a, **k: 1 / 0)
     generate.click()
     assert "Could not generate the image" in capsys.readouterr().out
+
+
+def test_controls_keep_their_width_next_to_a_wide_preview():
+    """In a flex row a wide preview squeezed the controls to ~20 px after the first Generate."""
+    import app as bitmap_app
+    import ipywidgets as widgets
+
+    root = bitmap_app.setup_app()
+    row = next(c for c in root.children if isinstance(c, widgets.HBox))
+    controls, preview = row.children
+    assert controls.layout.flex == "0 0 auto" and controls.layout.min_width == "340px"
+    assert preview.layout.min_width == "0" and preview.layout.flex == "1 1 0"

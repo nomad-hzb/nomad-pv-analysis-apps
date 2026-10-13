@@ -207,10 +207,13 @@ def setup_app():
         "<p style='text-align: center; color: #666;'>Create black & white bitmap images with customizable patterns for combinatorial inkjet printing</p>"  # noqa: E501
     )
 
+    # The controls keep their width: in a flex row a wide preview image used to squeeze this
+    # column down to a few pixels after the first Generate, leaving only the preview visible.
     controls = widgets.VBox(
         [size_box, margin_box, dpi_box, pattern_box, format_box, button_box],
-        layout=widgets.Layout(padding="10px"),
+        layout=widgets.Layout(padding="10px", flex="0 0 auto", min_width="340px"),
     )
+    display_box.layout = widgets.Layout(flex="1 1 0", min_width="0", overflow="auto")
 
     app_layout = widgets.VBox(
         [
