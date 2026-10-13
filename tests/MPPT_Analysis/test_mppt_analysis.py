@@ -787,3 +787,68 @@ def test_app_version_written_to_nomad_matches_pyproject():
     version = re.search(r'^version = "([^"]+)"', pyproject, re.M).group(1)
     gui = (root / "gui_components.py").read_text(encoding="utf-8")
     assert f'APP_VERSION = "{version}"' in gui
+
+
+# ---------------------------------------------------------------------------
+# fits already stored in NOMAD are read back and shown in the results table
+# ---------------------------------------------------------------------------
+
+_STORED = {
+    "fit_method": "Biexponential",
+    "fit_computed_by": "MPPT_Analysis v0.3.0 (edgar)",
+    "fit_computed_at": "2026-09-09T14:53:01.297348",
+    "fit_range_start": 68283.0,
+    "fit_range_end": 3629877.0,
+    "T80": 1708239.0,
+    "T95": 68283.0,
+    "initial_stabilization_time": 2226113.0,
+    "fit_r_squared": 0.9978,
+    "lifetime_energy_yield": 4484.7,
+    "fit_parameters": [
+        {"name": "A1", "value": 12.9, "unit": "mW/cm^2", "error": 0.01},
+        {"name": "tau1", "value": 3897821.0, "unit": "s", "error": 4698.0},
+    ],
+}
+
+
+def test_stored_fit_is_found_only_when_the_entry_has_a_fit_method():
+    from data_manager import stored_fit_from_archive
+
+    assert stored_fit_from_archive({"results": [_STORED]}) == _STORED
+    assert stored_fit_from_archive({"results": [{"T80": 5.0}]}) == {"T80": 5.0}
+    assert stored_fit_from_archive({"results": [{"power_density_at_t0": 5.0}]}) is None
+    assert stored_fit_from_archive({"results": []}) is None
+    assert stored_fit_from_archive({"name": "x"}) is None
+
+
+def test_stored_fit_row_converts_seconds_back_to_the_hours_the_app_shows():
+    from data_manager import stored_fit_row
+
+    row = stored_fit_row(_STORED)
+    assert row["model"] == "Biexponential"
+    assert row["T80"] == pytest.approx(1708239.0 / 3600)
+    assert row["tS"] == pytest.approx(2226113.0 / 3600)
+    assert row["tau1"] == pytest.approx(3897821.0 / 3600)  # seconds in NOMAD, hours here
+    assert row["tau1_error"] == pytest.approx(4698.0 / 3600)
+    assert row["A1"] == pytest.approx(12.9)
+    assert row["R2"] == pytest.approx(0.9978)
+    assert "Stored in NOMAD" in row["note"] and "edgar" in row["note"]
+
+
+def test_entries_carry_the_stored_fit_per_curve():
+    manager = DataManager("http://x", "t")
+    data = {
+        "time": [0.0, 3600.0],
+        "power_density": [10.0, 9.0],
+        "voltage": [1.0, 1.0],
+        "current_density": [10.0, 9.0],
+    }
+    raw = {
+        "S1": [
+            ({**data, "results": [_STORED]}, {"entry_id": "e1", "upload_id": "u"}),
+            (dict(data), {"entry_id": "e2", "upload_id": "u"}),
+        ]
+    }
+    assert manager._build_from_raw(raw, {"S1": ""})
+    assert manager.get_stored_fit(manager.entries, "S1", 0)["fit_method"] == "Biexponential"
+    assert manager.get_stored_fit(manager.entries, "S1", 1) is None

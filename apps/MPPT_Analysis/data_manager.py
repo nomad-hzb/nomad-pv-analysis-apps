@@ -120,6 +120,70 @@ _LEFTOVER_PARAM_UNITS = {
     },
 }
 
+# fit_method as written to NOMAD (fit_model.name) -> fit_model.abbreviated_name
+_MODEL_ABBREVIATION = {
+    "Stretched Exponential": "Stretched Exp",
+    "Logistic + Exponential": "Logistic+Exp",
+    "ERFC + Linear": "ERFC+Linear",
+}
+
+
+def stored_fit_from_archive(raw_data) -> dict | None:
+    """The fit metrics already saved in an MPPT entry (results[0]), or None.
+
+    An entry counts when results[0] has a fit_method or any figure of merit this app writes
+    (T80, T95, Ts80, Ts95, stabilization time, LEY, R2). The processed archive of the HZB SE
+    Oasis currently returns the metrics but not fit_method or fit_parameters."""
+    if not isinstance(raw_data, dict):
+        return None
+    results = raw_data.get("results")
+    first = results[0] if isinstance(results, list) and results else None
+    if not isinstance(first, dict):
+        return None
+    written = {"fit_method", "fit_r_squared", "lifetime_energy_yield", *_ISOS_METRIC_ALIASES}
+    return first if any(_has_value_or_text(first.get(key)) for key in written) else None
+
+
+def _has_value_or_text(value) -> bool:
+    return bool(value) if isinstance(value, str) else _has_value(value)
+
+
+def stored_fit_row(stored: dict) -> dict:
+    """One results-table row for a fit stored in NOMAD, in the units the app shows (times in
+    hours, like a fit made in this session). The inverse of _build_fit_changes."""
+    method = stored.get("fit_method") or ""
+    abbreviation = _MODEL_ABBREVIATION.get(method, method)
+    row: dict = {"model": abbreviation or "unknown"}
+    for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
+        if _has_value(stored.get(schema_field)):
+            row[aliases[0]] = float(stored[schema_field]) / 3600
+    for column, schema_field in (
+        ("R2", "fit_r_squared"),
+        ("LEY", "lifetime_energy_yield"),
+        ("PCE_after_1000_h", "PCE_after_1000_h"),
+    ):
+        if _has_value(stored.get(schema_field)):
+            row[column] = float(stored[schema_field])
+    units = _LEFTOVER_PARAM_UNITS.get(abbreviation, {})
+    for param in stored.get("fit_parameters") or []:
+        name = param.get("name")
+        if not name or not _has_value(param.get("value")):
+            continue
+        factor = units.get(name, ("", 1.0))[1]
+        row[name] = float(param["value"]) / factor
+        if _has_value(param.get("error")):
+            row[f"{name}_error"] = float(param["error"]) / factor
+    start, end = stored.get("fit_range_start"), stored.get("fit_range_end")
+    if _has_value(start) and _has_value(end):
+        row["max_time_h"] = float(end) / 3600
+    who, when = stored.get("fit_computed_by"), stored.get("fit_computed_at")
+    detail = ", ".join(str(x) for x in (who, str(when)[:16] if when else None) if x)
+    if not method:
+        detail = "metrics only, fit details not available"
+    row["note"] = "Stored in NOMAD" + (f" ({detail})" if detail else "")
+    return row
+
+
 RESAMPLE_POINTS = 200  # fitted_time/fitted_power_density point cap agreed with nomad-baseclasses
 
 
@@ -393,6 +457,7 @@ class DataManager:
         sample_order = []
         for sample_id, entries in raw.items():
             frames, names, descriptions, entry_ids, upload_ids = [], [], [], [], []
+            stored_fits = []
             for mppt_entry in entries:
                 raw_data = mppt_entry[0]
                 metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
@@ -405,6 +470,7 @@ class DataManager:
                 descriptions.append(meta.get("description", ""))
                 entry_ids.append(metadata.get("entry_id"))
                 upload_ids.append(metadata.get("upload_id"))
+                stored_fits.append(stored_fit_from_archive(raw_data))
             if not frames:
                 continue
             curves_by_sample.append(pd.concat(frames, keys=np.arange(len(frames))))
@@ -415,6 +481,7 @@ class DataManager:
                         "entry_description": descriptions,
                         "entry_id": entry_ids,
                         "upload_id": upload_ids,
+                        "stored_fit": pd.Series(stored_fits, dtype=object),
                     }
                 )
             )
@@ -593,6 +660,16 @@ class DataManager:
         if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
             return list(sample_data.index.get_level_values(0).unique())
         return [0]
+
+    def get_stored_fit(self, entries_data, sample_id, curve_id):
+        """The fit already stored in NOMAD for one (sample_id, curve_id), or None."""
+        if entries_data is None or "stored_fit" not in entries_data.columns:
+            return None
+        try:
+            value = entries_data.loc[(sample_id, curve_id), "stored_fit"]
+        except (KeyError, IndexError):
+            return None
+        return value if isinstance(value, dict) else None
 
     def get_curve_label(self, entries_data, sample_id, curve_id):
         """Human label of one measurement: the NOMAD entry name (the pixel) without

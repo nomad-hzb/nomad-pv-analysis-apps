@@ -171,6 +171,17 @@ things worth knowing if you touch this:
   `upload_id`/`entry_id` — rendered as a clickable link by
   `gui_components.py`.
 
+## Fits already stored in NOMAD
+
+When the data is loaded, `results[0]` of every MPPT entry is read
+(`stored_fit_from_archive()`). A curve that has no fit in the current session but whose entry
+already holds a fit or figures of merit (`fit_method`, T80, T95, Ts80, Ts95, stabilization time,
+LEY, R2) is listed in the Detailed Fit Results table with its stored values, times converted
+back to hours, and the note "Stored in NOMAD". A curve fitted in the session shows the new fit
+and a note that NOMAD already holds results, so an overwrite is visible before it is written.
+The processed archive of the HZB SE Oasis currently returns the metrics but not `fit_method` or
+`fit_parameters`; such rows read "metrics only, fit details not available".
+
 ## References
 
 - Khenkin et al., "Consensus statement for stability assessment and
