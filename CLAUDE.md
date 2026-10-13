@@ -78,8 +78,10 @@ nomad-baseclasses; never guess, and leave `unit_verified: False` until checked.
   test-only changes or `shared/` edits.
 - In the same PR, update the app's user manual whenever what users see or what the app
   computes changes (`manual.md`, or the app's existing guide/manual until it is converted).
-  Check the manual against the code, not memory. Apps without a manual yet: note the change
-  in the PR; writing one is tracked separately.
+  Check the manual against the code, not memory. The manual is `apps/<App>/manual.md`, shown by
+  `hysprint_utils.manual.manual_panel(__file__)`; `check_repo_rules.py` requires both, except for
+  the apps listed in `NO_MANUAL_YET` (note the change in the PR; the manuals are written one app
+  at a time and each one is removed from that list).
 - PR titles become release notes (`gh release create <tag> --generate-notes`); make them
   descriptive. No CHANGELOG file. Push to the `hzb` remote; branches are `<issue>-<slug>`.
 - After any merge or rebase where both sides touched a file, diff each touched file against

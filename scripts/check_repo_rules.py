@@ -34,6 +34,33 @@ KNOWN_EXCEPTIONS = {
 }
 
 
+# Apps that still have no manual.md (checklist M1..): remove an app here when its manual lands. The
+# check fails for an app that is listed but has a manual, so this list cannot go stale.
+NO_MANUAL_YET = {
+    "AbsPL_Analysis",
+    "App_dashboard",
+    "DesignOfExperiments",
+    "EQE_Analysis",
+    "Entry_Auditor",
+    "Excel_creator",
+    "File_Uploader",
+    "Global_analyzer",
+    "Hansen_green_calculator",
+    "ISA_Previewer",
+    "JV-Analysis",
+    "LCC_Calculator",
+    "MPPT_Analysis",
+    "NMR_Analysis",
+    "PeroDatabase_downloader",
+    "TRPL_Analysis",
+    "Thickness_tracer",
+    "Wetting_envelope",
+    "XRD_peak_finder",
+    "bitmap_maker",
+    "smart_databaser",
+}
+
+
 def app_dirs():
     return sorted(d for d in APPS.iterdir() if d.is_dir() and d.name not in PARKED)
 
@@ -134,11 +161,32 @@ def check_pyprojects(problems):
             problems.append(("pyproject", rel(pyproject), "; ".join(reasons)))
 
 
+def check_manuals(problems):
+    """Every app has apps/<App>/manual.md, shown with hysprint_utils.manual.manual_panel."""
+    for app in app_dirs():
+        manual = app / "manual.md"
+        listed = app.name in NO_MANUAL_YET
+        if not manual.exists():
+            if not listed:
+                problems.append(
+                    ("manual", rel(app), "no manual.md (see CLAUDE.md, change management)")
+                )
+            continue
+        if listed:
+            problems.append(("manual", rel(app), "has a manual.md: remove it from NO_MANUAL_YET"))
+        sources = [*app.glob("*.py"), *app.glob("*.ipynb")]
+        if not any("manual_panel" in f.read_text(encoding="utf-8") for f in sources):
+            problems.append(
+                ("manual", rel(app), "manual.md is never shown: call manual_panel(__file__)")
+            )
+
+
 def main() -> int:
     problems = []
     check_notebooks(problems)
     check_python(problems)
     check_pyprojects(problems)
+    check_manuals(problems)
 
     seen = {(kind, where) for kind, where, _ in problems}
     stale = sorted(KNOWN_EXCEPTIONS - seen)
