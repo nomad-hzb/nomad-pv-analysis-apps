@@ -333,6 +333,7 @@ def test_parameter_panel_only_offers_inputs_the_analysis_uses():
 
 
 def test_plots_are_wrapped_to_fill_the_page_and_the_noise_line_needs_a_noise():
+    pytest.importorskip("anywidget")  # go.FigureWidget; not in the CI test environment
     import gui_components as gui
     import ipywidgets as widgets
 
