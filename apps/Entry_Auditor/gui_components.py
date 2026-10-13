@@ -45,6 +45,11 @@ _natsort_key = natsort_keygen()
 _MAINFILE_SUFFIX = re.compile(r"\.archive\.(json|yaml)$")
 
 
+def _entry_order(row) -> tuple:
+    """Sort key shared by the table's columns and the sample dropdown."""
+    return _natsort_key((str(row.get("sample_id", "") or ""), str(row.get("_mainfile", "") or "")))
+
+
 def _mainfile_label(mainfile: str) -> str:
     """Short, human-meaningful tag for one entry's underlying file - a sample can have
     several entries of the same schema (e.g. multiple Spin Coating steps), all sharing
@@ -92,13 +97,7 @@ class FieldAuditPanel(widgets.VBox):
         # is not stable/meaningful - sort by sample then mainfile so column 1 in the
         # table is genuinely "this batch's first sample" instead of appearing random.
         self.entry_indices = sorted(
-            self.entries_df.index,
-            key=lambda i: _natsort_key(
-                (
-                    str(self.entries_df.loc[i].get("sample_id", "") or ""),
-                    str(self.entries_df.loc[i].get("_mainfile", "") or ""),
-                )
-            ),
+            self.entries_df.index, key=lambda i: _entry_order(self.entries_df.loc[i])
         )
         entries = len(self.entries_df)
         unique_samples = (
@@ -338,7 +337,8 @@ class FieldAuditPanel(widgets.VBox):
             return
         df = self.session.datasets[self.label]
         options = [(f"All matching entries ({len(matched['row_indices'])})", None)]
-        for row_index in matched["row_indices"]:
+        # same order as the table's columns: sample, then mainfile, natural sort
+        for row_index in sorted(matched["row_indices"], key=lambda i: _entry_order(df.loc[i])):
             row = df.loc[row_index]
             sample_id = row.get("sample_id", "") or "N/A"
             entry_id = row.get("_entry_id", "")

@@ -470,6 +470,16 @@ def test_field_audit_panel_offers_preview_then_confirm(fresh_session):
     assert panel.cancel_button.layout.display == "none"
 
 
+def test_sample_dropdown_follows_the_table_column_order(fresh_session):
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    panel = gc.FieldAuditPanel(fresh_session, label, url="https://example.org", token="t")
+    df = panel.entries_df
+    table_order = [str(df.loc[i].get("_entry_id", "")) for i in panel.entry_indices]
+    shown = [value for _label, value in panel.sample_dropdown.options if value is not None]
+    assert shown == [e for e in table_order if e in shown]
+
+
 def test_field_audit_panel_offline_has_no_correction_controls(fresh_session):
     assert fresh_session.load_offline(FIXTURE_PATH)
     label = next(iter(fresh_session.datasets))
