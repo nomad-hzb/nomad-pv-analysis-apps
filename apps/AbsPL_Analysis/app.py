@@ -20,7 +20,7 @@ from IPython.display import display as ipydisplay
 from plot_manager import AbsPlPlotManager
 
 from hysprint_utils.auth_manager import AuthenticationManager
-from hysprint_utils.plotting_utils import create_manual
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,6 @@ class AbsPlApp:
         url_base: str,
         api_endpoint: str,
         token: str,
-        manual_file: str | None = None,
     ):
         self._auth = AuthenticationManager(url_base, api_endpoint)
         self._auth.authenticate_with_token(token)
@@ -50,7 +49,6 @@ class AbsPlApp:
         api_url = self._auth.api_client.get_api_url()
         self._data_manager = AbsPlDataManager(api_url, token)
         self._plot_manager = AbsPlPlotManager()
-        self._manual_file = manual_file
 
         self._status_out = widgets.Output()
         self._dynamic_out = widgets.Output()
@@ -74,10 +72,13 @@ class AbsPlApp:
             measurement_type=MEASUREMENT_TYPE,
         )
 
-        sections = []
-        if self._manual_file:
-            sections.append(create_manual(self._manual_file))
-        sections += [self._demo_btn, batch_panel.widget, self._status_out, self._dynamic_out]
+        sections = [
+            manual_panel(__file__),
+            self._demo_btn,
+            batch_panel.widget,
+            self._status_out,
+            self._dynamic_out,
+        ]
 
         ipydisplay(widgets.VBox(sections))
 
