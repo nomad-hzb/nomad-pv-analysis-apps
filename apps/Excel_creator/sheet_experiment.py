@@ -14,6 +14,9 @@ from hysprint_utils.process_specs import (
 
 logger = logging.getLogger(__name__)
 
+# Last row that gets the Nomad ID formula (rows 3 and up are the data rows).
+NOMAD_ID_LAST_ROW = 500
+
 TABLEAU_COLORS = {
     "tab:blue": "1F77B4",
     "tab:orange": "FF7F0E",
@@ -454,7 +457,7 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
             ]
 
         if process_name == "Ink Recycling":
-            steps = []
+            steps = [f("Datetime"), f("Operator")]
             steps.extend(indexed("solvents", config.get("solvents", 0)))
             steps.extend(indexed("solutes", config.get("solutes", 0)))
             steps.extend(indexed("precursors", config.get("precursors", 0)))
@@ -568,10 +571,12 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
         start_col = end_col + 1
         incremental_number += 1
 
-    # Example: Apply a custom formula for the "Nomad ID" column (example only)
-    for row in range(3, 4):
-        nomad_id_formula = f'=CONCATENATE("HZB_",B{row},"_",C{row},"_",D{row},"_C-",E{row})'
-        ws[f"F{row}"].value = nomad_id_formula
+    # The "Nomad ID" column is filled for every data row the user can use (it used to be row 3
+    # only); a row whose project column is empty stays empty.
+    for row in range(3, NOMAD_ID_LAST_ROW + 1):
+        ws[
+            f"F{row}"
+        ].value = f'=IF(B{row}="","",CONCATENATE("HZB_",B{row},"_",C{row},"_",D{row},"_C-",E{row}))'
 
     # Adjust column widths
     for col in ws.columns:
