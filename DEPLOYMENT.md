@@ -196,7 +196,7 @@ Oasis needs. The table after it explains each variable.
 # HYSPRINT_DASHBOARD_GROUP_ORDER = "Data Management,Device Characterization"
 
 # --- App Dashboard: the "Projects" cards (slot-die ML pipeline) ------------------------------
-# Each card links into a specific HZB upload. Set the upload id of your own copy, or set the
+# Each card links into a specific HZB upload. Set the upload folder ('<slug>-<id>') of your own copy, or set the
 # variable to the empty string to drop that card (all six empty: the section disappears).
 # HYSPRINT_PROJECT_IMAGE_CROPPER_UPLOAD_ID = ""
 # HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID = ""
@@ -204,6 +204,8 @@ Oasis needs. The table after it explains each variable.
 # HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID = ""
 # HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID = ""
 # HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_SECTION1_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID = ""
 
 # --- Keys and tokens (never put them in the code, a notebook or git) -------------------------
 # A key an app needs is read from an environment variable of the same name. Set it here, in this
