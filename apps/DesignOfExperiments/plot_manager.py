@@ -627,14 +627,3 @@ class PlotManager:
             uniformity_scores[var.name] = uniformity
 
         return uniformity_scores
-
-    def get_available_plot_types(self) -> Dict[str, str]:
-        """Get available plot types with descriptions."""
-        return {
-            "splom": "Scatter Plot Matrix - All variable pairs",
-            "parallel": "Parallel Coordinates - Multi-dimensional view",
-            "distributions": "Distribution Plots - Individual variable histograms",
-            "3d_scatter": "3D Scatter Plot - Three-dimensional visualization",
-            "correlation": "Correlation Heatmap - Variable relationships",
-            "quality": "Space-Filling Quality - Design assessment plots",
-        }

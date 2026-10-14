@@ -14,106 +14,12 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, field_validator
 from scipy.optimize import minimize
 
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
-
-
-class SolventRow(BaseModel):
-    """One row from db.csv (Hansen solvent database)."""
-
-    no: Optional[int] = None
-    name: str = ""
-    cas: Optional[str] = None
-    D: Optional[float] = None
-    P: Optional[float] = None
-    H: Optional[float] = None
-    DN: Optional[float] = None
-    BP: Optional[float] = None
-    mw: Optional[float] = None
-    Viscosity: Optional[float] = None
-    vis_temp: Optional[float] = None
-    heat_of_vap: Optional[float] = None
-    hov_temp: Optional[float] = None
-    synonyms: Optional[str] = None
-    smiles: Optional[str] = None
-
-    @field_validator(
-        "D",
-        "P",
-        "H",
-        "DN",
-        "BP",
-        "mw",
-        "Viscosity",
-        "vis_temp",
-        "heat_of_vap",
-        "hov_temp",
-        mode="before",
-    )
-    @classmethod
-    def coerce_numeric(cls, v):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
-
-class InkRow(BaseModel):
-    """One row from PlottedInks.xlsx (Inks sheet)."""
-
-    D: float
-    P: float
-    H: float
-    Solutes: Optional[str] = None
-    Solvents: Optional[str] = None
-    Researcher: Optional[str] = None
-
-    @field_validator("D", "P", "H", mode="before")
-    @classmethod
-    def require_coords(cls, v):
-        return float(v)
-
-
-class PerovskiteRow(BaseModel):
-    """One row from PlottedInks.xlsx (Sheet2 / Sheet3)."""
-
-    D: float
-    P: float
-    H: float
-    Solute: Optional[str] = None
-    Solvent: Optional[str] = None
-    Stability: Optional[str] = None
-    DN: Optional[float] = None
-    BP: Optional[float] = None
-    heat_of_vap: Optional[float] = None
-    hov_temp: Optional[float] = None
-    mw: Optional[float] = None
-    vis_temp: Optional[float] = None
-    Viscosity: Optional[float] = None
-
-    @field_validator("D", "P", "H", mode="before")
-    @classmethod
-    def require_coords(cls, v):
-        return float(v)
-
-    @field_validator(
-        "DN", "BP", "heat_of_vap", "hov_temp", "mw", "vis_temp", "Viscosity", mode="before"
-    )
-    @classmethod
-    def coerce_numeric(cls, v):
-        if v is None:
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
 
 
 # ---------------------------------------------------------------------------

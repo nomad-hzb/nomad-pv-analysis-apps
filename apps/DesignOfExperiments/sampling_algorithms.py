@@ -722,17 +722,6 @@ class SamplingEngine:
 
         self.validator = ValidationUtils()
 
-    def get_available_algorithms(self) -> Dict[str, str]:
-        """Get list of available algorithms with descriptions."""
-        return {name: alg.description for name, alg in self.available_algorithms.items()}
-
-    def get_algorithm_parameters(self, algorithm_name: str) -> Dict[str, Any]:
-        """Get parameters for a specific algorithm."""
-        if algorithm_name not in self.available_algorithms:
-            return {}
-
-        return self.available_algorithms[algorithm_name].get_parameters()
-
     def generate_samples(
         self,
         variables: List[Variable],
@@ -1075,35 +1064,3 @@ class SamplingEngine:
         max_entropy = np.log2(len(value_counts))
 
         return entropy / max_entropy if max_entropy > 0 else 1.0
-
-    def compare_algorithms(
-        self,
-        variables: List[Variable],
-        n_samples: int,
-        algorithms: List[str],
-        random_state: Optional[int] = None,
-    ) -> pd.DataFrame:
-        """Compare multiple algorithms on the same problem."""
-        results = []
-
-        for algorithm in algorithms:
-            if algorithm not in self.available_algorithms:
-                continue
-
-            try:
-                # Generate samples
-                samples = self.generate_samples(variables, algorithm, n_samples, random_state)
-
-                # Calculate metrics
-                metrics = self.calculate_quality_metrics(samples, variables)
-
-                # Add algorithm name and compile results
-                result = {"Algorithm": algorithm}
-                result.update(metrics)
-                results.append(result)
-
-            except Exception as e:
-                # Add failed algorithm with error info
-                results.append({"Algorithm": algorithm, "Error": str(e)})
-
-        return pd.DataFrame(results)

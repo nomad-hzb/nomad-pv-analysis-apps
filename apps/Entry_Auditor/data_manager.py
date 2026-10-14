@@ -155,61 +155,6 @@ def get_sample_links_chunked(
     return result
 
 
-def get_entry_links(url: str, token: str, sample_ids: list[str], entry_type: str) -> dict[str, str]:
-    """{sample_id: gui_url} for entries of entry_type, mapped back to sample_ids via
-    the entry's own 'samples' field."""
-    if not sample_ids:
-        return {}
-    headers = {"Authorization": f"Bearer {token}"}
-    base_url = url.split("/api/")[0]
-
-    response = requests.post(
-        f"{url}/entries/query",
-        headers=headers,
-        json={
-            "required": {"include": ["entry_id"]},
-            "owner": "visible",
-            "query": {"results.eln.lab_ids:any": sample_ids},
-            "pagination": {"page_size": 10000},
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    sample_entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
-    if not sample_entry_ids:
-        return {}
-
-    response = requests.post(
-        f"{url}/entries/archive/query",
-        headers=headers,
-        json={
-            "required": {"data": {"samples": "*"}, "metadata": "*"},
-            "owner": "visible",
-            "query": {
-                "entry_references.target_entry_id:any": sample_entry_ids,
-                "entry_type": entry_type,
-            },
-            "pagination": {"page_size": 10000},
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-
-    result: dict[str, str] = {}
-    for entry in response.json()["data"]:
-        meta = entry.get("archive", {}).get("metadata", {})
-        data = entry.get("archive", {}).get("data", {})
-        entry_id = meta.get("entry_id", "")
-        upload_id = meta.get("upload_id", "")
-        gui_url = f"{base_url}/gui/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}"
-        samples = data.get("samples", [])
-        if samples:
-            lab_id = samples[0].get("lab_id", "")
-            if lab_id in sample_ids:
-                result[lab_id] = gui_url
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Generic entry loading (flatten arbitrary archive data into audit-table columns)
 # ---------------------------------------------------------------------------

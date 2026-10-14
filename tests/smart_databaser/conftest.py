@@ -46,6 +46,15 @@ if "data_manager" not in sys.modules or not hasattr(sys.modules["data_manager"],
     sys.modules["data_manager"] = _dm_module
     _spec.loader.exec_module(_dm_module)
 
+# gui_components re-exports from three sibling modules, which import each other in this order;
+# load them the same way first.
+for _name in ("gui_fields", "gui_matrix", "gui_sequence"):
+    if _name not in sys.modules:
+        _spec = importlib.util.spec_from_file_location(_name, _APP_DIR / f"{_name}.py")
+        _mod = importlib.util.module_from_spec(_spec)
+        sys.modules[_name] = _mod
+        _spec.loader.exec_module(_mod)
+
 # Same approach for gui_components -- it does `from data_manager import ...`, which
 # resolves against sys.modules["data_manager"] injected above regardless of sys.path.
 if "gui_components" not in sys.modules or not hasattr(

@@ -1049,20 +1049,3 @@ If you tested specific variables or conditions for each sample, please write the
             ],
             layout=app_layout,
         )
-
-    def get_current_color_scheme(self):
-        """Get currently selected color scheme"""
-        if hasattr(self, "color_selector"):
-            return self.color_selector.get_colors()
-        else:
-            # Default colors if no selector
-            return [
-                "rgba(93, 164, 214, 0.7)",
-                "rgba(255, 144, 14, 0.7)",
-                "rgba(44, 160, 101, 0.7)",
-                "rgba(255, 65, 54, 0.7)",
-                "rgba(207, 114, 255, 0.7)",
-                "rgba(127, 96, 0, 0.7)",
-                "rgba(255, 140, 184, 0.7)",
-                "rgba(79, 90, 117, 0.7)",
-            ]

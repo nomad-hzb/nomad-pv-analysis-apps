@@ -8,10 +8,8 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
-import os
 from datetime import date
 
-import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 
@@ -65,22 +63,6 @@ def flip_current_density_curve_rows(df, variable_col="variable", target="Current
     value_cols = [c for c in df.columns if c not in _CURVE_META_COLUMNS]
     df.loc[mask, value_cols] = df.loc[mask, value_cols] * -1
     return df
-
-
-def save_full_data_frame(data):
-    """
-    Create and return an Excel workbook with the full dataframe.
-    Simplified version that just creates a workbook without saving to file.
-    """
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active)  # Remove the default sheet
-
-    # Add main data sheet
-    ws = wb.create_sheet(title="All_data")
-    for r in dataframe_to_rows(data, index=True, header=True):
-        ws.append(r)
-
-    return wb
 
 
 def save_combined_excel_data(path, wb, data, filtered_info, var_x, name_y, var_y, other_df):
@@ -141,33 +123,3 @@ def save_combined_excel_data(path, wb, data, filtered_info, var_x, name_y, var_y
         ws.cell(row=next_row + cc, column=1, value=strings)
 
     return wb
-
-
-def is_running_in_jupyter():
-    """Check if code is running in Jupyter notebook"""
-    try:
-        from IPython import get_ipython
-
-        return get_ipython() is not None
-    except ImportError:
-        return False
-
-
-def create_new_results_folder(path):
-    """Create a results folder if it doesn't exist"""
-    folder_path = os.path.join(path, "Results")
-    try:
-        os.makedirs(folder_path, exist_ok=True)
-    except Exception as e:
-        print(f"Warning: Could not create results folder: {e}")
-        return path
-    return folder_path
-
-
-def clean_filename(filename):
-    """Clean filename for safe saving"""
-    import re
-
-    # Remove invalid characters for filenames
-    filename = re.sub(r'[<>:"/\\|?*]', "_", filename)
-    return filename
