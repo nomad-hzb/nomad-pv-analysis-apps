@@ -147,8 +147,6 @@ both places.
 
 ## 3. Create `oasis_local_config.py`
 
-**Shortcut:** copy `oasis_local_config.example.py` (repo root) to `oasis_local_config.py` and un-comment what you need. It lists every supported variable, commented out, with a one-line explanation each (Oasis URL, proxy, hiding dashboard apps, the Projects cards, log folder).
-
 Create it at the repo root of the upload, next to `bootstrap.py`. It is
 gitignored (same pattern as `secrets.py`) because it describes one deployment,
 not the repo - it travels with the upload, and is not committed upstream.
@@ -157,7 +155,7 @@ Every uppercase string assignment in it is exported as an environment variable
 of the same name before `hysprint_utils` is imported or installed. Anything
 already set at the container level wins; this file never overwrites it.
 
-### The CE-AME file
+### Template with every option (and the CE-AME values)
 
 The proxy host below is a placeholder. Deployment-specific values like the
 real proxy address belong in the gitignored `oasis_local_config.py` of that
@@ -169,15 +167,60 @@ that deployment needs no local file. To opt out, set `HTTP_PROXY = ""` and
 `HTTPS_PROXY = ""` in `oasis_local_config.py`; any other `HYSPRINT_URL_BASE`
 turns the default off.
 
-```python
-# --- Which Oasis the apps talk to ---
-HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
-HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
+Every option below is optional; copy the block into `oasis_local_config.py` and un-comment what your
+Oasis needs. The table after it explains each variable.
 
-# --- Outbound network ---
-HTTP_PROXY = "http://proxy.example.org:3128"
-HTTPS_PROXY = "http://proxy.example.org:3128"
-NO_PROXY = "localhost,127.0.0.1"
+```python
+# --- Which Oasis -----------------------------------------------------------------------------
+# Required on any Oasis other than the HZB SE one. No trailing slash.
+# HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
+# Only if the API is not at /nomad-oasis/api/v1:
+# HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
+
+# --- Outbound proxy (only if the container has no direct route out) --------------------------
+# The HZB SE Oasis gets the HZB proxy by default; any other deployment gets none unless set here.
+# To switch the proxy off on HZB SE, set both to the empty string.
+# HTTP_PROXY = "http://proxy.example.org:3128"
+# HTTPS_PROXY = "http://proxy.example.org:3128"
+# NO_PROXY = "localhost,127.0.0.1"
+
+# --- App Dashboard: which apps are listed ----------------------------------------------------
+# Hide apps (comma-separated app folder names or card names; case and spaces are ignored; unknown
+# names only log a warning). "Learning" and "Projects" name those two sections.
+# HYSPRINT_DASHBOARD_HIDE_APPS = "XPS-Automated,SEM_crystal_counter"
+# Or show only these (an allow-list; the hide list is applied on top):
+# HYSPRINT_DASHBOARD_SHOW_APPS = "JV-Analysis,File_Uploader,Learning"
+# Order of the groups: the groups named here come first, in this order (case and spaces are
+# ignored, unknown names only log a warning); every other group follows in its default order.
+# Unset: the default order. Names: Data Management, Device Characterization,
+# Optical & Structural Analysis, Utilities & Calculators, Build Your Own,
+# Experimental / In Progress.
+# HYSPRINT_DASHBOARD_GROUP_ORDER = "Data Management,Device Characterization"
+
+# --- App Dashboard: the "Projects" cards (slot-die ML pipeline) ------------------------------
+# Each card links into a specific HZB upload. Set the upload folder ('<slug>-<id>') of your own copy, or set the
+# variable to the empty string to drop that card (all six empty: the section disappears).
+# HYSPRINT_PROJECT_IMAGE_CROPPER_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_SECTION1_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID = ""
+
+# --- Keys and tokens (never put them in the code, a notebook or git) -------------------------
+# A key an app needs is read from an environment variable of the same name. Set it here, in this
+# gitignored file (it becomes the variable before the apps start), or in the container's own
+# environment, which wins. Currently used: the Global_analyzer "AI summary" panel (Helmholtz
+# Blablador key). A leaked key must be revoked and replaced, deleting the file is not enough.
+# BLABLADOR_API_KEY = "<your key>"
+
+# --- Logs and debugging ----------------------------------------------------------------------
+# Where notebook_usage.log and button_usage.log are written (default: shared/log/ of the upload).
+# HYSPRINT_USAGE_LOG_DIR = "/home/jovyan/hysprint_logs"
+# Show the banner some packages print on import (silenced by default):
+# HYSPRINT_KEEP_IMPORT_OUTPUT = "1"
 ```
 
 ### What each variable does
