@@ -42,7 +42,6 @@ NO_MANUAL_YET = {
     "Hansen_green_calculator",
     "ISA_Previewer",
     "LCC_Calculator",
-    "NMR_Analysis",
     "Thickness_tracer",
     "Wetting_envelope",
     "bitmap_maker",

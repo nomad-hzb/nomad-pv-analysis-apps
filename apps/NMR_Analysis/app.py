@@ -15,6 +15,7 @@ from IPython.display import display as ipydisplay
 
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class NMRPlotterApp:
         ipydisplay(
             widgets.VBox(
                 [
+                    manual_panel(__file__),
                     self._demo_btn,
                     self._batch_panel.widget,
                     self._data_ui_out,
