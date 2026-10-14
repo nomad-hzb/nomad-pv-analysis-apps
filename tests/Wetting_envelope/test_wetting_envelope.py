@@ -111,14 +111,16 @@ def test_theta_180_is_rejected_instead_of_giving_an_infinite_curve():
     assert ok is True
 
 
-def test_presets_with_a_sourced_split_add_up_to_the_literature_total():
-    from data_manager import LITERATURE_TOTALS, PRESET_SOLVENTS, SPLIT_SOURCES
+def test_preset_files_load_and_every_sourced_solvent_adds_up_to_its_total():
+    from data_manager import PRESET_MATERIALS, PRESET_SOLVENTS
 
-    by_name = {s["name"]: s for s in PRESET_SOLVENTS}
-    assert SPLIT_SOURCES  # every sourced preset is checked against its own total
-    for name in SPLIT_SOURCES:
-        total = by_name[name]["polar"] + by_name[name]["dispersive"]
-        assert total == pytest.approx(LITERATURE_TOTALS[name], abs=0.5), name
+    assert len(PRESET_MATERIALS) >= 8 and len(PRESET_SOLVENTS) >= 10
+    sourced = [s for s in PRESET_SOLVENTS if s["source"]]
+    assert {s["name"] for s in sourced} >= {"Water", "Ethanol", "Ethylene glycol", "Chloroform"}
+    for solvent in sourced:
+        assert solvent["reference_url"], solvent["name"]
+        total = solvent["polar"] + solvent["dispersive"]
+        assert total == pytest.approx(solvent["literature_total"], abs=0.5), solvent["name"]
 
 
 def test_preset_note_says_where_values_come_from_and_flags_sums_that_do_not_match():

@@ -212,6 +212,11 @@ class MaterialPanel:
             [
                 _section_header("Materials"),
                 _subheader("Pick a preset or enter values manually:"),
+                widgets.HTML(
+                    "<div style='color:#666;font-size:0.9em'>The presets are in "
+                    f"<a href='{dm.MATERIALS_FILE_URL}' target='_blank'>material_presets.csv</a> "
+                    "(the source of these values is not recorded yet).</div>"
+                ),
                 self._preset_dd,
                 self._name,
                 widgets.HBox([self._polar, self._dispersive]),
@@ -292,11 +297,17 @@ class SolventPanel:
         self._polar.value = preset["polar"]
         self._dispersive.value = preset["dispersive"]
         note = html.escape(dm.solvent_preset_note(preset["name"]))
+        url = preset.get("reference_url")
+        reference = (
+            f"<a href='{html.escape(url)}' target='_blank'>Reference for these values</a> | "
+            if url
+            else ""
+        )
         self._source_note.value = (
             f"<div style='color:#666;font-size:0.9em'>{note}<br>"
-            f"<a href='{dm.SOURCE_PAGE_URL}' target='_blank'>Table of the values</a> | "
-            f"<a href='{dm.DATA_FILE_URL}' target='_blank'>Preset data in the repository "
-            f"(PRESET_SOLVENTS)</a></div>"
+            f"{reference}"
+            f"<a href='{dm.DATA_FILE_URL}' target='_blank'>All solvent presets "
+            f"(solvent_presets.csv)</a></div>"
         )
 
     def _on_add(self, _b) -> None:
@@ -322,9 +333,9 @@ class SolventPanel:
                 _section_header("Solvents / Liquid Points"),
                 _subheader("Pick a preset or enter values manually:"),
                 widgets.HTML(
-                    "<div style='color:#666;font-size:0.9em'>The presets are listed in "
-                    f"<a href='{dm.DATA_FILE_URL}' target='_blank'>data_manager.py</a> "
-                    "(Python lists, with their sources in the comments above them).</div>"
+                    "<div style='color:#666;font-size:0.9em'>The presets are in "
+                    f"<a href='{dm.DATA_FILE_URL}' target='_blank'>solvent_presets.csv</a> "
+                    "(with the source and reference of every row).</div>"
                 ),
                 self._preset_dd,
                 self._source_note,

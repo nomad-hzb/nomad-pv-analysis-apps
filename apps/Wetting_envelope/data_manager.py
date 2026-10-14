@@ -7,7 +7,9 @@ No widget imports. No global state.
 
 from __future__ import annotations
 
+import csv
 import logging
+from pathlib import Path
 
 import numpy as np
 from pydantic import BaseModel, ValidationError, field_validator
@@ -56,84 +58,40 @@ class Solvent(BaseModel):
 # Preset library
 # ---------------------------------------------------------------------------
 
-PRESET_MATERIALS: list[dict] = [
-    {"name": "Material 1", "polar": 5.43, "dispersive": 40.00, "theta": 0.0},
-    {"name": "Material 2", "polar": 0.23, "dispersive": 48.43, "theta": 0.0},
-    {"name": "PTFE", "polar": 0.00, "dispersive": 18.00, "theta": 0.0},
-    {"name": "Polypropylene (PP)", "polar": 0.00, "dispersive": 30.10, "theta": 0.0},
-    {"name": "Polyethylene (PE)", "polar": 0.00, "dispersive": 33.20, "theta": 0.0},
-    {"name": "Polystyrene (PS)", "polar": 1.10, "dispersive": 42.00, "theta": 0.0},
-    {"name": "PMMA", "polar": 6.60, "dispersive": 35.90, "theta": 0.0},
-    {"name": "Nylon 6,6", "polar": 11.80, "dispersive": 36.40, "theta": 0.0},
-    {"name": "PET", "polar": 6.20, "dispersive": 35.60, "theta": 0.0},
-    {"name": "Glass (SiO2)", "polar": 62.00, "dispersive": 22.00, "theta": 0.0},
-]
+# The preset libraries are CSV files next to this module (open them on GitHub, edit them in a
+# spreadsheet): solvent_presets.csv (name, polar, dispersive, literature_total, source,
+# reference_url, note) and material_presets.csv (name, polar, dispersive, theta, source,
+# reference_url, note). Polar and dispersive parts of a solvent add up to its surface tension in
+# mN/m; a row whose parts do not match its literature_total is flagged in the app.
+_APP_DIR = Path(__file__).resolve().parent
+SOLVENT_PRESETS_FILE = "solvent_presets.csv"
+MATERIAL_PRESETS_FILE = "material_presets.csv"
+GITHUB_BLOB_URL = (
+    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Wetting_envelope"
+)
 
 # Contact angles up to this are accepted (180 gives an infinite envelope).
 MAX_THETA = 179.0
 
-# Polar and dispersive parts add up to the liquid's surface tension. The splits of water, ethanol,
-# ethylene glycol, diiodomethane and formamide are the 20 C values of Zdziennicka, Krawczyk,
-# Szymczyk and Jańczuk, Colloids Surf. A 529 (2017) 864-875; toluene and chloroform are from Hwang
-# et al., J. Ind. Eng. Chem. 17 (2011) 125-129; both as tabulated at
-# https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/ . Isopropanol,
-# acetone and hexane still hold their earlier values: their split has no recorded source and the
-# parts do not add up to the literature total (surface-tension.de, 20 C). "Solvent 1/2" are unnamed
-# placeholders.
-PRESET_SOLVENTS: list[dict] = [
-    {"name": "Solvent 1", "polar": 18.00, "dispersive": 29.00},
-    {"name": "Solvent 2", "polar": 2.30, "dispersive": 25.50},
-    {"name": "Water", "polar": 45.61, "dispersive": 27.19},
-    {"name": "Ethanol", "polar": 2.01, "dispersive": 21.19},
-    {"name": "Isopropanol (IPA)", "polar": 8.00, "dispersive": 20.93},
-    {"name": "Acetone", "polar": 10.00, "dispersive": 16.35},
-    {"name": "Diiodomethane", "polar": 0.00, "dispersive": 50.80},
-    {"name": "Formamide", "polar": 12.82, "dispersive": 45.18},
-    {"name": "Ethylene glycol", "polar": 18.19, "dispersive": 29.81},
-    {"name": "Toluene", "polar": 0.00, "dispersive": 28.50},
-    {"name": "Hexane", "polar": 0.00, "dispersive": 18.40},
-    {"name": "Chloroform", "polar": 0.00, "dispersive": 27.20},
-]
 
-# Total surface tension of the preset liquids, mN/m at 20 C (from the same tables as the splits;
-# isopropanol, acetone and hexane from https://surface-tension.de/). The polar and dispersive
-# parts of a preset must add up to this; a preset whose parts do not is
-# flagged in the app.
-LITERATURE_TOTALS: dict[str, float] = {
-    "Water": 72.8,
-    "Ethanol": 23.2,
-    "Isopropanol (IPA)": 23.0,
-    "Acetone": 25.2,
-    "Diiodomethane": 50.8,
-    "Formamide": 58.0,
-    "Ethylene glycol": 48.0,
-    "Toluene": 28.5,
-    "Hexane": 18.43,
-    "Chloroform": 27.2,
-}
+def load_presets(filename: str) -> list[dict]:
+    """The rows of a preset CSV as dicts: the numeric columns as floats, empty cells as None."""
+    numeric = {"polar", "dispersive", "theta", "literature_total"}
+    rows = []
+    with open(_APP_DIR / filename, encoding="utf-8", newline="") as handle:
+        for raw in csv.DictReader(handle):
+            row = {}
+            for key, value in raw.items():
+                value = (value or "").strip()
+                row[key] = (float(value) if key in numeric else value) if value else None
+            rows.append(row)
+    return rows
 
-# Where the preset data lives (it is Python data in this file, not an Excel or CSV file) and the
-# page the values were tabulated from. Shown as links in the app.
-DATA_FILE_URL = (
-    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/"
-    "apps/Wetting_envelope/data_manager.py"
-)
-SOURCE_PAGE_URL = "https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/"
 
-_ZDZIENNICKA = "Zdziennicka et al., Colloids Surf. A 529 (2017) 864 (20 °C)"
-_HWANG = "Hwang et al., J. Ind. Eng. Chem. 17 (2011) 125 (20 °C)"
-
-# Where the polar/dispersive split of a preset comes from (tabulated at jikangroup.com, see above).
-# Presets not listed here keep the values the app shipped with: their split has no recorded source.
-SPLIT_SOURCES: dict[str, str] = {
-    "Water": _ZDZIENNICKA,
-    "Ethanol": _ZDZIENNICKA,
-    "Ethylene glycol": _ZDZIENNICKA,
-    "Diiodomethane": _ZDZIENNICKA,
-    "Formamide": _ZDZIENNICKA,
-    "Toluene": _HWANG,
-    "Chloroform": _HWANG,
-}
+PRESET_MATERIALS: list[dict] = load_presets(MATERIAL_PRESETS_FILE)
+PRESET_SOLVENTS: list[dict] = load_presets(SOLVENT_PRESETS_FILE)
+DATA_FILE_URL = f"{GITHUB_BLOB_URL}/{SOLVENT_PRESETS_FILE}"
+MATERIALS_FILE_URL = f"{GITHUB_BLOB_URL}/{MATERIAL_PRESETS_FILE}"
 
 
 def solvent_preset_note(name: str) -> str:
@@ -143,15 +101,15 @@ def solvent_preset_note(name: str) -> str:
     if preset is None:
         return ""
     total = preset["polar"] + preset["dispersive"]
-    literature = LITERATURE_TOTALS.get(name)
-    source = SPLIT_SOURCES.get(name, "the split has no recorded source")
+    source = preset.get("source") or "the split has no recorded source"
     note = f"Polar + dispersive = {total:.1f} mN/m; {source}."
-    if name in SPLIT_SOURCES:
-        note += " Tabulated at the page linked below."
+    literature = preset.get("literature_total")
     if literature is not None:
         note += f" Literature total {literature:g} mN/m."
         if abs(total - literature) > 1.0:
             note += " These values do not add up to it: check them before relying on this liquid."
+    if preset.get("note"):
+        note += f" {preset['note']}."
     return note
 
 
