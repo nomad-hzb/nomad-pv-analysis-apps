@@ -19,6 +19,14 @@ sys.modules["dm_eqe"] = _dm
 sys.modules["data_manager"] = _dm
 _spec.loader.exec_module(_dm)
 
+# plot_manager is tested too: load it from this app the same way, under a unique name.
+sys.modules.pop("plot_manager", None)
+_pm_spec = importlib.util.spec_from_file_location("pm_eqe", _APP_DIR / "plot_manager.py")
+_pm = importlib.util.module_from_spec(_pm_spec)
+sys.modules["pm_eqe"] = _pm
+sys.modules["plot_manager"] = _pm
+_pm_spec.loader.exec_module(_pm)
+
 from data_manager import EQEDataManager  # noqa: E402
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
