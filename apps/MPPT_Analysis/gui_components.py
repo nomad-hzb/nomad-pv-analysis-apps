@@ -31,6 +31,22 @@ def _html_float_format(value):
     return f"{value:.4f}"
 
 
+def _show_figure(holder: list, figures) -> None:
+    """Display figures as FigureWidgets and keep them in `holder`, closing the ones from the
+    previous call first: clear_output only hides a widget, so every redraw (a slider tick,
+    a parameter edit) would otherwise leave one more live widget in the kernel and the browser."""
+    for old in holder:
+        try:
+            old.close()
+        except Exception:  # noqa: BLE001 - freeing memory must never break the plot
+            pass
+    holder.clear()
+    for fig in figures:
+        widget = go.FigureWidget(fig)
+        holder.append(widget)
+        display(widget)
+
+
 class GUIComponents:
     """Creates and manages GUI components for the MPPT Analysis App"""
 
@@ -39,6 +55,10 @@ class GUIComponents:
         self.data_manager = data_manager
         self.plot_manager = plot_manager
         self.app_controller = app_controller
+        # the FigureWidgets currently shown (replaced, and closed, on every redraw)
+        self._preview_figure: list = []
+        self._curve_figures: list = []
+        self._histogram_figure: list = []
 
     def create_batch_tab(self):
         """Create the batch selection tab"""
@@ -751,7 +771,7 @@ class GUIComponents:
                     height=560,
                     margin=dict(t=40),
                 )
-                display(go.FigureWidget(fig))
+                _show_figure(self._preview_figure, [fig])
                 if fit is None:
                     n_selected = (len(y_data) - start) if end is None else (end - start + 1)
                     if n_selected < 2:
@@ -1154,8 +1174,7 @@ class GUIComponents:
                             # go.FigureWidget renders via the ipywidgets comm protocol; a
                             # plain go.Figure relies on a notebook mimetype renderer that
                             # isn't guaranteed to be registered (see commit 8928055).
-                            for fig in figs:
-                                display(go.FigureWidget(fig))
+                            _show_figure(self._curve_figures, figs)
                         else:
                             print("⚠️ No curve data to plot.")
                     except Exception as e:
@@ -1171,7 +1190,7 @@ class GUIComponents:
                             list(histogram_param_selector.value)
                         )
                         if fig is not None:
-                            display(go.FigureWidget(fig))
+                            _show_figure(self._histogram_figure, [fig])
                         else:
                             print("⚠️ No histogram data available for the selected parameter(s).")
                     except Exception as e:
