@@ -93,6 +93,47 @@ PRESET_SOLVENTS: list[dict] = [
     {"name": "Chloroform", "polar": 3.80, "dispersive": 23.70},
 ]
 
+# Total surface tension of the preset liquids, mN/m at 20 C (https://surface-tension.de/). The polar
+# and dispersive parts of a preset must add up to this; a preset whose parts do not is flagged in the
+# app.
+LITERATURE_TOTALS: dict[str, float] = {
+    "Water": 72.8,
+    "Ethanol": 22.1,
+    "Isopropanol (IPA)": 23.0,
+    "Acetone": 25.2,
+    "Diiodomethane": 50.8,
+    "Formamide": 58.2,
+    "Ethylene glycol": 47.7,
+    "Toluene": 28.4,
+    "Hexane": 18.43,
+    "Chloroform": 27.5,
+}
+
+# Where the polar/dispersive split of a preset comes from. Presets not listed here keep the values
+# the app shipped with: the split has no recorded source.
+SPLIT_SOURCES: dict[str, str] = {
+    "Ethanol": "Accu Dyne Test table of surface tension components (accudynetest.com)",
+    "Ethylene glycol": "Accu Dyne Test table of surface tension components (accudynetest.com)",
+}
+
+
+def solvent_preset_note(name: str) -> str:
+    """One line for the app under the solvent preset: where the values come from and whether
+    they add up to the literature total."""
+    preset = get_preset_solvent(name)
+    if preset is None:
+        return ""
+    total = preset["polar"] + preset["dispersive"]
+    literature = LITERATURE_TOTALS.get(name)
+    source = SPLIT_SOURCES.get(name, "the split has no recorded source")
+    note = f"Polar + dispersive = {total:.1f} mN/m; {source}."
+    if literature is not None:
+        note += f" Literature total {literature:g} mN/m (surface-tension.de, 20 °C)."
+        if abs(total - literature) > 1.0:
+            note += " These values do not add up to it: check them before relying on this liquid."
+    return note
+
+
 # Names used by the preset dropdowns as a sentinel for "nothing selected"
 _NO_SELECTION = "-- select preset --"
 

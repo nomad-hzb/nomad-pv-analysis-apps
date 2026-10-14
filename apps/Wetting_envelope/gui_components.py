@@ -10,6 +10,7 @@ Each panel exposes a .widget property. The key UX changes vs v1:
 
 from __future__ import annotations
 
+import html
 import logging
 
 import data_manager as dm
@@ -245,6 +246,7 @@ class SolventPanel:
             style={"description_width": "55px"},
         )
         self._preset_dd.observe(self._on_preset_change, names="value")
+        self._source_note = widgets.HTML("")
 
         self._name = widgets.Text(
             value="",
@@ -284,10 +286,12 @@ class SolventPanel:
     def _on_preset_change(self, change) -> None:
         preset = dm.get_preset_solvent(change["new"])
         if preset is None:
+            self._source_note.value = ""
             return
         self._name.value = preset["name"]
         self._polar.value = preset["polar"]
         self._dispersive.value = preset["dispersive"]
+        self._source_note.value = f"<div style='color:#666;font-size:0.9em'>{html.escape(dm.solvent_preset_note(preset['name']))}</div>"
 
     def _on_add(self, _b) -> None:
         ok, msg = self._dm.add_solvent(
@@ -312,6 +316,7 @@ class SolventPanel:
                 _section_header("Solvents / Liquid Points"),
                 _subheader("Pick a preset or enter values manually:"),
                 self._preset_dd,
+                self._source_note,
                 self._name,
                 widgets.HBox([self._polar, self._dispersive]),
                 self._add_btn,

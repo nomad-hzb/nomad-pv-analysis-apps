@@ -123,3 +123,13 @@ def test_presets_with_a_sourced_split_add_up_to_the_literature_total():
     by_name = {s["name"]: s for s in PRESET_SOLVENTS}
     for name, total in totals.items():
         assert by_name[name]["polar"] + by_name[name]["dispersive"] == pytest.approx(total, abs=1.0)
+
+
+def test_preset_note_says_where_values_come_from_and_flags_sums_that_do_not_match():
+    from data_manager import solvent_preset_note
+
+    assert "Accu Dyne" in solvent_preset_note("Ethanol")
+    assert "do not add up" not in solvent_preset_note("Ethanol")
+    assert "do not add up" in solvent_preset_note("Acetone")
+    assert "do not add up" in solvent_preset_note("Isopropanol (IPA)")
+    assert solvent_preset_note("nothing") == ""
