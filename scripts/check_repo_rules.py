@@ -39,7 +39,6 @@ NO_MANUAL_YET = {
     "App_dashboard",
     "ISA_Previewer",
     "Thickness_tracer",
-    "bitmap_maker",
     "smart_databaser",
 }
 
