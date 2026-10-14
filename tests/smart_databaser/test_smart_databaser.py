@@ -2517,7 +2517,7 @@ def test_initialize_ui_auto_applies_default_sample_setup():
         patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]),
     ):
         main_interface = initialize_ui("url", "token")
-    sample_setup = main_interface.children[2]
+    sample_setup = main_interface.children[3]
     assert len(sample_setup.state.samples) == sample_setup.total_samples_input.value > 0
 
 
@@ -2550,11 +2550,11 @@ def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
         patch("data_manager.get_all_uploads", return_value=[]),
     ):
         main_interface = initialize_ui("url", "token")
-        # app.py's main_interface.children order: h2, h4, sample_setup, template_picker,
-        # quick_fill_all_button, h4, sequence_builder, ... (progress_bar now lives inside
-        # finish_section, not at the top level)
-        template_picker = main_interface.children[3]
-        sequence_builder = main_interface.children[6]
+        # app.py's main_interface.children order: h2, manual panel, h4, sample_setup,
+        # template_picker, quick_fill_all_button, h4, sequence_builder, ... (progress_bar now
+        # lives inside finish_section, not at the top level)
+        template_picker = main_interface.children[4]
+        sequence_builder = main_interface.children[7]
         assert len(sequence_builder.rows_box.children) == 0
 
         batch_picker = template_picker.children[2]
@@ -2575,8 +2575,8 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
     ):
         main_interface = initialize_ui("url", "token")
         # ... h4 Varying Fields, caption, refresh_matrix_button, refresh_matrix_status, matrix
-        refresh_matrix_button = main_interface.children[9]
-        matrix = main_interface.children[11]
+        refresh_matrix_button = main_interface.children[10]
+        matrix = main_interface.children[12]
         assert refresh_matrix_button.description == "Refresh Table"
         assert len(matrix.children) == 1  # placeholder, nothing varies yet
 
