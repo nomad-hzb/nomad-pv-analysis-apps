@@ -19,7 +19,7 @@ import openpyxl
 import pandas as pd
 import requests
 from data_manager import DataManager
-from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, InfoUI, PlotUI, SaveUI
+from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, PlotUI, SaveUI
 from IPython.display import Javascript, Markdown, clear_output, display
 from openpyxl.utils.dataframe import dataframe_to_rows
 from plot_manager import plotting_string_action
@@ -34,6 +34,7 @@ from utils import (
 
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,6 @@ class JVAnalysisApp:
         self.plot_ui = PlotUI()
         self.save_ui = SaveUI()
         self.color_selector = ColorSchemeSelector()
-        self.info_ui = InfoUI()  # ADD this line
 
         # Give FilterUI access to DataManager for preview functionality
         self.filter_ui.data_manager = self.data_manager
@@ -1107,7 +1107,7 @@ If you tested specific variables or conditions for each sample, please write the
         header = widgets.HBox(
             [
                 widgets.HTML("<h1 style='margin: 0; flex-grow: 1;'>JV Analysis Dashboard</h1>"),
-                self.info_ui.get_widget(),
+                manual_panel(__file__),
             ],
             layout=widgets.Layout(
                 justify_content="space-between", align_items="flex-start", margin="0 0 20px 0"
@@ -1116,7 +1116,7 @@ If you tested specific variables or conditions for each sample, please write the
 
         return widgets.VBox(
             [
-                header,  # Header with What's New and Manual buttons
+                header,  # Title and the Manual button
                 self.auth_ui.get_widget(),
                 self.tabs,
                 self.js_output,
