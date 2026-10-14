@@ -6,6 +6,8 @@ import gui_components as gui
 import ipywidgets as widgets
 from IPython.display import Javascript, display
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,4 +120,4 @@ def setup_app():
         show_main()
 
     show_main()
-    return widgets.VBox([root, js_output])
+    return widgets.VBox([manual_panel(__file__), root, js_output])
