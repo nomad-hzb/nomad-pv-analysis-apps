@@ -80,7 +80,7 @@ class WidgetFactory:
 
 
 class AuthenticationUI:
-    """Handles authentication UI — token only (ENV var or secrets.py fallback)."""
+    """Handles authentication UI — token only (environment variable)."""
 
     def __init__(self, auth_manager):
         self.auth_manager = auth_manager
@@ -95,13 +95,13 @@ class AuthenticationUI:
         hysprint_utils import, so the panel can never disagree with the
         endpoint the requests go to.
         """
-        return self.auth_manager.base_url.split("://", 1)[-1].rstrip("/")
+        return self.auth_manager.url_base.split("://", 1)[-1].rstrip("/")
 
     def _create_widgets(self):
         self.auth_button = WidgetFactory.create_button(
             description="Authenticate",
             button_style="info",
-            tooltip="Authenticate via NOMAD_CLIENT_ACCESS_TOKEN env var or secrets.py",
+            tooltip="Authenticate with the NOMAD_CLIENT_ACCESS_TOKEN environment variable",
         )
 
         self.auth_status_label = widgets.Label(
@@ -115,9 +115,8 @@ class AuthenticationUI:
         self.settings_content = widgets.VBox(
             [
                 widgets.HTML(
-                    f"<p><strong>Oasis:</strong> {self.auth_manager.base_url}"
-                    f"{self.auth_manager.api_endpoint}</p>"
-                    "<p><em>Auth: NOMAD_CLIENT_ACCESS_TOKEN env var (secrets.py as fallback)</em></p>"
+                    f"<p><strong>Oasis:</strong> {self.auth_manager.url}</p>"
+                    "<p><em>Auth: NOMAD_CLIENT_ACCESS_TOKEN environment variable</em></p>"
                 ),
                 self.auth_button,
                 self.auth_status_label,

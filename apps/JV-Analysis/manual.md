@@ -19,7 +19,7 @@ direction (forward or reverse) come from the entry.
 The tabs are used from left to right.
 
 1. **Authenticate.** The app uses your NOMAD token from the environment
-   (`NOMAD_CLIENT_ACCESS_TOKEN`, with `secrets.py` as a fallback). *Connection Settings* shows
+   (`NOMAD_CLIENT_ACCESS_TOKEN`). *Connection Settings* shows
    which Oasis it talks to and has the *Authenticate* button. On the Oasis this happens
    without you doing anything.
 2. **Select Upload.** Select one or several batches and click *Load Data*. *Load demo data*
