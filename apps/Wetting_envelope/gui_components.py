@@ -10,6 +10,7 @@ Each panel exposes a .widget property. The key UX changes vs v1:
 
 from __future__ import annotations
 
+import html
 import logging
 
 import data_manager as dm
@@ -152,7 +153,7 @@ class MaterialPanel:
         self._theta = widgets.FloatSlider(
             value=0.0,
             min=0.0,
-            max=180.0,
+            max=dm.MAX_THETA,
             step=1.0,
             description="θ (°):",
             continuous_update=False,
@@ -209,8 +210,23 @@ class MaterialPanel:
     def widget(self) -> widgets.VBox:
         return widgets.VBox(
             [
+                *(
+                    [
+                        widgets.HTML(
+                            "<div style='color:#c0392b'>Could not read the presets: "
+                            f"{html.escape('; '.join(dm.PRESET_LOAD_ERRORS))}</div>"
+                        )
+                    ]
+                    if dm.PRESET_LOAD_ERRORS
+                    else []
+                ),
                 _section_header("Materials"),
                 _subheader("Pick a preset or enter values manually:"),
+                widgets.HTML(
+                    "<div style='color:#666;font-size:0.9em'>The presets are in "
+                    f"<a href='{dm.MATERIALS_FILE_URL}' target='_blank'>material_presets.csv</a> "
+                    "(the source of these values is not recorded yet).</div>"
+                ),
                 self._preset_dd,
                 self._name,
                 widgets.HBox([self._polar, self._dispersive]),
@@ -245,6 +261,7 @@ class SolventPanel:
             style={"description_width": "55px"},
         )
         self._preset_dd.observe(self._on_preset_change, names="value")
+        self._source_note = widgets.HTML("")
 
         self._name = widgets.Text(
             value="",
@@ -284,10 +301,24 @@ class SolventPanel:
     def _on_preset_change(self, change) -> None:
         preset = dm.get_preset_solvent(change["new"])
         if preset is None:
+            self._source_note.value = ""
             return
         self._name.value = preset["name"]
         self._polar.value = preset["polar"]
         self._dispersive.value = preset["dispersive"]
+        note = html.escape(dm.solvent_preset_note(preset["name"]))
+        url = preset.get("reference_url")
+        reference = (
+            f"<a href='{html.escape(url)}' target='_blank'>Reference for these values</a> | "
+            if url
+            else ""
+        )
+        self._source_note.value = (
+            f"<div style='color:#666;font-size:0.9em'>{note}<br>"
+            f"{reference}"
+            f"<a href='{dm.DATA_FILE_URL}' target='_blank'>All solvent presets "
+            f"(solvent_presets.csv)</a></div>"
+        )
 
     def _on_add(self, _b) -> None:
         ok, msg = self._dm.add_solvent(
@@ -311,7 +342,13 @@ class SolventPanel:
             [
                 _section_header("Solvents / Liquid Points"),
                 _subheader("Pick a preset or enter values manually:"),
+                widgets.HTML(
+                    "<div style='color:#666;font-size:0.9em'>The presets are in "
+                    f"<a href='{dm.DATA_FILE_URL}' target='_blank'>solvent_presets.csv</a> "
+                    "(with the source and reference of every row).</div>"
+                ),
                 self._preset_dd,
+                self._source_note,
                 self._name,
                 widgets.HBox([self._polar, self._dispersive]),
                 self._add_btn,
@@ -346,17 +383,6 @@ class PlotSettingsPanel:
             description="Title:",
             layout=widgets.Layout(width="320px"),
         )
-        self._correction_exp = widgets.FloatSlider(
-            value=2.0,
-            min=1.0,
-            max=2.0,
-            step=0.01,
-            description="Correction exp:",
-            continuous_update=False,
-            layout=widgets.Layout(width="360px"),
-            style={"description_width": "110px"},
-        )
-
         self._plot_btn = widgets.Button(
             description="Plot",
             button_style="success",
@@ -378,7 +404,6 @@ class PlotSettingsPanel:
             materials=self._dm.materials,
             solvents=self._dm.solvents,
             title=self._title.value,
-            correction_exp=self._correction_exp.value,
         )
         self._plot_panel.show_figure(fig)
 
@@ -394,7 +419,6 @@ class PlotSettingsPanel:
             [
                 _section_header("Plot Settings"),
                 self._title,
-                self._correction_exp,
                 widgets.HBox([self._plot_btn, self._clear_btn], layout=widgets.Layout(gap="8px")),
             ],
             layout=widgets.Layout(padding="8px"),

@@ -2378,3 +2378,13 @@ def test_filters_tab_has_a_confirm_button_that_flags_unconfirmed_edits(monkeypat
     gui.set_filters_pending(False)
     assert gui.filters_pending_html.value == ""
     assert gui.confirm_filters_button.button_style == "success"
+
+
+def test_batch_column_is_the_selected_batch_not_the_sample_name_prefix():
+    from data_manager import DataManager
+
+    manager = DataManager.__new__(DataManager)
+    manager.sample_batch = {"HZB_ThNa_1_4_C-15": "HZB_ThNa_1_1"}
+    assert manager.batch_for_sample("HZB_ThNa_1_4_C-15") == "HZB_ThNa_1_1"
+    # a sample the selection does not know falls back to the sub-batch in its id
+    assert manager.batch_for_sample("HZB_ThNa_1_4_C-16") == "HZB_ThNa_1_4"

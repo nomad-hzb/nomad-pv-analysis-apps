@@ -6,6 +6,8 @@ No physics/data logic – delegates to data_manager and plot_manager.
 
 from __future__ import annotations
 
+import base64
+import html
 import io
 import logging
 from datetime import datetime
@@ -15,9 +17,34 @@ import data_manager as dm
 import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
+import plotly.graph_objects as go
+from IPython.display import HTML
 from IPython.display import display as ipydisplay
 
 logger = logging.getLogger(__name__)
+
+# One tolerance for "the percentages add up to 100": the status line and Calculate both use it.
+PERCENT_TOLERANCE = 0.5
+
+
+def _say(out: widgets.Output, text: str, kind: str = "info") -> None:
+    """Show a message in an Output (logging alone is never rendered under Voila)."""
+    color = {"error": "#c0392b", "warning": "#b36b00", "success": "#2c7a4b"}.get(kind, "#555")
+    with out:
+        out.clear_output()
+        ipydisplay(HTML(f"<p style='color:{color}'>{html.escape(text)}</p>"))
+    logger.log(logging.WARNING if kind in ("warning", "error") else logging.INFO, text)
+
+
+def _download_link(csv_text: str, filename: str) -> HTML:
+    """A real browser download (a data URI), instead of a file written on the server."""
+    payload = base64.b64encode(csv_text.encode("utf-8")).decode()
+    return HTML(
+        f'<a download="{html.escape(filename)}" href="data:text/csv;base64,{payload}" '
+        f'style="font-weight:bold">Download {html.escape(filename)}</a>'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared widget factory (lightweight, no hysprint_utils dependency)
 # ---------------------------------------------------------------------------
@@ -27,6 +54,33 @@ _WIDE = widgets.Layout(width="400px")
 _MEDIUM = widgets.Layout(width="260px")
 _OUTPUT_STD = widgets.Layout(min_height="200px", overflow="auto", border="1px solid #ddd")
 _OUTPUT_PLOT = widgets.Layout(min_height="400px")
+
+
+_REPO_URL = (
+    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Hansen_green_calculator"
+)
+
+
+def _data_link(*files: str) -> widgets.HTML:
+    """A line linking the database file(s) a tab reads, in the repository on GitHub."""
+    links = " | ".join(
+        f"<a href='{_REPO_URL}/{name}' target='_blank'>{html.escape(name)}</a>" for name in files
+    )
+    return widgets.HTML(
+        f"<div style='color:#666;font-size:0.9em'>Data used in this tab: {links} (GitHub)</div>"
+    )
+
+
+def _solvent_options(df: pd.DataFrame, with_cas: bool = False) -> list:
+    """(label, row index) options for a solvent pick list."""
+    options = []
+    for idx, row in df.iterrows():
+        label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
+        cas = row.get("CAS", "")
+        if with_cas and cas and str(cas) != "nan":
+            label += f" (CAS {cas})"
+        options.append((label, idx))
+    return options
 
 
 def _btn(label: str, style: str = "primary", **kw) -> widgets.Button:
@@ -84,6 +138,7 @@ class SolventExplorerPanel:
                     "<p style='color:grey;font-size:0.9em'>Search for compounds to highlight them. "
                     "All solvents remain visible.</p>"
                 ),
+                _data_link("db.csv"),
                 controls,
                 self._plot_out,
                 _sep("Search info"),
@@ -100,7 +155,7 @@ class SolventExplorerPanel:
             with self._info_out:
                 self._info_out.clear_output()
                 if matches.empty:
-                    logger.info("No compounds found for '%s'.", term)
+                    ipydisplay(HTML(f"<i>No compounds found for '{html.escape(term)}'.</i>"))
                 else:
                     cols = [c for c in ["Name", "CAS", "D", "P", "H"] if c in matches.columns]
                     ipydisplay(matches[cols].head(10))
@@ -123,10 +178,13 @@ class SolventExplorerPanel:
 
 
 class DataVisualizerPanel:
-    """2D scatter + correlation matrix for db.csv."""
+    """2D scatter (click points to collect them in a table) + correlation matrix for db.csv."""
 
     def __init__(self, solvent_dm: dm.SolventDataManager):
         self._dm = solvent_dm
+        self._selected: list = []  # row labels of the selected solvents, in click order
+        self._plot_index: list = []  # row label of every point of the plotted trace
+        self._figure = None
         self._build()
 
     def _build(self):
@@ -142,40 +200,142 @@ class DataVisualizerPanel:
         self._c_dd = _dd(color_opts, "Colour:", value="None")
         self._scatter_out = widgets.Output(layout=_OUTPUT_PLOT)
         self._corr_out = widgets.Output(layout=_OUTPUT_PLOT)
-        self._corr_btn = _btn("Show Correlation Matrix", "info")
+        self._corr_btn = _btn(
+            "Show Correlation Matrix", "info", layout=widgets.Layout(width="210px")
+        )
+        self._table_out = widgets.Output()
+        self._download_out = widgets.Output()
+        self._reset_btn = _btn("Reset table", "warning")
+        self._download_btn = _btn("Download CSV", "info")
+        self._only_plotted = widgets.Checkbox(
+            value=False,
+            description="Only the plotted values (name and plotted columns) in table and CSV",
+            indent=False,
+            layout=widgets.Layout(width="auto"),
+        )
 
         for w in (self._x_dd, self._y_dd, self._c_dd):
             w.observe(self._refresh_scatter, names="value")
         self._corr_btn.on_click(self._show_corr)
+        self._reset_btn.on_click(self._on_reset)
+        self._download_btn.on_click(self._on_download)
+        self._only_plotted.observe(lambda _change: self._refresh_table(), names="value")
 
         controls = widgets.HBox([self._x_dd, self._y_dd, self._c_dd])
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>2D Property Explorer</h3>"),
+                _data_link("db.csv"),
                 controls,
+                widgets.HTML(
+                    "<p style='color:grey;font-size:0.9em'>Click a point to add it to the table "
+                    "below; selected points are drawn in orange-red.</p>"
+                ),
                 self._scatter_out,
+                widgets.HBox([self._reset_btn, self._download_btn, self._only_plotted]),
+                self._download_out,
+                self._table_out,
                 _sep(),
+                widgets.HTML(
+                    "<p style='color:#b36b00;font-size:0.9em'>The correlation matrix draws one "
+                    "small plot for every pair of columns (over 100 plots). It can take a while "
+                    "and make your computer and browser slow.</p>"
+                ),
                 widgets.HBox([self._corr_btn]),
                 self._corr_out,
             ]
         )
         self._refresh_scatter(None)
+        self._refresh_table()
+
+    # -- scatter --------------------------------------------------------------
+    def _plot_columns(self):
+        x, y = self._x_dd.value, self._y_dd.value
+        c = self._c_dd.value if self._c_dd.value != "None" else None
+        return x, y, c
 
     def _refresh_scatter(self, _):
-        x = self._x_dd.value
-        y = self._y_dd.value
-        c = self._c_dd.value if self._c_dd.value != "None" else None
-        if x and y:
-            fig = pm.scatter_2d(self._dm.data, x, y, c)
-            with self._scatter_out:
-                self._scatter_out.clear_output(wait=True)
-                ipydisplay(fig)
+        x, y, c = self._plot_columns()
+        if not (x and y):
+            return
+        fig = pm.scatter_2d(self._dm.data, x, y, c, selected=self._selected)
+        cols = [x, y] + ([c] if c else [])
+        self._plot_index = list(self._dm.data.dropna(subset=cols).index)
+        self._figure = go.FigureWidget(fig)
+        self._figure.data[0].on_click(self._on_point_click)
+        with self._scatter_out:
+            self._scatter_out.clear_output(wait=True)
+            ipydisplay(self._figure)
+        self._refresh_table()
 
+    def _on_point_click(self, _trace, points, _state):
+        for point in points.point_inds:
+            label = self._plot_index[point]
+            if label not in self._selected:
+                self._selected.append(label)
+        self._update_selection()
+
+    def _update_selection(self):
+        """Redraw the selected points and the table (the plot itself stays as it is)."""
+        x, y, _c = self._plot_columns()
+        chosen = self._dm.data.loc[self._selected]
+        with self._figure.batch_update():
+            self._figure.data[1].x = chosen[x]
+            self._figure.data[1].y = chosen[y]
+            self._figure.data[1].text = chosen.get("Name")
+        self._refresh_table()
+
+    def _on_reset(self, _):
+        self._selected = []
+        if self._figure is not None:
+            self._update_selection()
+        self._download_out.clear_output()
+
+    # -- table and download -----------------------------------------------------
+    def _selected_table(self, only_plotted: bool = False) -> pd.DataFrame:
+        table = self._dm.data.loc[self._selected]
+        if only_plotted:
+            x, y, c = self._plot_columns()
+            keep = ["Name", x, y] + ([c] if c else [])
+            table = table[[col for col in dict.fromkeys(keep) if col in table.columns]]
+        return table
+
+    def _refresh_table(self):
+        with self._table_out:
+            self._table_out.clear_output(wait=True)
+            if not self._selected:
+                ipydisplay(HTML("<i>No points selected yet: click points in the plot.</i>"))
+                return
+            ipydisplay(HTML(f"<b>{len(self._selected)} selected</b>"))
+            ipydisplay(self._selected_table(self._only_plotted.value))
+
+    def _on_download(self, _):
+        self._download_out.clear_output()
+        if not self._selected:
+            _say(self._download_out, "Select at least one point first.", "warning")
+            return
+        csv_text = self._selected_table(self._only_plotted.value).to_csv(index=False)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with self._download_out:
+            ipydisplay(_download_link(csv_text, f"hansen_selected_{stamp}.csv"))
+
+    # -- correlation matrix -----------------------------------------------------
     def _show_corr(self, _):
-        fig = pm.correlation_matrix(self._dm.data)
-        with self._corr_out:
-            self._corr_out.clear_output(wait=True)
-            ipydisplay(fig)
+        columns = self._dm.numeric_columns
+        self._corr_btn.disabled = True
+        _say(
+            self._corr_out,
+            f"Building the correlation matrix ({len(columns)} x {len(columns)} plots)... "
+            "this can take a while and may make your computer slow. Please wait.",
+            "warning",
+        )
+        try:
+            fig = pm.correlation_matrix(self._dm.data[columns])
+            with self._corr_out:
+                self._corr_out.clear_output(wait=True)
+                ipydisplay(fig)
+        finally:
+            self._corr_btn.disabled = False
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +356,9 @@ class BlendCalculatorPanel:
         # Search
         self._search = widgets.Text(placeholder="Search …", description="Search:", layout=_WIDE)
         self._results = widgets.Select(
-            options=[], description="Results:", layout=widgets.Layout(width="500px", height="120px")
+            options=_solvent_options(self._dm.all_solvents(), with_cas=True),
+            description="Results:",
+            layout=widgets.Layout(width="500px", height="120px"),
         )
         self._add_btn = _btn("Add Solvent", "success")
         self._selected_list = widgets.Select(
@@ -285,6 +447,7 @@ class BlendCalculatorPanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Blend Optimiser</h3>"),
+                _data_link("db.csv"),
                 widgets.HBox([left, right]),
                 _sep("Results"),
                 self._result_out,
@@ -294,18 +457,9 @@ class BlendCalculatorPanel:
         )
 
     def _on_search(self, change):
-        matches = self._dm.search(change["new"])
-        if matches.empty:
-            self._results.options = []
-        else:
-            opts = []
-            for idx, row in matches.iterrows():
-                label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
-                cas = row.get("CAS", "")
-                if cas and str(cas) != "nan":
-                    label += f" (CAS {cas})"
-                opts.append((label, idx))
-            self._results.options = opts
+        term = change["new"]
+        matches = self._dm.search(term) if term.strip() else self._dm.all_solvents()
+        self._results.options = _solvent_options(matches, with_cas=True)
 
     def _on_add(self, _):
         if self._results.value is None:
@@ -332,7 +486,7 @@ class BlendCalculatorPanel:
 
     def _on_calc(self, _):
         if not self._selected:
-            logger.warning("No solvents selected.")
+            _say(self._result_out, "No solvents selected: add at least one solvent.", "warning")
             return
         sel_df = pd.DataFrame([info["data"] for info in self._selected.values()])
         target = [self._d_sl.value, self._p_sl.value, self._h_sl.value]
@@ -384,8 +538,13 @@ class BlendCalculatorPanel:
             ipydisplay(fig)
 
     def _on_save(self, _):
+        self._download_area.clear_output()
         if self._last_result is None:
-            logger.warning("No blend result to save; run optimisation first.")
+            _say(
+                self._download_area,
+                "No blend result to save yet: run the optimisation first.",
+                "warning",
+            )
             return
         csv_str = dm.export_blend_csv(
             self._last_result["target"],
@@ -395,10 +554,8 @@ class BlendCalculatorPanel:
             self._last_result["sel_df"],
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"blend_results_{timestamp}.csv"
-        with open(fname, "w") as f:
-            f.write(csv_str)
-        logger.info("Blend results saved to %s", fname)
+        with self._download_area:
+            ipydisplay(_download_link(csv_str, f"blend_results_{timestamp}.csv"))
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +575,9 @@ class MixtureCalculatorPanel:
     def _build(self):
         self._search = widgets.Text(placeholder="Search …", description="Search:", layout=_WIDE)
         self._results = widgets.Select(
-            options=[], description="Results:", layout=widgets.Layout(width="500px", height="120px")
+            options=_solvent_options(self._dm.all_solvents()),
+            description="Results:",
+            layout=widgets.Layout(width="500px", height="120px"),
         )
         self._add_btn = _btn("Add Solvent", "success")
         self._solvent_container = widgets.VBox(
@@ -467,6 +626,7 @@ class MixtureCalculatorPanel:
                     "<p style='color:grey;font-size:0.9em'>"
                     "Enter volume percentages (must sum to 100 %) then click Calculate.</p>"
                 ),
+                _data_link("db.csv"),
                 widgets.HBox([left, right]),
                 _sep("Results"),
                 self._result_out,
@@ -474,15 +634,9 @@ class MixtureCalculatorPanel:
         )
 
     def _on_search(self, change):
-        matches = self._dm.search(change["new"])
-        if matches.empty:
-            self._results.options = []
-        else:
-            opts = []
-            for idx, row in matches.iterrows():
-                label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
-                opts.append((label, idx))
-            self._results.options = opts
+        term = change["new"]
+        matches = self._dm.search(term) if term.strip() else self._dm.all_solvents()
+        self._results.options = _solvent_options(matches)
 
     def _on_add(self, _):
         if self._results.value is None:
@@ -533,12 +687,12 @@ class MixtureCalculatorPanel:
         total = sum(info["percentage"] for info in self._selected.values())
         if not self._selected:
             self._status.value = '<p style="color:gray">No solvents selected.</p>'
-        elif abs(total - 100) < 0.01:
+        elif abs(total - 100) <= PERCENT_TOLERANCE:
             self._status.value = f'<p style="color:green">✓ Total: {total:.1f} %</p>'
         else:
             self._status.value = (
                 f'<p style="color:{"orange" if total < 100 else "red"}">'
-                f"Total: {total:.1f} % (must be 100 %)</p>"
+                f"Total: {total:.1f} % (must be 100 %, within {PERCENT_TOLERANCE} %)</p>"
             )
 
     def _on_clear(self, _):
@@ -548,11 +702,15 @@ class MixtureCalculatorPanel:
 
     def _on_calc(self, _):
         if not self._selected:
-            logger.warning("No solvents added to mixture.")
+            _say(self._result_out, "No solvents added to the mixture.", "warning")
             return
         total = sum(info["percentage"] for info in self._selected.values())
-        if abs(total - 100) > 0.5:
-            logger.warning("Percentages sum to %.1f %%; adjust to 100 %%.", total)
+        if abs(total - 100) > PERCENT_TOLERANCE:
+            _say(
+                self._result_out,
+                f"The percentages add up to {total:.1f} %: adjust them to 100 %.",
+                "warning",
+            )
             return
 
         avgs = dm.weighted_average(self._selected, self._dm.data)
@@ -568,8 +726,13 @@ class MixtureCalculatorPanel:
             ipydisplay(pd.DataFrame(rows))
 
     def _on_save(self, _):
+        self._download_area.clear_output()
         if not self._last_results:
-            logger.warning("No mixture result to save; calculate first.")
+            _say(
+                self._download_area,
+                "No mixture result to save yet: click Calculate first.",
+                "warning",
+            )
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         fname = f"mixture_averages_{timestamp}.csv"
@@ -589,9 +752,8 @@ class MixtureCalculatorPanel:
                 if v is not None
             ]
         ).to_csv(buf, index=False)
-        with open(fname, "w") as f:
-            f.write(buf.getvalue())
-        logger.info("Mixture averages saved to %s", fname)
+        with self._download_area:
+            ipydisplay(_download_link(buf.getvalue(), fname))
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +782,7 @@ class InksPanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Inks – Hansen Space (coloured by Solute)</h3>"),
+                _data_link("PlottedInks.xlsx"),
                 widgets.HBox([self._sphere_toggle]),
                 self._plot_out,
             ]
@@ -681,6 +844,7 @@ class PerovskitePanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Perovskite Solute / Solvent – Hansen Space</h3>"),
+                _data_link("PlottedInks.xlsx"),
                 controls,
                 self._plot_out,
             ]
@@ -710,7 +874,7 @@ class PerovskitePanel:
         solutes = list(self._solute_box.value)
         df = self._dm.get_sheet(sheet)
         if df.empty:
-            logger.warning("Sheet '%s' not loaded or empty.", sheet)
+            _say(self._plot_out, f"Sheet '{sheet}' is not loaded or has no rows.", "error")
             return
         fig = pm.perovskite_3d(df, color_by=color, selected_solutes=solutes or None)
         with self._plot_out:

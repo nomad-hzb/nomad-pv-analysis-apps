@@ -206,3 +206,11 @@ output/**/*.json
 # Usage logs written by hysprint_utils.usage_tracking
 shared/log/
 apps/Entry_Auditor/entry_auditor_backups/
+
+# Preset databases that belong to an app (everything else *.csv stays ignored)
+!apps/Wetting_envelope/solvent_presets.csv
+!apps/Wetting_envelope/material_presets.csv
+
+# Personal Claude Code permissions (each person keeps their own; not shared)
+.claude/settings.json
+.claude/settings.local.json

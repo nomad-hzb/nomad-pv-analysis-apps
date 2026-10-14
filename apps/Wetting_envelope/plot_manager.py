@@ -36,7 +36,6 @@ class WettingPlotManager:
         materials: list[Material],
         solvents: list[Solvent],
         title: str = "Wetting Envelope",
-        correction_exp: float = 2.0,
     ) -> go.Figure:
         """
         Build the complete wetting-envelope figure.
@@ -54,7 +53,7 @@ class WettingPlotManager:
         # --- envelope curves ------------------------------------------------
         for i, mat in enumerate(materials):
             colour = _COLOURS[i % len(_COLOURS)]
-            x, y = WettingCalculator.envelope_xy(mat, correction_exp)
+            x, y = WettingCalculator.envelope_xy(mat)
 
             label = mat.name if mat.theta == 0.0 else f"{mat.name} (θ={mat.theta}°)"
 

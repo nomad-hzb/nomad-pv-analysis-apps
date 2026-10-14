@@ -62,6 +62,20 @@ STYLE = """
     color: #333;
 }
 .category-title i { color: #3498db; margin-right: 8px; }
+.category-toggle.widget-button, .category-toggle {
+    background: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-bottom: 2px solid #eee !important;
+    border-radius: 0 !important;
+    color: #333 !important;
+    font-size: 1.5em !important;
+    font-weight: bold !important;
+    text-align: left !important;
+    padding: 4px 0 6px 0 !important;
+    margin: 0 0 10px 0 !important;
+}
+.category-toggle i { color: #3498db !important; }
 .app-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 340px));
@@ -269,10 +283,24 @@ def create_back_button(on_click) -> widgets.Button:
 
 
 def create_category_section(title: str, cards: list) -> widgets.VBox:
-    icon = CATEGORY_ICONS.get(title, "fa-folder")
-    header = widgets.HTML(f'<h2 class="category-title"><i class="fas {icon}"></i>{title}</h2>')
+    """A group of cards under a header that opens and closes it (open to start with)."""
+    icon = CATEGORY_ICONS.get(title, "fa-folder").removeprefix("fa-")
+    header = widgets.Button(
+        description=title,
+        icon=icon,
+        tooltip="Click to close or open this group",
+        layout=widgets.Layout(width="100%", height="auto", justify_content="flex-start"),
+    )
+    header.add_class("category-toggle")
     grid = widgets.GridBox(cards, layout=widgets.Layout(width="100%"))
     grid.add_class("app-grid")
+
+    def toggle(_button) -> None:
+        opened = grid.layout.display == "none"
+        grid.layout.display = None if opened else "none"
+        header.icon = icon if opened else "chevron-right"
+
+    header.on_click(toggle)
     return widgets.VBox([header, grid], layout=widgets.Layout(margin="0 0 26px 0"))
 
 

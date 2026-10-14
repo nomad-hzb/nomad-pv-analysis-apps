@@ -15,6 +15,9 @@ also includes the user's own non public entries.
 
 import json
 import logging
+import os
+import time
+from contextlib import contextmanager
 
 import config
 import pandas as pd
@@ -23,6 +26,34 @@ from nomad_client import NomadClient
 from schema import get_nested_field
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _catalog_lock(catalog_path, timeout=10.0):
+    """An advisory lock next to the catalog (a file created exclusively); a lock left behind by
+    a crashed process is given up after the timeout."""
+    lock_path = f"{catalog_path}.lock"
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                try:
+                    os.remove(lock_path)  # stale
+                except OSError:
+                    pass
+                raise TimeoutError("the catalog is locked by another session")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
 
 
 class DataManager:
@@ -36,10 +67,18 @@ class DataManager:
         self.catalog_by_path = {c["path"]: c for c in self.catalog}
 
     def _load_catalog(self):
+        """The saved catalog. A missing file is an empty catalog; a file that exists but cannot
+        be read is also empty for this session, but then catalog_error is set and nothing is
+        written back over it."""
+        self.catalog_error = None
         try:
             with open(config.CATALOG_PATH, encoding="utf-8") as fh:
                 return json.load(fh)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError) as exc:
+            self.catalog_error = str(exc)
+            logger.warning("Could not read the field catalog: %s", exc)
             return []
 
     def _owner(self):
@@ -90,15 +129,31 @@ class DataManager:
             entry["scale"] = spec.scale
         self.catalog.append(entry)
         self.catalog_by_path[spec.path] = entry
-        self._save_catalog()
+        self._save_catalog(entry)
         return True
 
-    def _save_catalog(self):
+    def _save_catalog(self, new_entry):
+        """Add one entry to the shared catalog file without losing what other users saved: the
+        file is read again under a lock, the entry is merged in and written atomically (temp
+        file, then replace). A catalog that could not be read is never overwritten."""
+        if self.catalog_error:
+            self._log(f"Catalog not saved: the existing file is unreadable ({self.catalog_error}).")
+            return
         try:
-            with open(config.CATALOG_PATH, "w", encoding="utf-8") as fh:
-                json.dump(self.catalog, fh, indent=2)
-            self._log(f"Catalog saved with {len(self.catalog)} entries.")
-        except OSError as exc:
+            with _catalog_lock(config.CATALOG_PATH):
+                try:
+                    with open(config.CATALOG_PATH, encoding="utf-8") as fh:
+                        current = json.load(fh)
+                except FileNotFoundError:
+                    current = []
+                if not any(e.get("path") == new_entry["path"] for e in current):
+                    current.append(new_entry)
+                tmp_path = f"{config.CATALOG_PATH}.{os.getpid()}.tmp"
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    json.dump(current, fh, indent=2)
+                os.replace(tmp_path, config.CATALOG_PATH)
+            self._log(f"Catalog saved with {len(current)} entries.")
+        except (OSError, ValueError, TimeoutError) as exc:
             self._log(f"Could not save catalog: {exc}")
 
     def remove_field(self, output_name):
@@ -215,6 +270,11 @@ class DataManager:
             if total is None:
                 total = pg.get("total", len(page))
                 self._log(f"Total matching entries: {total}")
+                if total > config.MAX_ENTRIES:
+                    raise ValueError(
+                        f"{total:,} entries match, more than the limit of "
+                        f"{config.MAX_ENTRIES:,}. Choose an entry type to narrow the extraction."
+                    )
             if progress:
                 progress(
                     min(len(entries), total),

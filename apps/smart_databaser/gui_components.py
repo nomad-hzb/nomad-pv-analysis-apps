@@ -4,6 +4,7 @@
 # library.
 
 import base64
+import html
 import json
 import logging
 import os
@@ -129,9 +130,9 @@ def _provenance_summary_html(specs) -> widgets.HTML:
     first non-manual provenance found among the given specs."""
     for spec in specs:
         if spec.provenance is not None and spec.provenance.source != "manual":
-            tag = f"Sourced from Batch {spec.provenance.source_batch_id}"
+            tag = f"Sourced from Batch {html.escape(str(spec.provenance.source_batch_id))}"
             if spec.provenance.source_sample_id:
-                tag += f", Sample {spec.provenance.source_sample_id}"
+                tag += f", Sample {html.escape(str(spec.provenance.source_sample_id))}"
             return widgets.HTML(value=f"<span style='color:#7f8c8d; font-size:11px;'>{tag}</span>")
     return widgets.HTML(value="")
 
@@ -612,7 +613,7 @@ def _build_download_link_html(state: ExperimentState) -> tuple[str, bytes, str]:
     voila_experiment_app.py _create_download_link pattern) isn't duplicated."""
     workbook = generate_full_workbook(state)
     data = workbook_to_bytes(workbook)
-    filename = build_experiment_filename()
+    filename = build_experiment_filename(state)
     b64_data = base64.b64encode(data).decode()
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     link_html = (
@@ -744,12 +745,14 @@ def create_finish_section(
         try:
             upload_experiment_excel(url, token, upload_dropdown.value, filename, data)
             status_output.value += (
-                f"<br><span style='color:#2c7a4b'>Uploaded {filename} to "
-                f"{upload_dropdown.value}.</span>"
+                f"<br><span style='color:#2c7a4b'>Uploaded {html.escape(filename)} to "
+                f"{html.escape(str(upload_dropdown.value))}.</span>"
             )
             return True
         except Exception as exc:
-            status_output.value += f"<br><span style='color:#c0392b'>Upload failed: {exc}</span>"
+            status_output.value += (
+                f"<br><span style='color:#c0392b'>Upload failed: {html.escape(str(exc))}</span>"
+            )
             return False
 
     def run_download_only():
@@ -902,7 +905,9 @@ def _create_batch_picker(
         try:
             result_message = on_load(batch_id)
         except Exception as exc:
-            status.value = warning + f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            status.value = (
+                warning + f"<span style='color:#c0392b'>Failed: {html.escape(str(exc))}</span>"
+            )
             return
         status.value = warning + (result_message or "<span style='color:#2c7a4b'>Done.</span>")
 
@@ -1668,9 +1673,9 @@ class NudgePopupFlow(widgets.VBox):
 
         provenance_html = widgets.HTML(value="")
         if spec.provenance is not None and spec.provenance.source != "manual":
-            tag = f"from Batch {spec.provenance.source_batch_id}"
+            tag = f"from Batch {html.escape(str(spec.provenance.source_batch_id))}"
             if spec.provenance.source_sample_id:
-                tag += f", Sample {spec.provenance.source_sample_id}"
+                tag += f", Sample {html.escape(str(spec.provenance.source_sample_id))}"
             provenance_html.value = f"<span style='color:#7f8c8d; font-size:11px;'>{tag}</span>"
 
         confirm_button = widgets.Button(description="Confirm & Next", button_style="success")
@@ -2026,7 +2031,9 @@ class _ProcessRow(widgets.VBox):
                 builder.url, builder.token, builder.cache, template_batch_id, process.process_type
             )
         except Exception as exc:
-            self._adopt_status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            self._adopt_status.value = (
+                f"<span style='color:#c0392b'>Failed: {html.escape(str(exc))}</span>"
+            )
             return
         if not occurrences:
             self._adopt_status.value = (
@@ -2063,7 +2070,9 @@ class _ProcessRow(widgets.VBox):
                 occurrence,
             )
         except Exception as exc:
-            self._adopt_status.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            self._adopt_status.value = (
+                f"<span style='color:#c0392b'>Failed: {html.escape(str(exc))}</span>"
+            )
             return
         self._adopt_status.value = (
             f"<span style='color:#2c7a4b'>Filled {written} field(s) from Batch {batch_id}.</span>"
@@ -2324,16 +2333,21 @@ def _debug_report_to_html(report: dict, process_type: str, occurrence_label: str
         )
         for row in report["mapped"]:
             value = row["value"]
-            value_html = "<i style='color:#c0392b'>not found</i>" if value is None else str(value)
+            value_html = (
+                "<i style='color:#c0392b'>not found</i>"
+                if value is None
+                else html.escape(str(value))
+            )
             unverified = (
                 ""
                 if row["unit_verified"]
                 else " <span style='color:#c0392b'>(unit unverified)</span>"
             )
             rows.append(
-                f"<tr><td style='padding:2px 8px;'>{row['excel_key']}</td>"
+                f"<tr><td style='padding:2px 8px;'>{html.escape(str(row['excel_key']))}</td>"
                 f"<td style='padding:2px 8px;'>{value_html}{unverified}</td>"
-                f"<td style='padding:2px 8px; color:#7f8c8d;'>{', '.join(row['paths'])}</td></tr>"
+                f"<td style='padding:2px 8px; color:#7f8c8d;'>"
+                f"{html.escape(', '.join(map(str, row['paths'])))}</td></tr>"
             )
         rows.append("</table>")
 
@@ -2348,8 +2362,8 @@ def _debug_report_to_html(report: dict, process_type: str, occurrence_label: str
         )
         for row in report["ignored"]:
             rows.append(
-                f"<tr><td style='padding:2px 8px;'>{row['path']}</td>"
-                f"<td style='padding:2px 8px;'>{row['value']}</td></tr>"
+                f"<tr><td style='padding:2px 8px;'>{html.escape(str(row['path']))}</td>"
+                f"<td style='padding:2px 8px;'>{html.escape(str(row['value']))}</td></tr>"
             )
         rows.append("</table>")
     return "".join(rows)
@@ -2468,7 +2482,9 @@ class BatchFieldMappingDebugPanel(widgets.VBox):
                 source = steps[occurrence]
                 occurrence_label = f"occurrence {occurrence + 1} of {len(steps)}"
         except Exception as exc:
-            self.report_output.value = f"<span style='color:#c0392b'>Failed: {exc}</span>"
+            self.report_output.value = (
+                f"<span style='color:#c0392b'>Failed: {html.escape(str(exc))}</span>"
+            )
             return
         report = build_field_mapping_debug_report(process_type, source)
         self.report_output.value = _debug_report_to_html(report, process_type, occurrence_label)

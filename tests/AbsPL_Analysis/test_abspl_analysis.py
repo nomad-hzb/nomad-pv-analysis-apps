@@ -101,3 +101,17 @@ def test_numeric_columns_present(loaded_manager):
 
 def test_measurement_type_constant():
     assert MEASUREMENT_TYPE == "HySprint_AbsPLMeasurement"
+
+
+def test_pivot_keeps_every_measurement_of_every_group():
+    """Groups of different sizes were cut to the length of the first group."""
+    manager = AbsPlDataManager("http://x", "t")
+    manager.data = pd.DataFrame(
+        {"group": ["a", "a", "b", "b", "b", "b", None], "plqy": [1, 2, 3, 4, 5, 6, 7.0]}
+    )
+    pivot = manager.get_pivot_table("plqy", "group")
+    assert list(pivot.columns) == ["a", "b", "(none)"]
+    assert pivot["b"].tolist() == [3, 4, 5, 6]
+    assert pivot["a"].dropna().tolist() == [1, 2]
+    assert pivot["(none)"].dropna().tolist() == [7.0]
+    assert pivot.to_csv().count("\n") == 5  # header + 4 rows

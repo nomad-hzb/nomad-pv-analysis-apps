@@ -3,6 +3,7 @@
 
 import getpass
 import logging
+import time
 
 import requests
 
@@ -303,6 +304,81 @@ def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
     data = _query_all(url, token, "entries/query", query)
     assert len(data) == 1
     return data[0]["entry_id"], data[0]["upload_id"]
+
+
+def get_upload_ids_for_samples(url, token, sample_ids):
+    """{sample lab_id: upload_id} for all samples in one query (paginated, with a timeout).
+
+    Samples without an entry are left out. Use this instead of one get_nomad_ids_of_entry call
+    per sample."""
+    sample_ids = list(sample_ids)
+    if not sample_ids:
+        return {}
+    query = {
+        "required": {"include": ["entry_id", "upload_id", "results.eln.lab_ids"]},
+        "owner": "visible",
+        "query": {"results.eln.lab_ids:any": sample_ids},
+        "pagination": {"page_size": DEFAULT_PAGE_SIZE},
+    }
+    wanted = set(sample_ids)
+    found = {}
+    for entry in _query_all(url, token, "entries/query", query):
+        upload_id = entry.get("upload_id")
+        lab_ids = ((entry.get("results") or {}).get("eln") or {}).get("lab_ids") or []
+        for lab_id in lab_ids:
+            if lab_id in wanted and upload_id:
+                found.setdefault(lab_id, upload_id)
+    return found
+
+
+def upload_raw_file_and_wait(
+    url,
+    token,
+    upload_id,
+    filename,
+    content,
+    mime_type,
+    poll_interval=2.0,
+    max_wait=900.0,
+    on_poll=None,
+):
+    """PUT one file (bytes) into an upload's raw folder and wait until NOMAD has processed it.
+
+    Raises requests.HTTPError when the PUT fails, RuntimeError when NOMAD reports the
+    processing as failed (with its message) and TimeoutError after max_wait seconds. The PUT
+    already starts processing on this NOMAD version; the one explicit process request after it
+    is tolerated to fail, the poll decides the outcome. on_poll(waited, max_wait), if given,
+    is called after each poll (for a progress bar)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    put_response = requests.put(
+        f"{url}/uploads/{upload_id}/raw/",
+        data={"wait_for_processing": False},
+        headers=headers,
+        files={"file": (filename, content, mime_type)},
+        timeout=REQUEST_TIMEOUT,
+    )
+    put_response.raise_for_status()
+    requests.post(
+        f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=REQUEST_TIMEOUT
+    )
+
+    waited = 0.0
+    while waited < max_wait:
+        time.sleep(poll_interval)
+        waited += poll_interval
+        response = requests.get(
+            f"{url}/uploads/{upload_id}", headers=headers, timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        upload = response.json()["data"]
+        if on_poll is not None:
+            on_poll(waited, max_wait)
+        if not upload["process_running"]:
+            if upload.get("process_status") == "FAILURE":
+                detail = upload.get("last_status_message") or "no message from NOMAD"
+                raise RuntimeError(f"NOMAD could not process {filename}: {detail}")
+            return
+    raise TimeoutError(f"processing of {filename} did not finish within {int(max_wait)} s")
 
 
 def get_sample_entry_links(url, token, sample_ids):

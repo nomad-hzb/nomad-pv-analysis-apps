@@ -62,6 +62,7 @@ class EQEDataManager:
         self.entries: pd.DataFrame | None = None  # 2-level: (sample_id, entry_idx)
         self.properties: pd.DataFrame | None = None  # 1-level: sample_id
         self.sample_ids: pd.Series | None = None
+        self.dropped_sample_ids: list[str] = []
 
     # ------------------------------------------------------------------
     # Properties
@@ -159,7 +160,15 @@ class EQEDataManager:
         entry_mi = pd.MultiIndex.from_tuples(entry_keys, names=["sample_id", "entry_idx"])
         self.entries = pd.DataFrame(entry_rows, index=entry_mi)
 
-        self.sample_ids = existing_sample_ids
+        # Only samples that kept at least one valid curve: the overview and the plots look every
+        # sample up in params, and one sample without curves raised a KeyError that stopped the
+        # whole data UI from rendering.
+        kept = pd.Series(self.params.index.get_level_values("sample_id").unique())
+        dropped = [sid for sid in existing_sample_ids if sid not in set(kept)]
+        if dropped:
+            logger.warning("Samples without a valid EQE curve are left out: %s", dropped)
+        self.dropped_sample_ids = dropped
+        self.sample_ids = kept
         self.properties = pd.DataFrame(
             {
                 "description": pd.Series(descriptions, dtype=str),

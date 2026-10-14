@@ -3,6 +3,7 @@
 import numpy as np
 import plot_manager as pm
 import plotly.graph_objects as go
+import pytest
 
 # ---------------------------------------------------------------------------
 # solvent_3d
@@ -142,3 +143,165 @@ class TestPerovskite3D:
         assert "Stable" in legend_names
         assert "Semi-stable" in legend_names
         assert "Not stable" in legend_names
+
+
+# ---------------------------------------------------------------------------
+# 6.5: envelope colours, Hansen-scaled spheres, Sheet3 columns, downloads
+# ---------------------------------------------------------------------------
+
+
+def _inks(order):
+    import pandas as pd
+
+    rows = []
+    for solute in order:
+        for k in range(3):
+            rows.append(
+                {
+                    "Solutes": solute,
+                    "D": 16.0 + k,
+                    "P": 8.0 + k,
+                    "H": 6.0 + k,
+                    "formatted_solvents": "x",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_envelope_colour_is_the_colour_of_the_solutes_points():
+    """Points are coloured in order of appearance, the envelopes were coloured alphabetically."""
+    fig = pm.inks_3d(_inks(["Zeta", "Alpha"]))
+    point_colour = {t.name: t.marker.color for t in fig.data if t.type == "scatter3d"}
+    for trace in fig.data:
+        if trace.type == "surface":
+            solute = trace.name.removesuffix("_envelope")
+            assert trace.colorscale[0][1].lower() == point_colour[solute].lower()
+
+
+def test_inks_are_plotted_in_hansen_scaled_space_with_the_real_d_in_the_hover():
+    fig = pm.inks_3d(_inks(["Alpha"]))
+    points = next(t for t in fig.data if t.type == "scatter3d")
+    assert list(points.x) == [32.0, 34.0, 36.0]  # 2 * D
+    assert list(points.customdata[:, 1]) == [16.0, 17.0, 18.0]  # D itself
+    assert fig.layout.scene.xaxis.title.text == "2·D"
+
+
+def test_enclosing_sphere_radius_is_a_hansen_distance_when_d_is_weighted():
+    import data_manager as dm
+    import pandas as pd
+
+    group = pd.DataFrame({"D": [0.0, 2.0], "P": [0.0, 0.0], "H": [0.0, 0.0]})
+    centre, radius = dm.calculate_enclosing_sphere(group, d_scale=dm.HANSEN_D_WEIGHT)
+    assert list(centre) == [2.0, 0.0, 0.0]  # centre in the 2*D space
+    assert radius == pytest.approx(2.0 * 1.05)  # |2 * (0 - 1)| = Ra between the points / 2
+
+
+def test_sheet3_column_names_are_normalised_to_the_sheet2_names():
+    import data_manager as dm
+    import pandas as pd
+
+    raw = pd.DataFrame(
+        {
+            "Solutes": ["A"],
+            "Solvents": ["DMF"],
+            "D": [1],
+            "P": [2],
+            "H": [3],
+            "bp": [150],
+            "Hov Temp": [25],
+            "MW": [73],
+            "Vis Temp": [20],
+        }
+    )
+    out = dm.normalise_perovskite_columns(raw)
+    assert {"Solute", "Solvent", "BP", "hov_temp", "mw", "vis_temp"} <= set(out.columns)
+    manager = dm.PerovskiteDataManager()
+    manager.sheet3 = out
+    assert manager.solute_list("Sheet3") == ["A"]
+    assert "BP" in manager.color_columns("Sheet3")
+
+
+def test_download_link_is_a_data_uri_with_the_csv():
+    import base64
+
+    import gui_components as gc
+
+    link = gc._download_link("a,b\n1,2\n", "x.csv").data
+    assert 'download="x.csv"' in link
+    payload = link.split("base64,")[1].split('"')[0]
+    assert base64.b64decode(payload).decode() == "a,b\n1,2\n"
+
+
+# ---------------------------------------------------------------------------
+# From testing: full pick lists, click selection, data links
+# ---------------------------------------------------------------------------
+
+
+def test_pick_lists_show_every_solvent_until_something_is_typed(loaded_solvent_dm):
+    import gui_components as gc
+
+    total = len(loaded_solvent_dm.data)
+    for panel in (
+        gc.BlendCalculatorPanel(loaded_solvent_dm),
+        gc.MixtureCalculatorPanel(loaded_solvent_dm),
+    ):
+        assert len(panel._results.options) == total
+        panel._on_search({"new": "acet"})
+        assert 0 < len(panel._results.options) < total
+        panel._on_search({"new": "  "})
+        assert len(panel._results.options) == total
+
+
+def test_scatter_has_an_empty_selection_trace_to_update_in_place(solvent_df):
+    fig = pm.scatter_2d(solvent_df, "D", "P", None, selected=[0, 1])
+    assert len(fig.data) == 2 and fig.data[1].name == "Selected"
+    assert len(fig.data[1].x) == 2
+    assert fig.data[1].marker.color == pm.SELECTED_COLOUR
+    assert len(pm.scatter_2d(solvent_df, "D", "P").data[1].x) == 0
+
+
+def test_clicking_points_collects_them_in_the_table_and_reset_empties_it(loaded_solvent_dm):
+    from types import SimpleNamespace
+
+    import gui_components as gc
+
+    panel = gc.DataVisualizerPanel(loaded_solvent_dm)
+    x, y = panel._x_dd.value, panel._y_dd.value
+    panel._on_point_click(None, SimpleNamespace(point_inds=[0, 1]), None)
+    panel._on_point_click(None, SimpleNamespace(point_inds=[1]), None)  # no duplicates
+    assert panel._selected == panel._plot_index[:2]
+    assert len(panel._figure.data[1].x) == 2
+    full = panel._selected_table()
+    assert len(full) == 2 and set(loaded_solvent_dm.data.columns) <= set(full.columns)
+    plotted = panel._selected_table(only_plotted=True)
+    assert list(plotted.columns) == ["Name", x, y]
+    panel._on_reset(None)
+    assert panel._selected == [] and len(panel._figure.data[1].x) == 0
+
+
+def test_every_tab_links_the_database_it_reads():
+    import gui_components as gc
+
+    link = gc._data_link("db.csv").value
+    assert (
+        "github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Hansen_green_calculator/db.csv"
+        in link
+    )
+
+
+def test_the_table_and_the_csv_follow_the_plotted_only_checkbox(loaded_solvent_dm):
+    from types import SimpleNamespace
+
+    import gui_components as gc
+
+    panel = gc.DataVisualizerPanel(loaded_solvent_dm)
+    panel._on_point_click(None, SimpleNamespace(point_inds=[0]), None)
+    shown = []
+    panel._table_out.append_display_data = lambda obj: None  # the table is rendered by display()
+    panel._selected_table = lambda only_plotted=False: (
+        shown.append(only_plotted) or panel._dm.data.iloc[:1]
+    )
+    panel._only_plotted.value = True
+    assert shown[-1] is True  # the table was redrawn with the checkbox on
+    panel._only_plotted.value = False
+    assert shown[-1] is False

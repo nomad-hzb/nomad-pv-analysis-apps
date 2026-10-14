@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "smart-databaser"
-version = "0.3.2"
+version = "0.4.0"
 description = "Live-autofilled NOMAD experiment Excel builder for HySPRINT"
 requires-python = ">=3.10"
 dependencies = [

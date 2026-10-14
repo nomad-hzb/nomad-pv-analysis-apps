@@ -20,12 +20,17 @@ class AuthResult:
     user: Optional[str]
     email: Optional[str]
     message: str
+    raw_token: Optional[str] = None
+    """The token that was tried, kept even when it could not be verified, so a later server
+    switch tries it again instead of staying anonymous for the whole session."""
+    reachable: bool = True
+    """False when the server could not be reached (as opposed to refusing the token)."""
 
 
 def authenticate(api_url, token=None, timeout=10):
     token = token or os.environ.get("NOMAD_CLIENT_ACCESS_TOKEN")
     if not token:
-        return AuthResult(False, None, None, None, "Not signed in. Using public data.")
+        return AuthResult(False, None, None, None, "Not signed in. Using public data.", None)
     try:
         resp = requests.get(
             f"{api_url.rstrip('/')}/users/me",
@@ -34,9 +39,31 @@ def authenticate(api_url, token=None, timeout=10):
         )
         resp.raise_for_status()
         info = resp.json()
-    except Exception:
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (401, 403):
+            return AuthResult(
+                False, None, None, None, "Token not valid on this server. Using public data.", token
+            )
         return AuthResult(
-            False, None, None, None, "Token not valid on this server. Using public data."
+            False,
+            None,
+            None,
+            None,
+            f"The server answered with an error ({status}) when checking the token. "
+            "Using public data for now.",
+            token,
+            reachable=False,
+        )
+    except Exception:  # noqa: BLE001 - timeouts, DNS, connection errors
+        return AuthResult(
+            False,
+            None,
+            None,
+            None,
+            "Could not reach the server to check the token. Using public data for now.",
+            token,
+            reachable=False,
         )
     user = info.get("name") or info.get("username") or "Unknown"
-    return AuthResult(True, token, user, info.get("email"), f"Authenticated as {user}.")
+    return AuthResult(True, token, user, info.get("email"), f"Authenticated as {user}.", token)

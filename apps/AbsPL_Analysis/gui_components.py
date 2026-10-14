@@ -178,14 +178,18 @@ class FilterPanel:
     def _apply(self, b):
         col = self._col_dd.value
         success, msg = self.dm.apply_filter(col, self._min_input.value, self._max_input.value)
-        logger.info("%s", msg)
+        with self._status_out:
+            self._status_out.clear_output()
+            print(msg)
         if success:
             self._update_range({"new": col})
 
     def _reset(self, b):
         self.dm.reset_filters()
         self._update_range({"new": self._col_dd.value})
-        logger.info("All filters reset. Original data restored.")
+        with self._status_out:
+            self._status_out.clear_output()
+            print("All filters reset. Original data restored.")
         with self._data_out:
             self._data_out.clear_output()
 
@@ -339,7 +343,9 @@ class SpectralPanel:
     def _plot(self, b):
         selected = list(self._variation_sel.value)
         if not selected:
-            logger.warning("No variation selected for plotting.")
+            with self._status_out:
+                self._status_out.clear_output()
+                print("Select at least one variation to plot.")
             return
 
         logger.info("Generating plot...")
@@ -468,7 +474,9 @@ class DataTablePanel:
         value_col = self._pivot_col_dd.value
         group_col = self._pivot_group_dd.value
         if not value_col:
-            logger.warning("No pivot column selected.")
+            with self._table_out:
+                self._table_out.clear_output(wait=True)
+                print("Select the column to pivot first.")
             return
         try:
             pivot = self.dm.get_pivot_table(value_col, group_col)
@@ -538,7 +546,7 @@ class StatisticsPanel:
         with self._stats_out:
             self._stats_out.clear_output(wait=True)
             if not col:
-                logger.warning("No column selected for statistics.")
+                print("Select a column for the statistics first.")
                 return
 
             ipydisplay(HTML(f"<h4>Overall statistics for {col}</h4>"))

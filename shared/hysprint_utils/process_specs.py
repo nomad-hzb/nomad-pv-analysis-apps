@@ -1384,6 +1384,8 @@ PROCESSES = {
             "config_defaults": {"solvents": 1, "solutes": 1, "precursors": 1},
         },
         "fields": {
+            "Datetime": {"test": "09.01.2026 10:19:00"},
+            "Operator": {"test": "MaxMustermann"},
             "Functional liquid name": {"test": "FL"},
             "Functional liquid volume [ml]": {"test": 25},
             "Dissolving temperature [°C]": {"test": 60},
@@ -1396,8 +1398,6 @@ PROCESSES = {
         },
         "indexed": {
             "solvents": [
-                {"excel_key": "Datetime", "test": lambda n: "09.01.2026 10:19:00"},
-                {"excel_key": "Operator", "test": lambda n: "MaxMustermann"},
                 {
                     "excel_key": "Solvent {n} name",
                     "test": lambda n: f"DMF {n}",
@@ -1427,10 +1427,8 @@ PROCESSES = {
         # NOTE: 0/59 covered on the autofill side - Ink Recycling is ingested by an
         # entirely separate mapper (nomad_hysprint.parsers.file_parser
         # .ink_recycling_mappers.map_ink_recycling), never fetched/mapped. No archive
-        # paths exist here yet; unchanged by this migration. "Datetime"/"Operator" are
-        # unusually repeated inside the solvents loop (once per solvent index) - this
-        # mirrors sheet_experiment.py's own (likely accidental, but behavior-preserving)
-        # original structure, not something introduced by this migration.
+        # paths exist here yet. "Datetime"/"Operator" used to sit inside the solvents loop, so the
+        # sheet had one pair per solvent (and none with 0 solvents); they are single columns now.
     },
 }
 
