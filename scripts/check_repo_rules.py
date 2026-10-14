@@ -37,7 +37,6 @@ KNOWN_EXCEPTIONS = {
 # check fails for an app that is listed but has a manual, so this list cannot go stale.
 NO_MANUAL_YET = {
     "App_dashboard",
-    "ISA_Previewer",
     "Thickness_tracer",
     "smart_databaser",
 }

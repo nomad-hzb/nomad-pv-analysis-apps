@@ -14,6 +14,8 @@ from insitu_analyser.timely_teller import TIMELYTELLER
 from insitu_analyser.utils.search_bar_widget import create_spinner
 from IPython.display import display
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 OVERFLOW_CSS = """
@@ -184,7 +186,15 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
     columns = [uploads_filter, uploads]
     if not upload_only:
         columns += [samples, measurements]
-    return widgets.VBox([widgets.HTML(OVERFLOW_CSS), widgets.HBox(columns), pixel_width, out])
+    return widgets.VBox(
+        [
+            widgets.HTML(OVERFLOW_CSS),
+            manual_panel(__file__),
+            widgets.HBox(columns),
+            pixel_width,
+            out,
+        ]
+    )
 
 
 def preselect_from_store(
