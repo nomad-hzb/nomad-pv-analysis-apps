@@ -237,3 +237,81 @@ def test_unknown_name_warns_and_changes_nothing(caplog):
         selection = select_dashboard(CATEGORIES, hide={"jv-analyzis"})
     assert selection.categories == CATEGORIES
     assert "jv-analyzis" in caplog.text
+
+
+def test_urls_are_percent_encoded():
+    entry = AppEntry("My App", "a b#c(1).ipynb", "x", "d", "fa-x")
+    url = build_voila_url(entry, "edgar", "uploads/up-1/apps")
+    assert url.endswith("/uploads/up-1/apps/My%20App/a%20b%23c%281%29.ipynb")
+
+
+def test_the_oasis_prefix_comes_from_the_api_endpoint():
+    import data_manager as dm_module
+
+    assert dm_module.OASIS_PREFIX == dm_module.API_ENDPOINT.split("/api/")[0]
+    assert dm_module.VOILA_PATH_TEMPLATE.startswith(dm_module.OASIS_PREFIX + "/north/user/")
+
+
+def test_group_order_puts_named_groups_first_and_keeps_the_rest_in_default_order(caplog):
+    from data_manager import order_categories, parse_name_order
+
+    categories = {"A": [], "B b": [], "C": [], "D": []}
+    order = parse_name_order("c, B B, nope")
+    assert list(order_categories(categories, order)) == ["C", "B b", "A", "D"]
+    assert any("nope" in r.message for r in caplog.records)
+    assert order_categories(categories, None) is categories
+    assert list(order_categories(categories, [])) == ["A", "B b", "C", "D"]
+
+
+def test_select_dashboard_applies_the_group_order_after_hiding():
+    from data_manager import select_dashboard
+
+    selection = select_dashboard(CATEGORIES, order=["utilities&calculators"])
+    assert list(selection.categories)[0] == "Utilities & Calculators"
+
+
+def test_a_group_header_closes_and_opens_its_cards():
+    import gui_components as gc
+    import ipywidgets as widgets
+
+    section = gc.create_category_section("Data Management", [widgets.HTML("x")])
+    header, grid = section.children
+    header.click()
+    assert grid.layout.display == "none"
+    header.click()
+    assert grid.layout.display in (None, "")
+
+
+def test_every_project_card_has_a_full_upload_folder_name_and_unique_names():
+    """A bare 22-character id cannot be opened; the folder is '<slug>-<id>'."""
+    import re
+
+    names = []
+    for project in PROJECTS:
+        for app in project.apps:
+            assert re.fullmatch(r"ml-[a-z0-9-]+-[0-9]*-?[A-Za-z0-9_-]{22}", app.upload_id), app.name
+            names.append(app.name)
+    assert len(names) == len(set(names)) == 8
+
+
+def test_project_cards_open_exactly_the_paths_of_the_ml_uploads():
+    cropper = "ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg"
+    features = "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg"
+    labeling = "ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA"
+    correlation = "ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA"
+    mask = "ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg"
+    profiles = "ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA"
+    expected = {
+        "1. Image Cropper": (cropper, "image_cropper.ipynb"),
+        "2. Feature Extraction": (features, "feature_extraction_app.ipynb"),
+        "3. PL Defect Analysis": (features, "pl_defect_voila_app.ipynb"),
+        "4. ML Model": (labeling, "nomad_ml_app.ipynb"),
+        "5. Correlation Analysis": (correlation, "correlation_analysis_app.ipynb"),
+        "6. PL ROI → JV Assignment": (mask, "ROI_JV_NOMAD_app.ipynb"),
+        "7. Section 1": (features, "section1_app.ipynb"),
+        "8. Profile Generator": (profiles, "profile_generator_app.ipynb"),
+    }
+    apps = {a.name: a for project in PROJECTS for a in project.apps}
+    for name, (folder, notebook) in expected.items():
+        url = build_voila_url(apps[name], "u", "unused")
+        assert url.endswith(f"/uploads/{folder}/{notebook}"), name

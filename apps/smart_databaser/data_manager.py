@@ -2,18 +2,18 @@
 # Zero widget imports. Experiment state model, no-clobber write path, NOMAD live queries +
 # session cache, and (in later implementation steps) Excel build/upload logic.
 
+import copy
 import io
 import json
 import logging
 import re
 import statistics
-import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import requests
 from alias_config import resolve_progress_units
 from excel_creator_modules import ExperimentExcelBuilder, add_experiment_sheet
 from openpyxl import Workbook
@@ -27,6 +27,7 @@ from hysprint_utils.api_calls import (
     get_entryid,
     get_ids_in_batch,
     get_processing_steps,
+    upload_raw_file_and_wait,
 )
 from hysprint_utils.process_specs import (
     ATMOSPHERIC_CONFIG_KEY,  # noqa: F401 (re-exported for gui_components)
@@ -610,6 +611,17 @@ def infer_config_from_source_step(process_type: str, step: dict) -> dict:
             if path_info is not None and _get_path_any(step, path_info[0]) is not None:
                 inferred[config_key] = True
                 break
+    # the atmospheric block applies to every real process; used when the step has such values
+    if process_type != "Experiment Info":
+        resolvers = _DERIVED_FIELDS.get(process_type, {})
+        for atmospheric_key in ATMOSPHERIC_FIELDS:
+            resolver = resolvers.get(atmospheric_key)
+            path_info = field_paths.get(atmospheric_key)
+            if (resolver is not None and resolver(step) is not None) or (
+                path_info is not None and _get_path_any(step, path_info[0]) is not None
+            ):
+                inferred[ATMOSPHERIC_CONFIG_KEY] = True
+                break
     return inferred
 
 
@@ -746,6 +758,8 @@ def autofill_experiment_info_from_batch(
         value = _get_path_any(source, paths)
         if value is None:
             continue
+        if spec.varies:
+            continue  # the user fills a varying field per sample
         value = _apply_multiplier("Experiment Info", field_key, value)
         provenance = FieldProvenance(source="batch_template", source_batch_id=batch_id)
         if set_field_if_empty(spec, value, provenance):
@@ -1031,8 +1045,8 @@ def autofill_process_from_batch(
     written = 0
     for field_key, value in values.items():
         spec = process.field_specs.get(field_key)
-        if spec is None:
-            continue
+        if spec is None or spec.varies:
+            continue  # a field marked "varies" is filled per sample, never by autofill
         provenance = FieldProvenance(
             source=provenance_source, source_batch_id=batch_id, source_sample_id=source_sample_id
         )
@@ -1276,6 +1290,28 @@ def clear_autofilled_value(spec: ProcessFieldSpec, sources: set[str]) -> None:
         spec.is_outlier = False
 
 
+@contextmanager
+def _undo_state_on_error(state: ExperimentState, process: "ProcessInstance | None" = None):
+    """If the block raises, put the state back as it was before it started (the process
+    sequence, the Experiment Info fields, the template marker and, when given, the one
+    process being changed), so a failed Replicate/Adopt does not leave a half-replaced
+    experiment behind."""
+    sequence = list(state.process_sequence)
+    info = copy.deepcopy(state.experiment_info_fields)
+    template = state.whole_experiment_template_batch_id
+    process_before = copy.deepcopy(process) if process is not None else None
+    try:
+        yield
+    except BaseException:
+        state.process_sequence = sequence
+        state.experiment_info_fields = info
+        state.whole_experiment_template_batch_id = template
+        if process is not None and process_before is not None:
+            for name in type(process).model_fields:
+                setattr(process, name, getattr(process_before, name))
+        raise
+
+
 def apply_whole_experiment_template(
     state: ExperimentState,
     url: str,
@@ -1305,21 +1341,22 @@ def apply_whole_experiment_template(
 
     Returns {sequence_index: fields_written} for every process that got at least one
     field written."""
-    state.process_sequence = build_process_sequence_from_batch(url, token, cache, batch_id)
-    rebuild_field_specs(state)
-    written_by_process: dict[int, int] = {}
-    total = len(state.process_sequence)
-    for done, process in enumerate(state.process_sequence, start=1):
-        occurrence = occurrence_index_for_process(state, process)
-        written = autofill_process_from_batch(
-            process, url, token, cache, batch_id, occurrence, provenance_source="batch_template"
-        )
-        if written:
-            written_by_process[process.sequence_index] = written
-        if progress_callback is not None:
-            progress_callback(done, total)
-    autofill_experiment_info_from_batch(state, url, token, cache, batch_id)
-    state.whole_experiment_template_batch_id = batch_id
+    with _undo_state_on_error(state):
+        state.process_sequence = build_process_sequence_from_batch(url, token, cache, batch_id)
+        rebuild_field_specs(state)
+        written_by_process: dict[int, int] = {}
+        total = len(state.process_sequence)
+        for done, process in enumerate(state.process_sequence, start=1):
+            occurrence = occurrence_index_for_process(state, process)
+            written = autofill_process_from_batch(
+                process, url, token, cache, batch_id, occurrence, provenance_source="batch_template"
+            )
+            if written:
+                written_by_process[process.sequence_index] = written
+            if progress_callback is not None:
+                progress_callback(done, total)
+        autofill_experiment_info_from_batch(state, url, token, cache, batch_id)
+        state.whole_experiment_template_batch_id = batch_id
     return written_by_process
 
 
@@ -1345,15 +1382,16 @@ def apply_process_override(
     occurrence actually has (see expand_process_config_for_source) - otherwise values
     beyond the target's current config count (e.g. a 2nd solvent) would be silently
     dropped since there'd be no field_spec slot to write them into."""
-    for spec in process.field_specs.values():
-        clear_autofilled_value(spec, {"batch_template", "process_override"})
-    if occurrence is None:
-        occurrence = occurrence_index_for_process(state, process)
-    expand_process_config_for_source(state, process, url, token, cache, batch_id, occurrence)
-    written = autofill_process_from_batch(
-        process, url, token, cache, batch_id, occurrence, provenance_source="process_override"
-    )
-    process.source_override_batch_id = batch_id
+    with _undo_state_on_error(state, process):
+        for spec in process.field_specs.values():
+            clear_autofilled_value(spec, {"batch_template", "process_override"})
+        if occurrence is None:
+            occurrence = occurrence_index_for_process(state, process)
+        expand_process_config_for_source(state, process, url, token, cache, batch_id, occurrence)
+        written = autofill_process_from_batch(
+            process, url, token, cache, batch_id, occurrence, provenance_source="process_override"
+        )
+        process.source_override_batch_id = batch_id
     return written
 
 
@@ -1980,12 +2018,18 @@ def workbook_to_bytes(workbook: Workbook) -> bytes:
     return buffer.getvalue()
 
 
-def build_experiment_filename() -> str:
-    """Reuses ExperimentExcelBuilder.save()'s exact filename convention
-    (YYYYMMDD_experiment_file.xlsx) - not File_Uploader's per-sample renaming scheme,
-    since NOMAD's parser for these files is keyed on structure/content, and the
-    date/time in the name is the de facto creation timestamp."""
-    return f"{datetime.now().strftime('%Y%m%d')}_experiment_file.xlsx"
+def build_experiment_filename(state: "ExperimentState | None" = None) -> str:
+    """YYYYMMDD_HHMMSS[_<Project>_<Batch>]_experiment_file.xlsx. The date prefix and the
+    "experiment_file.xlsx" ending are the convention NOMAD's parser knows; the time (and the
+    project/batch when the state is given) keep two experiments uploaded on the same day into
+    the same NOMAD upload from replacing each other's raw file."""
+    parts = [datetime.now().strftime("%Y%m%d_%H%M%S")]
+    if state is not None:
+        for key in ("Project_Name", "Batch"):
+            spec = state.experiment_info_fields.get(key)
+            if spec is not None and _is_filled(spec.value):
+                parts.append(re.sub(r"[^A-Za-z0-9._-]+", "-", str(spec.value)).strip("-"))
+    return "_".join(p for p in parts if p) + "_experiment_file.xlsx"
 
 
 # ---------------------------------------------------------------------------
@@ -2019,40 +2063,22 @@ def upload_experiment_excel(
     poll_interval_seconds: float = 2.0,
     max_poll_seconds: float = 120.0,
 ) -> None:
-    """PUTs the Excel's raw bytes into upload_id's /raw/ endpoint, triggers processing,
-    then polls until data.process_running is False. Raises requests.HTTPError if the PUT
-    itself fails, or TimeoutError if processing doesn't finish within max_poll_seconds.
+    """PUTs the Excel into upload_id and waits for NOMAD to process it (the shared
+    hysprint_utils.api_calls.upload_raw_file_and_wait). Raises requests.HTTPError if the PUT
+    fails, RuntimeError if NOMAD reports the processing as failed and TimeoutError if it does not
+    finish within max_poll_seconds.
 
-    The POST to /action/process deliberately does NOT raise_for_status(): live-reported
-    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that this call can return 400 even
-    though the upload proceeds and finishes processing normally - most likely because
-    PUTting the file already triggers processing automatically on this NOMAD version,
-    making the explicit trigger redundant/rejected. apps/File_Uploader/gui_components.py's
-    _process_upload (a real, working upload flow, live-verified independently) already
-    established this exact tolerant pattern - fire the POST, ignore its response, and
-    treat the polling loop below as the actual source of truth for success/failure."""
-    put_response = requests.put(
-        f"{url}/uploads/{upload_id}/raw/",
-        data={"wait_for_processing": False},
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": (filename, excel_bytes, UPLOAD_MIME_TYPE)},
+    The explicit /action/process request after the PUT is tolerated to fail: live-reported
+    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that it can return 400 although the upload
+    finishes processing normally, because the PUT already starts processing on this NOMAD version.
+    The poll is the source of truth."""
+    upload_raw_file_and_wait(
+        url,
+        token,
+        upload_id,
+        filename,
+        excel_bytes,
+        UPLOAD_MIME_TYPE,
+        poll_interval=poll_interval_seconds,
+        max_wait=max_poll_seconds,
     )
-    put_response.raise_for_status()
-
-    requests.post(
-        f"{url}/uploads/{upload_id}/action/process",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    elapsed = 0.0
-    while elapsed < max_poll_seconds:
-        time.sleep(poll_interval_seconds)
-        elapsed += poll_interval_seconds
-        status_response = requests.get(
-            f"{url}/uploads/{upload_id}", headers={"Authorization": f"Bearer {token}"}
-        )
-        status_response.raise_for_status()
-        if not status_response.json()["data"]["process_running"]:
-            return
-
-    raise TimeoutError(f"Upload {upload_id} processing did not finish within {max_poll_seconds}s")

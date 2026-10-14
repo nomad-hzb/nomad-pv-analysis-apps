@@ -46,6 +46,10 @@ SAMPLE_SIZE = 30
 # Page size for the full extraction run.
 PAGE_SIZE = 1000
 
+# An extraction larger than this is refused (a blank entry type on a big server would page through
+# millions of entries and fill the kernel's memory); narrow it with an entry type.
+MAX_ENTRIES = 100_000
+
 # Rows shown in the preview table.
 PREVIEW_ROWS = 15
 

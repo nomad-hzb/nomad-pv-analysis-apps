@@ -7,6 +7,9 @@ dependencies = [
     "requests",
     "pandas",
     "plotly",
+    "ipywidgets>=8.0",
+    "natsort>=8.0",
+    "pydantic>=2.0",
     # add any other shared deps here
 ]
 

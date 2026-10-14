@@ -60,8 +60,9 @@ def parse_xy_file(file_content: str, filename: str) -> tuple[list[float], list[f
     """Parse a .xy text file and return (x_data, y_data, metadata)."""
     lines = file_content.strip().split("\n")
     metadata: dict = {}
+    has_metadata_line = bool(lines) and lines[0].startswith("'Id:")
 
-    if lines and lines[0].startswith("'Id:"):
+    if has_metadata_line:
         metadata_line = lines[0].strip("'")
         pattern = r'(\w+):\s*"([^"]*)"'
         matches = re.findall(pattern, metadata_line)
@@ -69,7 +70,8 @@ def parse_xy_file(file_content: str, filename: str) -> tuple[list[float], list[f
 
     x_data: list[float] = []
     y_data: list[float] = []
-    for line in lines[1:]:
+    # a file without the 'Id:' metadata line starts with data: do not skip its first point
+    for line in lines[1 if has_metadata_line else 0 :]:
         if line.strip():
             try:
                 parts = line.split()
@@ -210,22 +212,29 @@ class XRDDataManager:
         return get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
 
     def to_csv_string(self) -> str:
-        """Export all loaded data as a CSV string."""
+        """Export all loaded data as a CSV string.
+
+        One row per data point: sample_id, variation, name, angle, intensity. A sample with
+        several measurements also gets a "measurement" column (its key); the sample id is not
+        repeated under a second name when the key is the sample id itself."""
         rows = []
+        several = any(key != entry.get("sample_id", key) for key, entry in self.data.items())
         for key, entry in self.data.items():
             angle = entry.get("angle") or []
             intensity = entry.get("intensity") or []
             for a, i in zip(angle, intensity):
-                rows.append(
+                row = {"sample_id": entry.get("sample_id", key)}
+                if several:
+                    row["measurement"] = key
+                row.update(
                     {
-                        "key": key,
-                        "sample_id": entry.get("sample_id", ""),
                         "variation": entry.get("variation", ""),
                         "name": entry.get("name", ""),
                         "angle": a,
                         "intensity": i,
                     }
                 )
+                rows.append(row)
         if not rows:
             return ""
-        return pd.DataFrame(rows).to_csv()
+        return pd.DataFrame(rows).to_csv(index=False)

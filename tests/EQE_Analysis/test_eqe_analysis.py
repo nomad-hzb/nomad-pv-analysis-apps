@@ -100,3 +100,64 @@ def test_curves_has_expected_columns(loaded_manager):
 
 def test_measurement_type_constant():
     assert MEASUREMENT_TYPE == "HySprint_EQEmeasurement"
+
+
+def _curve(wavelengths, jsc=18.0):
+    import numpy as np
+
+    wavelengths = list(wavelengths)
+    return {
+        "photon_energy_array": [1239.84 / w for w in wavelengths],
+        "wavelength_array": wavelengths,
+        "eqe_array": list(np.linspace(0.2, 0.9, len(wavelengths))),
+        "bandgap_eqe": 1.5,
+        "integrated_jsc": jsc,
+    }
+
+
+def _manager(tmp_path, measurements):
+    fx = tmp_path / "m.json"
+    fx.write_text(
+        json.dumps(
+            {
+                "descriptions": {sid: "d" for sid in measurements},
+                "measurements": {
+                    sid: [[{"name": sid, "description": "", "eqe_data": curves}]]
+                    for sid, curves in measurements.items()
+                },
+            }
+        )
+    )
+    dm = EQEDataManager()
+    assert dm.load_offline(fx)
+    return dm
+
+
+def test_grouped_curves_do_not_depend_on_the_stored_array_order(tmp_path):
+    """A curve stored ascending in wavelength (descending in energy) came out all NaN."""
+    import numpy as np
+    import plot_manager as pm
+
+    ascending = [620.0, 700.0, 800.0, 886.0]
+    dm = _manager(tmp_path, {"S1": [_curve(ascending)], "S2": [_curve(ascending[::-1])]})
+    dm.params["plot"] = True
+    for axis in ("wavelength_array", "photon_energy_array"):
+        fig = pm.plot_eqe_curves(
+            dm,
+            axis,
+            axis,
+            600,
+            400,
+            group_by_name=True,
+            use_std=True,
+            name_fn=lambda sample, name: "all",
+        )
+        central = next(t for t in fig.data if t.name == "all")
+        assert np.isfinite(np.asarray(central.y, dtype=float)).sum() > 100, axis
+
+
+def test_a_sample_without_a_valid_curve_does_not_break_the_overview(tmp_path):
+    dm = _manager(tmp_path, {"S1": [{"bad_field": 1}], "S2": [_curve([620.0, 886.0])]})
+    assert list(dm.sample_ids) == ["S2"]
+    assert dm.dropped_sample_ids == ["S1"]
+    assert "S2" in dm.get_overview_table().index.get_level_values(0)  # raised KeyError: 'S1'

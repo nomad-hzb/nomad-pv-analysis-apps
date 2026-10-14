@@ -30,6 +30,9 @@ class ExtractorGUI:
     def __init__(self, data_manager, auth=None):
         self.dm = data_manager
         self.auth = auth
+        # The token as given, whether or not the first server accepted it: every server switch
+        # verifies this one (the verified token is None after one failed check).
+        self._raw_token = getattr(auth, "raw_token", None) or data_manager.client.token
         self._build()
 
     # -- construction -----------------------------------------------------
@@ -201,7 +204,7 @@ class ExtractorGUI:
         url = change["new"]
         self.dm.set_server(url)
         # Same token, re-verify against the newly selected server.
-        self.auth = authenticate(url, token=self.dm.client.token)
+        self.auth = authenticate(url, token=self._raw_token)
         self.dm.client.set_token(self.auth.token)
         self.auth_html.value = self._auth_banner_html()
         # Apply the destination server's default scope.
