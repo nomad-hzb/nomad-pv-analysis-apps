@@ -648,9 +648,10 @@ class FittingModels:
                     for j in range(degree + 1):
                         peak_params[f"p{i}_c{j}"].set(value=fitted_coeffs[j])
                 else:
-                    # Start from zero and let fitter find values
+                    # Start from zero and let the fitter find the values. No bounds: counts
+                    # reach 1e5, and a coefficient's size depends on the x unit (c2 * 700^2)
                     for j in range(degree + 1):
-                        peak_params[f"p{i}_c{j}"].set(value=0.0, min=-1000, max=1000)
+                        peak_params[f"p{i}_c{j}"].set(value=0.0)
             elif peak_info["type"] == "Linear":
                 # Linear - initialize slope and intercept
                 peak_params[f"p{i}_slope"].set(value=0.0)

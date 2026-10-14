@@ -2,7 +2,6 @@
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import numpy as np
@@ -30,36 +29,8 @@ is shared with every other app's tests."""
 _DISPLACED: dict = {}
 """What sys.modules held under those bare names before we borrowed them."""
 
-_NO_LOG = object()
-
-
-def _stub_usage_log():
-    """data_manager calls hysprint_utils.access_token.log_notebook_usage() on import, which
-    appends to a real usage log. Hand it a no-op for the duration of the load instead."""
-    saved = {
-        name: sys.modules.get(name, _NO_LOG)
-        for name in ("hysprint_utils", "hysprint_utils.access_token")
-    }
-    package = sys.modules.get("hysprint_utils") or types.ModuleType("hysprint_utils")
-    if not hasattr(package, "__path__"):
-        package.__path__ = []
-    access_token = types.ModuleType("hysprint_utils.access_token")
-    access_token.log_notebook_usage = lambda *args, **kwargs: None
-    sys.modules["hysprint_utils"] = package
-    sys.modules["hysprint_utils.access_token"] = access_token
-    return saved
-
-
-def _restore(saved):
-    for name, module in saved.items():
-        if module is _NO_LOG:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
-
 
 def _load_all():
-    saved = _stub_usage_log()
     try:
         for name in _MODULE_ORDER:
             spec = importlib.util.spec_from_file_location(name, APP_DIR / f"{name}.py")
@@ -69,7 +40,6 @@ def _load_all():
             spec.loader.exec_module(module)
             _MODULES[name] = module
     finally:
-        _restore(saved)
         _release_bare_names()
 
 
