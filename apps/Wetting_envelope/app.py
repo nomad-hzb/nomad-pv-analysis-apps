@@ -15,6 +15,8 @@ import ipywidgets as widgets
 import plot_manager as pm  # noqa: F401
 from IPython.display import display as ipydisplay
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +47,7 @@ class WettingEnvelopeApp:
             layout=widgets.Layout(gap="16px", flex_wrap="wrap"),
         )
         app_layout = widgets.VBox(
-            [top_row, self._settings_panel.widget, self._plot_panel.widget],
+            [manual_panel(__file__), top_row, self._settings_panel.widget, self._plot_panel.widget],
             layout=widgets.Layout(padding="12px", gap="8px"),
         )
         ipydisplay(app_layout)

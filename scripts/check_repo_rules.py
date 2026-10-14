@@ -42,7 +42,6 @@ NO_MANUAL_YET = {
     "ISA_Previewer",
     "LCC_Calculator",
     "Thickness_tracer",
-    "Wetting_envelope",
     "bitmap_maker",
     "smart_databaser",
 }
