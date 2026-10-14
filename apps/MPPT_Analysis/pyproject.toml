@@ -10,6 +10,7 @@ dependencies = [
     "pandas",
     "numpy",
     "plotly",
+    "anywidget>=0.9",  # go.FigureWidget needs it
     "ipywidgets",
     "ipython",
     "notebook",
