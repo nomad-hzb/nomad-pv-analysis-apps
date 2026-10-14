@@ -295,16 +295,23 @@ def test_every_project_card_has_a_full_upload_folder_name_and_unique_names():
 
 
 def test_project_cards_open_exactly_the_paths_of_the_ml_uploads():
+    cropper = "ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg"
+    features = "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg"
+    labeling = "ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA"
+    correlation = "ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA"
+    mask = "ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg"
+    profiles = "ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA"
     expected = {
-        "1. Image Cropper": "uploads/ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg/image_cropper.ipynb",
-        "2. Feature Extraction": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/feature_extraction_app.ipynb",
-        "3. PL Defect Analysis": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/pl_defect_voila_app.ipynb",
-        "4. ML Model": "uploads/ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA/nomad_ml_app.ipynb",
-        "5. Correlation Analysis": "uploads/ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA/correlation_analysis_app.ipynb",
-        "6. PL ROI → JV Assignment": "uploads/ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg/ROI_JV_NOMAD_app.ipynb",
-        "7. Section 1": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/section1_app.ipynb",
-        "8. Profile Generator": "uploads/ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA/profile_generator_app.ipynb",
+        "1. Image Cropper": (cropper, "image_cropper.ipynb"),
+        "2. Feature Extraction": (features, "feature_extraction_app.ipynb"),
+        "3. PL Defect Analysis": (features, "pl_defect_voila_app.ipynb"),
+        "4. ML Model": (labeling, "nomad_ml_app.ipynb"),
+        "5. Correlation Analysis": (correlation, "correlation_analysis_app.ipynb"),
+        "6. PL ROI → JV Assignment": (mask, "ROI_JV_NOMAD_app.ipynb"),
+        "7. Section 1": (features, "section1_app.ipynb"),
+        "8. Profile Generator": (profiles, "profile_generator_app.ipynb"),
     }
     apps = {a.name: a for project in PROJECTS for a in project.apps}
-    for name, tail in expected.items():
-        assert build_voila_url(apps[name], "u", "unused").endswith("/" + tail), name
+    for name, (folder, notebook) in expected.items():
+        url = build_voila_url(apps[name], "u", "unused")
+        assert url.endswith(f"/uploads/{folder}/{notebook}"), name
