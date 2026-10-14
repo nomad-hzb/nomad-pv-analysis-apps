@@ -36,7 +36,6 @@ KNOWN_EXCEPTIONS = {
 # Apps that still have no manual.md (checklist M1..): remove an app here when its manual lands. The
 # check fails for an app that is listed but has a manual, so this list cannot go stale.
 NO_MANUAL_YET = {
-    "App_dashboard",
     "Thickness_tracer",
     "smart_databaser",
 }
