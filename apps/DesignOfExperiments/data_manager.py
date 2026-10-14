@@ -98,13 +98,6 @@ class Variable:
             log_scale=bool(data.get("log_scale", False)),
         )
 
-    def get_range(self) -> Union[Tuple[float, float], List[str]]:
-        """Get the range/domain of the variable."""
-        if self.type == VariableType.CATEGORICAL:
-            return self.categories
-        else:
-            return (self.min_value, self.max_value)
-
     def get_discrete_values(self) -> List[Union[float, str]]:
         """Get all possible discrete values for the variable."""
         if self.type == VariableType.CATEGORICAL:
@@ -203,10 +196,6 @@ class DataManager:
     def get_variable_names(self) -> List[str]:
         """Get list of all variable names."""
         return [v.name for v in self.variables]
-
-    def get_variables_by_type(self, var_type: VariableType) -> List[Variable]:
-        """Get all variables of a specific type."""
-        return [v for v in self.variables if v.type == var_type]
 
     def set_variables(self, variables: List[Dict[str, Any]]) -> Tuple[bool, str]:
         """Set variables from list of dictionaries."""

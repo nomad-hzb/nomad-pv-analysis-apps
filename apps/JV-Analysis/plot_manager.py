@@ -10,7 +10,6 @@ __created__ = "August 2025"
 
 import logging
 
-import pandas as pd
 from jv_curve_plots import JVCurvePlotsMixin
 from jv_stat_plots import (  # noqa: F401 (kept importable from here)
     StatPlotsMixin,
@@ -26,13 +25,6 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
-
-
-def _flatten_multiindex_columns(self, df):
-    """Flatten MultiIndex columns if they exist"""
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ["_".join(col).strip() for col in df.columns.values]
-    return df
 
 
 def _tag_omitted(figures, names):

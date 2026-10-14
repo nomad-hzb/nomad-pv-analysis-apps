@@ -12,7 +12,6 @@ import os
 import re
 from collections import defaultdict
 from io import BytesIO
-from pathlib import Path
 from zipfile import ZipFile
 
 try:
@@ -397,60 +396,6 @@ def split_json_by_sample(json_data):
             "entries": entries,
         }
     return result
-
-
-def format_measurement_for_display(measurement_id, entry):
-    return f"{measurement_id} (Card:{entry.get('card')}, Ch:{entry.get('channel')})"
-
-
-# ---------------------------------------------------------------------------
-# File-system loader (development / manual inspection only)
-# ---------------------------------------------------------------------------
-def load_json_file_sync(file_input_widget, filename):
-    """Synchronously read a named JSON file from a FileInput widget."""
-    try:
-        if hasattr(file_input_widget, "get_files"):
-            try:
-                for f in file_input_widget.get_files():
-                    if isinstance(f, dict) and f.get("name") == filename and f.get("file_obj"):
-                        return f["file_obj"].read()
-            except Exception:
-                pass
-        if hasattr(file_input_widget, "file_info"):
-            for fi in file_input_widget.file_info:
-                if fi.get("name") == filename and fi.get("file_obj"):
-                    try:
-                        return fi["file_obj"].read()
-                    except Exception:
-                        pass
-        return None
-    except Exception as exc:
-        logger.error("Error loading JSON file %s: %s", filename, exc)
-        return None
-
-
-def load_json_from_path(file_path):
-    """Load JSON from filesystem; returns (json_data, measurement_ids, is_valid)."""
-    try:
-        path = Path(file_path)
-        if not path.exists():
-            logger.error("File not found: %s", file_path)
-            return None, {}, False
-        file_content = path.read_bytes()
-        logger.debug("Loaded %d bytes from %s", len(file_content), file_path)
-        json_data, is_valid = prepare_json_file_content(file_content, path.name)
-        if is_valid and json_data:
-            measurements = extract_measurements_from_json(json_data)
-            logger.debug(
-                "Found %d measurements from %d samples",
-                len(measurements),
-                len(get_samples_from_json(json_data)),
-            )
-            return json_data, list(measurements.keys()), True
-        return None, {}, False
-    except Exception as exc:
-        logger.error("Error loading JSON from %s: %s", file_path, exc)
-        return None, {}, False
 
 
 # ---------------------------------------------------------------------------

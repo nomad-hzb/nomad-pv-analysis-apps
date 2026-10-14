@@ -739,10 +739,6 @@ class DataManager:
         """Get unique values"""
         return self.unique_vals
 
-    def get_filtered_data(self):
-        """Get filtered data"""
-        return self.filtered_data
-
     def get_omitted_data(self):
         """Get omitted data"""
         return self.omitted_data
@@ -758,7 +754,3 @@ class DataManager:
     def get_export_data(self):
         """Get the export data for CSV download"""
         return self.export_jvc_data, self.export_curves_data
-
-    def has_export_data(self):
-        """Check if export data is available"""
-        return self.export_jvc_data is not None and self.export_curves_data is not None
