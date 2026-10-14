@@ -230,3 +230,60 @@ def test_download_link_is_a_data_uri_with_the_csv():
     assert 'download="x.csv"' in link
     payload = link.split("base64,")[1].split('"')[0]
     assert base64.b64decode(payload).decode() == "a,b\n1,2\n"
+
+
+# ---------------------------------------------------------------------------
+# From testing: full pick lists, click selection, data links
+# ---------------------------------------------------------------------------
+
+
+def test_pick_lists_show_every_solvent_until_something_is_typed(loaded_solvent_dm):
+    import gui_components as gc
+
+    total = len(loaded_solvent_dm.data)
+    for panel in (
+        gc.BlendCalculatorPanel(loaded_solvent_dm),
+        gc.MixtureCalculatorPanel(loaded_solvent_dm),
+    ):
+        assert len(panel._results.options) == total
+        panel._on_search({"new": "acet"})
+        assert 0 < len(panel._results.options) < total
+        panel._on_search({"new": "  "})
+        assert len(panel._results.options) == total
+
+
+def test_scatter_has_an_empty_selection_trace_to_update_in_place(solvent_df):
+    fig = pm.scatter_2d(solvent_df, "D", "P", None, selected=[0, 1])
+    assert len(fig.data) == 2 and fig.data[1].name == "Selected"
+    assert len(fig.data[1].x) == 2
+    assert fig.data[1].marker.color == pm.SELECTED_COLOUR
+    assert len(pm.scatter_2d(solvent_df, "D", "P").data[1].x) == 0
+
+
+def test_clicking_points_collects_them_in_the_table_and_reset_empties_it(loaded_solvent_dm):
+    from types import SimpleNamespace
+
+    import gui_components as gc
+
+    panel = gc.DataVisualizerPanel(loaded_solvent_dm)
+    x, y = panel._x_dd.value, panel._y_dd.value
+    panel._on_point_click(None, SimpleNamespace(point_inds=[0, 1]), None)
+    panel._on_point_click(None, SimpleNamespace(point_inds=[1]), None)  # no duplicates
+    assert panel._selected == panel._plot_index[:2]
+    assert len(panel._figure.data[1].x) == 2
+    full = panel._selected_table()
+    assert len(full) == 2 and set(loaded_solvent_dm.data.columns) <= set(full.columns)
+    plotted = panel._selected_table(only_plotted=True)
+    assert list(plotted.columns) == ["Name", x, y]
+    panel._on_reset(None)
+    assert panel._selected == [] and len(panel._figure.data[1].x) == 0
+
+
+def test_every_tab_links_the_database_it_reads():
+    import gui_components as gc
+
+    link = gc._data_link("db.csv").value
+    assert (
+        "github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Hansen_green_calculator/db.csv"
+        in link
+    )

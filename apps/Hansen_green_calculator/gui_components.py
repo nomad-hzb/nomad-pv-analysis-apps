@@ -17,6 +17,7 @@ import data_manager as dm
 import ipywidgets as widgets
 import pandas as pd
 import plot_manager as pm
+import plotly.graph_objects as go
 from IPython.display import HTML
 from IPython.display import display as ipydisplay
 
@@ -53,6 +54,33 @@ _WIDE = widgets.Layout(width="400px")
 _MEDIUM = widgets.Layout(width="260px")
 _OUTPUT_STD = widgets.Layout(min_height="200px", overflow="auto", border="1px solid #ddd")
 _OUTPUT_PLOT = widgets.Layout(min_height="400px")
+
+
+_REPO_URL = (
+    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Hansen_green_calculator"
+)
+
+
+def _data_link(*files: str) -> widgets.HTML:
+    """A line linking the database file(s) a tab reads, in the repository on GitHub."""
+    links = " | ".join(
+        f"<a href='{_REPO_URL}/{name}' target='_blank'>{html.escape(name)}</a>" for name in files
+    )
+    return widgets.HTML(
+        f"<div style='color:#666;font-size:0.9em'>Data used in this tab: {links} (GitHub)</div>"
+    )
+
+
+def _solvent_options(df: pd.DataFrame, with_cas: bool = False) -> list:
+    """(label, row index) options for a solvent pick list."""
+    options = []
+    for idx, row in df.iterrows():
+        label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
+        cas = row.get("CAS", "")
+        if with_cas and cas and str(cas) != "nan":
+            label += f" (CAS {cas})"
+        options.append((label, idx))
+    return options
 
 
 def _btn(label: str, style: str = "primary", **kw) -> widgets.Button:
@@ -110,6 +138,7 @@ class SolventExplorerPanel:
                     "<p style='color:grey;font-size:0.9em'>Search for compounds to highlight them. "
                     "All solvents remain visible.</p>"
                 ),
+                _data_link("db.csv"),
                 controls,
                 self._plot_out,
                 _sep("Search info"),
@@ -149,10 +178,13 @@ class SolventExplorerPanel:
 
 
 class DataVisualizerPanel:
-    """2D scatter + correlation matrix for db.csv."""
+    """2D scatter (click points to collect them in a table) + correlation matrix for db.csv."""
 
     def __init__(self, solvent_dm: dm.SolventDataManager):
         self._dm = solvent_dm
+        self._selected: list = []  # row labels of the selected solvents, in click order
+        self._plot_index: list = []  # row label of every point of the plotted trace
+        self._figure = None
         self._build()
 
     def _build(self):
@@ -168,40 +200,141 @@ class DataVisualizerPanel:
         self._c_dd = _dd(color_opts, "Colour:", value="None")
         self._scatter_out = widgets.Output(layout=_OUTPUT_PLOT)
         self._corr_out = widgets.Output(layout=_OUTPUT_PLOT)
-        self._corr_btn = _btn("Show Correlation Matrix", "info")
+        self._corr_btn = _btn(
+            "Show Correlation Matrix", "info", layout=widgets.Layout(width="210px")
+        )
+        self._table_out = widgets.Output()
+        self._download_out = widgets.Output()
+        self._reset_btn = _btn("Reset table", "warning")
+        self._download_btn = _btn("Download CSV", "info")
+        self._only_plotted = widgets.Checkbox(
+            value=False,
+            description="Only the plotted values (name and the plotted columns), not every column",
+            indent=False,
+            layout=widgets.Layout(width="auto"),
+        )
 
         for w in (self._x_dd, self._y_dd, self._c_dd):
             w.observe(self._refresh_scatter, names="value")
         self._corr_btn.on_click(self._show_corr)
+        self._reset_btn.on_click(self._on_reset)
+        self._download_btn.on_click(self._on_download)
 
         controls = widgets.HBox([self._x_dd, self._y_dd, self._c_dd])
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>2D Property Explorer</h3>"),
+                _data_link("db.csv"),
                 controls,
+                widgets.HTML(
+                    "<p style='color:grey;font-size:0.9em'>Click a point to add it to the table "
+                    "below; selected points are drawn in orange-red.</p>"
+                ),
                 self._scatter_out,
+                widgets.HBox([self._reset_btn, self._download_btn, self._only_plotted]),
+                self._download_out,
+                self._table_out,
                 _sep(),
+                widgets.HTML(
+                    "<p style='color:#b36b00;font-size:0.9em'>The correlation matrix draws one "
+                    "small plot for every pair of columns (over 100 plots). It can take a while "
+                    "and make your computer and browser slow.</p>"
+                ),
                 widgets.HBox([self._corr_btn]),
                 self._corr_out,
             ]
         )
         self._refresh_scatter(None)
+        self._refresh_table()
+
+    # -- scatter --------------------------------------------------------------
+    def _plot_columns(self):
+        x, y = self._x_dd.value, self._y_dd.value
+        c = self._c_dd.value if self._c_dd.value != "None" else None
+        return x, y, c
 
     def _refresh_scatter(self, _):
-        x = self._x_dd.value
-        y = self._y_dd.value
-        c = self._c_dd.value if self._c_dd.value != "None" else None
-        if x and y:
-            fig = pm.scatter_2d(self._dm.data, x, y, c)
-            with self._scatter_out:
-                self._scatter_out.clear_output(wait=True)
-                ipydisplay(fig)
+        x, y, c = self._plot_columns()
+        if not (x and y):
+            return
+        fig = pm.scatter_2d(self._dm.data, x, y, c, selected=self._selected)
+        cols = [x, y] + ([c] if c else [])
+        self._plot_index = list(self._dm.data.dropna(subset=cols).index)
+        self._figure = go.FigureWidget(fig)
+        self._figure.data[0].on_click(self._on_point_click)
+        with self._scatter_out:
+            self._scatter_out.clear_output(wait=True)
+            ipydisplay(self._figure)
+        self._refresh_table()
 
+    def _on_point_click(self, _trace, points, _state):
+        for point in points.point_inds:
+            label = self._plot_index[point]
+            if label not in self._selected:
+                self._selected.append(label)
+        self._update_selection()
+
+    def _update_selection(self):
+        """Redraw the selected points and the table (the plot itself stays as it is)."""
+        x, y, _c = self._plot_columns()
+        chosen = self._dm.data.loc[self._selected]
+        with self._figure.batch_update():
+            self._figure.data[1].x = chosen[x]
+            self._figure.data[1].y = chosen[y]
+            self._figure.data[1].text = chosen.get("Name")
+        self._refresh_table()
+
+    def _on_reset(self, _):
+        self._selected = []
+        if self._figure is not None:
+            self._update_selection()
+        self._download_out.clear_output()
+
+    # -- table and download -----------------------------------------------------
+    def _selected_table(self, only_plotted: bool = False) -> pd.DataFrame:
+        table = self._dm.data.loc[self._selected]
+        if only_plotted:
+            x, y, c = self._plot_columns()
+            keep = ["Name", x, y] + ([c] if c else [])
+            table = table[[col for col in dict.fromkeys(keep) if col in table.columns]]
+        return table
+
+    def _refresh_table(self):
+        with self._table_out:
+            self._table_out.clear_output(wait=True)
+            if not self._selected:
+                ipydisplay(HTML("<i>No points selected yet: click points in the plot.</i>"))
+                return
+            ipydisplay(HTML(f"<b>{len(self._selected)} selected</b>"))
+            ipydisplay(self._selected_table())
+
+    def _on_download(self, _):
+        self._download_out.clear_output()
+        if not self._selected:
+            _say(self._download_out, "Select at least one point first.", "warning")
+            return
+        csv_text = self._selected_table(self._only_plotted.value).to_csv(index=False)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with self._download_out:
+            ipydisplay(_download_link(csv_text, f"hansen_selected_{stamp}.csv"))
+
+    # -- correlation matrix -----------------------------------------------------
     def _show_corr(self, _):
-        fig = pm.correlation_matrix(self._dm.data)
-        with self._corr_out:
-            self._corr_out.clear_output(wait=True)
-            ipydisplay(fig)
+        columns = self._dm.numeric_columns
+        self._corr_btn.disabled = True
+        _say(
+            self._corr_out,
+            f"Building the correlation matrix ({len(columns)} x {len(columns)} plots)... "
+            "this can take a while and may make your computer slow. Please wait.",
+            "warning",
+        )
+        try:
+            fig = pm.correlation_matrix(self._dm.data[columns])
+            with self._corr_out:
+                self._corr_out.clear_output(wait=True)
+                ipydisplay(fig)
+        finally:
+            self._corr_btn.disabled = False
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +355,9 @@ class BlendCalculatorPanel:
         # Search
         self._search = widgets.Text(placeholder="Search …", description="Search:", layout=_WIDE)
         self._results = widgets.Select(
-            options=[], description="Results:", layout=widgets.Layout(width="500px", height="120px")
+            options=_solvent_options(self._dm.all_solvents(), with_cas=True),
+            description="Results:",
+            layout=widgets.Layout(width="500px", height="120px"),
         )
         self._add_btn = _btn("Add Solvent", "success")
         self._selected_list = widgets.Select(
@@ -311,6 +446,7 @@ class BlendCalculatorPanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Blend Optimiser</h3>"),
+                _data_link("db.csv"),
                 widgets.HBox([left, right]),
                 _sep("Results"),
                 self._result_out,
@@ -320,18 +456,9 @@ class BlendCalculatorPanel:
         )
 
     def _on_search(self, change):
-        matches = self._dm.search(change["new"])
-        if matches.empty:
-            self._results.options = []
-        else:
-            opts = []
-            for idx, row in matches.iterrows():
-                label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
-                cas = row.get("CAS", "")
-                if cas and str(cas) != "nan":
-                    label += f" (CAS {cas})"
-                opts.append((label, idx))
-            self._results.options = opts
+        term = change["new"]
+        matches = self._dm.search(term) if term.strip() else self._dm.all_solvents()
+        self._results.options = _solvent_options(matches, with_cas=True)
 
     def _on_add(self, _):
         if self._results.value is None:
@@ -447,7 +574,9 @@ class MixtureCalculatorPanel:
     def _build(self):
         self._search = widgets.Text(placeholder="Search …", description="Search:", layout=_WIDE)
         self._results = widgets.Select(
-            options=[], description="Results:", layout=widgets.Layout(width="500px", height="120px")
+            options=_solvent_options(self._dm.all_solvents()),
+            description="Results:",
+            layout=widgets.Layout(width="500px", height="120px"),
         )
         self._add_btn = _btn("Add Solvent", "success")
         self._solvent_container = widgets.VBox(
@@ -496,6 +625,7 @@ class MixtureCalculatorPanel:
                     "<p style='color:grey;font-size:0.9em'>"
                     "Enter volume percentages (must sum to 100 %) then click Calculate.</p>"
                 ),
+                _data_link("db.csv"),
                 widgets.HBox([left, right]),
                 _sep("Results"),
                 self._result_out,
@@ -503,15 +633,9 @@ class MixtureCalculatorPanel:
         )
 
     def _on_search(self, change):
-        matches = self._dm.search(change["new"])
-        if matches.empty:
-            self._results.options = []
-        else:
-            opts = []
-            for idx, row in matches.iterrows():
-                label = f"{row.get('No.', idx)} – {row.get('Name', '?')}"
-                opts.append((label, idx))
-            self._results.options = opts
+        term = change["new"]
+        matches = self._dm.search(term) if term.strip() else self._dm.all_solvents()
+        self._results.options = _solvent_options(matches)
 
     def _on_add(self, _):
         if self._results.value is None:
@@ -657,6 +781,7 @@ class InksPanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Inks – Hansen Space (coloured by Solute)</h3>"),
+                _data_link("PlottedInks.xlsx"),
                 widgets.HBox([self._sphere_toggle]),
                 self._plot_out,
             ]
@@ -718,6 +843,7 @@ class PerovskitePanel:
         self.widget = widgets.VBox(
             [
                 widgets.HTML("<h3>Perovskite Solute / Solvent – Hansen Space</h3>"),
+                _data_link("PlottedInks.xlsx"),
                 controls,
                 self._plot_out,
             ]

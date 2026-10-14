@@ -139,12 +139,19 @@ def solvent_3d(
 # ---------------------------------------------------------------------------
 
 
+SELECTED_COLOUR = "#e4572e"
+
+
 def scatter_2d(
     df: pd.DataFrame,
     x_col: str,
     y_col: str,
     color_col: Optional[str] = None,
+    selected: Optional[list] = None,
 ) -> go.Figure:
+    """Scatter of two columns. Trace 0 holds every plotted point (in the order of the rows that
+    have all the plotted columns); trace 1 is the selection, drawn in one colour on top of it
+    (empty when nothing is selected), so the selection can be updated in place."""
     cols = [x_col, y_col] + ([color_col] if color_col else [])
     fdf = df.dropna(subset=cols)
     fig = go.Figure()
@@ -165,6 +172,18 @@ def scatter_2d(
             + f"{x_col}: %{{x}}<br>{y_col}: %{{y}}"
             + ("<br>" + color_col + ": %{marker.color}" if color_col else "")
             + "<extra></extra>",
+        )
+    )
+    chosen = fdf.loc[fdf.index.intersection(selected)] if selected else fdf.iloc[0:0]
+    fig.add_trace(
+        go.Scatter(
+            x=chosen[x_col],
+            y=chosen[y_col],
+            mode="markers",
+            marker=dict(size=13, color=SELECTED_COLOUR, line=dict(color="black", width=1.5)),
+            text=chosen.get("Name", pd.Series([""] * len(chosen), index=chosen.index)),
+            hovertemplate="<b>%{text}</b> (selected)<extra></extra>",
+            name="Selected",
         )
     )
     fig.update_layout(

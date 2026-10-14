@@ -175,6 +175,10 @@ class SolventDataManager:
                 mask |= self.data[col].astype(str).str.lower().str.contains(t, na=False)
         return self.data[mask].copy()
 
+    def all_solvents(self) -> pd.DataFrame:
+        """Every solvent of the database (what the pick lists show before anything is typed)."""
+        return self.data.copy() if self.is_loaded else pd.DataFrame()
+
     def get_by_index(self, idx: int) -> Optional[pd.Series]:
         if idx in self.data.index:
             return self.data.loc[idx]
