@@ -44,7 +44,6 @@ NO_MANUAL_YET = {
     "Global_analyzer",
     "Hansen_green_calculator",
     "ISA_Previewer",
-    "JV-Analysis",
     "LCC_Calculator",
     "MPPT_Analysis",
     "NMR_Analysis",
