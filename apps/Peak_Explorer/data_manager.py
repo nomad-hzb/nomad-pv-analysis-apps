@@ -490,32 +490,6 @@ class CSVDataLoader:
 
         return info
 
-    def validate_data(self):
-        """Validate loaded data for common issues"""
-        issues = []
-
-        if self.data_matrix is None:
-            issues.append("No data loaded")
-            return issues
-
-        # Check for NaN values
-        if np.isnan(self.data_matrix).any():
-            issues.append(f"Found {np.isnan(self.data_matrix).sum()} NaN values in data")
-
-        # Check for negative intensities
-        if (self.data_matrix < 0).any():
-            issues.append(f"Found {(self.data_matrix < 0).sum()} negative intensity values")
-
-        # Check wavelength ordering
-        if not np.all(np.diff(self.wavelengths) > 0):
-            issues.append("Wavelengths are not in ascending order")
-
-        # Check time ordering
-        if not np.all(np.diff(self.timestamps) > 0):
-            issues.append("Timestamps are not in ascending order")
-
-        return issues
-
 
 # =============================================================================
 # H5 DATA LOADER
@@ -801,27 +775,6 @@ class DataManager:
             "intensity_range": (data_min, data_max),
         }
 
-    def get_spectrum_at_time(self, time_idx):
-        """
-        Get spectrum at specific time index
-
-        Parameters:
-        -----------
-        time_idx : int
-            Time index
-
-        Returns:
-        --------
-        array: Intensity spectrum
-        """
-        if not self.is_data_loaded():
-            raise ValueError("No data loaded")
-
-        if time_idx < 0 or time_idx >= len(self.timestamps):
-            raise ValueError(f"Time index {time_idx} out of range")
-
-        return self.data_matrix[time_idx, :]
-
     def set_current_time(self, time_idx):
         """
         Set current time index and update current spectrum
@@ -859,19 +812,6 @@ class DataManager:
         if not self.is_data_loaded():
             return (0, 0)
         return (0, len(self.timestamps) - 1)
-
-    def validate_data(self):
-        """
-        Validate loaded data for issues
-
-        Returns:
-        --------
-        list: List of validation issues (empty if no issues)
-        """
-        if not self.is_data_loaded():
-            return ["No data loaded"]
-
-        return self.csv_loader.validate_data()
 
     def get_header_info(self):
         """Get header/metadata information"""

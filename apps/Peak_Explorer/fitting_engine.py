@@ -5,6 +5,7 @@ Contains peak detection, model definitions, and fitting orchestration
 """
 
 import multiprocessing as mp
+import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import config
@@ -21,8 +22,8 @@ from lmfit.models import (
     SkewedVoigtModel,
     VoigtModel,
 )
-from scipy.optimize import curve_fit, minimize_scalar
-from scipy.signal import find_peaks, peak_prominences, peak_widths
+from scipy.optimize import minimize_scalar
+from scipy.signal import find_peaks, peak_widths
 from scipy.special import wofz
 from utils import debug_print
 
@@ -150,6 +151,19 @@ def skewed_peak_shape(peak_type, values, n_points=20001):
 # =============================================================================
 
 
+def available_cpus(cap=8):
+    """CPUs this process may use, at most `cap`. mp.cpu_count() reports the host's cores, which
+    in a container is often 32 to 128: one worker process per host core exhausts the memory."""
+    counter = getattr(os, "process_cpu_count", None)
+    if counter is not None:
+        count = counter()
+    elif hasattr(os, "sched_getaffinity"):
+        count = len(os.sched_getaffinity(0))
+    else:
+        count = mp.cpu_count()
+    return max(1, min(count or 1, cap))
+
+
 class PeakDetector:
     """Class to handle automatic peak detection in photoluminescence spectra"""
 
@@ -253,273 +267,6 @@ class PeakDetector:
             peak_info.append(peak_data)
 
         return peak_info
-
-    def detect_peaks_advanced(
-        self,
-        wavelengths,
-        intensities,
-        min_height=None,
-        min_prominence=None,
-        min_distance=5,
-        adaptive_threshold=True,
-    ):
-        """
-        Advanced peak detection with adaptive parameters
-
-        Parameters:
-        -----------
-        wavelengths : array
-            Wavelength values
-        intensities : array
-            Intensity values
-        min_height : float, optional
-            Minimum peak height
-        min_prominence : float, optional
-            Minimum peak prominence
-        min_distance : int
-            Minimum distance between peaks
-        adaptive_threshold : bool
-            Use adaptive thresholding based on signal statistics
-
-        Returns:
-        --------
-        list: List of detected peak information
-        """
-        # Calculate signal statistics for adaptive thresholding
-        if adaptive_threshold:
-            signal_mean = np.mean(intensities)
-            signal_std = np.std(intensities)
-
-            # Adaptive parameters
-            if min_height is None:
-                min_height = signal_mean + 2 * signal_std
-            if min_prominence is None:
-                min_prominence = signal_std
-
-        # Smooth the signal for better peak detection
-        smoothed_intensities = self._smooth_signal(intensities)
-
-        # Detect peaks on smoothed signal
-        peaks, properties = find_peaks(
-            smoothed_intensities,
-            height=min_height,
-            prominence=min_prominence,
-            distance=min_distance,
-        )
-
-        # Refine peak positions on original signal
-        refined_peaks = []
-        for peak_idx in peaks:
-            # Search for maximum in neighborhood
-            search_range = 3
-            start_idx = max(0, peak_idx - search_range)
-            end_idx = min(len(intensities), peak_idx + search_range + 1)
-
-            local_max_idx = np.argmax(intensities[start_idx:end_idx])
-            refined_peak_idx = start_idx + local_max_idx
-            refined_peaks.append(refined_peak_idx)
-
-        # Calculate detailed peak properties
-        peak_info = []
-        for i, peak_idx in enumerate(refined_peaks):
-            peak_data = self._calculate_peak_properties(wavelengths, intensities, peak_idx)
-            peak_info.append(peak_data)
-
-        return peak_info
-
-    def _smooth_signal(self, signal, window_size=5):
-        """Apply smoothing to signal for better peak detection"""
-        from scipy.ndimage import uniform_filter1d
-
-        return uniform_filter1d(signal, size=window_size, mode="reflect")
-
-    def _calculate_peak_properties(self, wavelengths, intensities, peak_idx):
-        """Calculate comprehensive peak properties"""
-        peak_data = {
-            "index": peak_idx,
-            "center": wavelengths[peak_idx],
-            "height": intensities[peak_idx],
-        }
-
-        # Find peak base points
-        left_base_idx, right_base_idx = self._find_peak_base(intensities, peak_idx)
-
-        # Calculate width and sigma
-        width_nm = wavelengths[right_base_idx] - wavelengths[left_base_idx]
-        peak_data["width"] = width_nm
-        peak_data["sigma"] = width_nm / 2.355  # Gaussian approximation
-
-        # Calculate area
-        peak_data["area"] = np.trapezoid(
-            intensities[left_base_idx : right_base_idx + 1],
-            wavelengths[left_base_idx : right_base_idx + 1],
-        )
-
-        # Calculate prominence
-        peak_data["prominence"] = self._calculate_prominence(intensities, peak_idx)
-
-        # Fit local Gaussian for better parameter estimation
-        try:
-            fit_params = self._fit_local_gaussian(
-                wavelengths, intensities, peak_idx, left_base_idx, right_base_idx
-            )
-            peak_data.update(fit_params)
-        except Exception:
-            pass
-
-        return peak_data
-
-    def _find_peak_base(self, intensities, peak_idx):
-        """Find the base points of a peak"""
-        # Search left for minimum
-        left_idx = peak_idx
-        while left_idx > 0 and intensities[left_idx - 1] < intensities[left_idx]:
-            left_idx -= 1
-
-        # Search right for minimum
-        right_idx = peak_idx
-        while (
-            right_idx < len(intensities) - 1 and intensities[right_idx + 1] < intensities[right_idx]
-        ):
-            right_idx += 1
-
-        return left_idx, right_idx
-
-    def _calculate_prominence(self, intensities, peak_idx):
-        """Calculate peak prominence"""
-        try:
-            prominences = peak_prominences(intensities, [peak_idx])
-            return prominences[0][0]
-        except Exception:
-            return None
-
-    def _fit_local_gaussian(self, wavelengths, intensities, peak_idx, left_idx, right_idx):
-        """Fit a Gaussian to local peak region"""
-        # Extract local region
-        local_x = wavelengths[left_idx : right_idx + 1]
-        local_y = intensities[left_idx : right_idx + 1]
-
-        # Initial guess
-        center_guess = wavelengths[peak_idx]
-        height_guess = intensities[peak_idx]
-        sigma_guess = (wavelengths[right_idx] - wavelengths[left_idx]) / 4
-
-        # Gaussian function
-        def gaussian(x, center, height, sigma, offset):
-            return height * np.exp(-(((x - center) / sigma) ** 2)) + offset
-
-        # Fit
-        popt, _ = curve_fit(
-            gaussian,
-            local_x,
-            local_y,
-            p0=[center_guess, height_guess, sigma_guess, np.min(local_y)],
-            maxfev=1000,
-        )
-
-        return {
-            "fitted_center": popt[0],
-            "fitted_height": popt[1],
-            "fitted_sigma": popt[2],
-            "fitted_offset": popt[3],
-        }
-
-    def filter_peaks(
-        self,
-        peak_info,
-        min_height=None,
-        min_prominence=None,
-        min_width=None,
-        max_width=None,
-        wavelength_range=None,
-    ):
-        """
-        Filter detected peaks based on criteria
-
-        Parameters:
-        -----------
-        peak_info : list
-            List of peak information dictionaries
-        min_height : float, optional
-            Minimum peak height
-        min_prominence : float, optional
-            Minimum peak prominence
-        min_width : float, optional
-            Minimum peak width
-        max_width : float, optional
-            Maximum peak width
-        wavelength_range : tuple, optional
-            (min_wavelength, max_wavelength) range
-
-        Returns:
-        --------
-        list: Filtered peak information
-        """
-        filtered_peaks = []
-
-        for peak in peak_info:
-            # Height filter
-            if min_height is not None and peak["height"] < min_height:
-                continue
-
-            # Prominence filter
-            if min_prominence is not None and peak.get("prominence", 0) < min_prominence:
-                continue
-
-            # Width filters
-            if min_width is not None and peak.get("width", 0) < min_width:
-                continue
-            if max_width is not None and peak.get("width", float("inf")) > max_width:
-                continue
-
-            # Wavelength range filter
-            if wavelength_range is not None:
-                min_wl, max_wl = wavelength_range
-                if peak["center"] < min_wl or peak["center"] > max_wl:
-                    continue
-
-            filtered_peaks.append(peak)
-
-        return filtered_peaks
-
-    def merge_close_peaks(self, peak_info, distance_threshold=10):
-        """
-        Merge peaks that are too close together
-
-        Parameters:
-        -----------
-        peak_info : list
-            List of peak information dictionaries
-        distance_threshold : float
-            Minimum distance between peaks (in nm)
-
-        Returns:
-        --------
-        list: Merged peak information
-        """
-        if len(peak_info) <= 1:
-            return peak_info
-
-        # Sort peaks by center wavelength
-        sorted_peaks = sorted(peak_info, key=lambda x: x["center"])
-
-        merged_peaks = []
-        current_peak = sorted_peaks[0]
-
-        for next_peak in sorted_peaks[1:]:
-            distance = abs(next_peak["center"] - current_peak["center"])
-
-            if distance < distance_threshold:
-                # Merge peaks - keep the one with higher prominence
-                if next_peak.get("prominence", 0) > current_peak.get("prominence", 0):
-                    current_peak = next_peak
-            else:
-                merged_peaks.append(current_peak)
-                current_peak = next_peak
-
-        merged_peaks.append(current_peak)
-
-        return merged_peaks
 
 
 # =============================================================================
@@ -861,7 +608,7 @@ class FittingModels:
         dict: Dictionary of fitting results
         """
         if max_workers is None:
-            max_workers = min(mp.cpu_count(), len(timestamps))
+            max_workers = min(available_cpus(), len(timestamps))
 
         results = {}
         completed_count = 0
@@ -1051,96 +798,6 @@ class FittingModels:
                 "residuals": None,
                 "smart_init_used": use_smart_init,
             }
-
-    def extract_peak_parameters(self, fit_results):
-        """
-        Extract peak parameters from fitting results
-
-        Parameters:
-        -----------
-        fit_results : dict
-            Dictionary of fitting results
-
-        Returns:
-        --------
-        pandas.DataFrame: Peak parameters over time
-        """
-        import pandas as pd
-
-        # Initialize lists to store parameters
-        data_rows = []
-
-        for idx, result in fit_results.items():
-            if result is None or not result.get("success", False):
-                continue
-
-            row = {
-                "index": result["index"],
-                "time": result["time"],
-                "r_squared": result.get("r_squared", np.nan),
-                "chi_squared": result.get("chi_squared", np.nan),
-                "aic": result.get("aic", np.nan),
-                "bic": result.get("bic", np.nan),
-            }
-
-            # Extract peak parameters
-            for param_name, param_data in result["parameters"].items():
-                if any(
-                    x in param_name for x in ["center", "amplitude", "sigma", "gamma", "height"]
-                ):
-                    row[param_name] = param_data["value"]
-                    row[f"{param_name}_stderr"] = param_data.get("stderr", np.nan)
-
-            data_rows.append(row)
-
-        return pd.DataFrame(data_rows)
-
-    def create_model_summary(self, fit_params):
-        """
-        Create a summary of the fitting model
-
-        Parameters:
-        -----------
-        fit_params : dict
-            Fitting parameters
-
-        Returns:
-        --------
-        dict: Model summary
-        """
-        summary = {
-            "background_model": fit_params["background_model"],
-            "peak_models": [],
-            "total_parameters": 0,
-        }
-
-        # Background parameters
-        if fit_params["background_model"] != "None":
-            if fit_params["background_model"] == "Linear":
-                summary["total_parameters"] += 2  # slope + intercept
-            elif fit_params["background_model"] == "Polynomial":
-                summary["total_parameters"] += fit_params["poly_degree"] + 1
-            elif fit_params["background_model"] == "Exponential":
-                summary["total_parameters"] += 3  # amplitude, decay, offset
-
-        # Peak parameters
-        for i, peak_info in enumerate(fit_params["peak_models"]):
-            peak_summary = {
-                "index": i,
-                "type": peak_info["type"],
-                "initial_center": peak_info["center"],
-                "initial_height": peak_info["height"],
-                "initial_sigma": peak_info["sigma"],
-            }
-
-            if peak_info["type"] in ["Gaussian", "Lorentzian"]:
-                summary["total_parameters"] += 3  # center, amplitude, sigma
-            elif peak_info["type"] == "Voigt":
-                summary["total_parameters"] += 4  # center, amplitude, sigma, gamma
-
-            summary["peak_models"].append(peak_summary)
-
-        return summary
 
 
 # =============================================================================
@@ -1370,21 +1027,6 @@ class FittingEngine:
 
         return self.fitting_results
 
-    def get_fitting_result(self, time_idx):
-        """
-        Get fitting result for specific time index
-
-        Parameters:
-        -----------
-        time_idx : int
-            Time index
-
-        Returns:
-        --------
-        dict or None: Fitting result
-        """
-        return self.fitting_results.get(time_idx, None)
-
     def has_fitting_results(self):
         """Check if any fitting results are available"""
         return len(self.fitting_results) > 0
@@ -1394,49 +1036,3 @@ class FittingEngine:
         debug_print("Clearing fitting results", "FITTING")
         self.fitting_results = {}
         self.current_fit_result = None
-
-    def extract_peak_parameters(self):
-        """
-        Extract peak parameters from all fitting results
-
-        Returns:
-        --------
-        pandas.DataFrame: Peak parameters
-        """
-        if not self.has_fitting_results():
-            return None
-
-        debug_print("Extracting peak parameters from results", "FITTING")
-        return self.fitting_models.extract_peak_parameters(self.fitting_results)
-
-    def get_model_summary(self):
-        """
-        Get summary of current fitting model
-
-        Returns:
-        --------
-        dict: Model summary
-        """
-        if self.fit_params is None:
-            return None
-
-        return self.fitting_models.create_model_summary(self.fit_params)
-
-    def update_peak_parameter(self, peak_idx, param_name, value):
-        """
-        Update a specific peak parameter
-
-        Parameters:
-        -----------
-        peak_idx : int
-            Peak index
-        param_name : str
-            Parameter name ('center', 'height', 'sigma')
-        value : float
-            New value
-        """
-        if self.fit_params is None or peak_idx >= len(self.fit_params["peak_models"]):
-            raise ValueError("Invalid peak index or no fit parameters")
-
-        self.fit_params["peak_models"][peak_idx][param_name] = value
-        debug_print(f"Updated peak {peak_idx} {param_name} to {value}", "FITTING")

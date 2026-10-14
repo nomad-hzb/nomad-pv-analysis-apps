@@ -405,6 +405,7 @@ class PLAnalysisApp:
 
         # State management
         self.peak_models = []  # List of peak model widgets
+        self._peak_counter = 0  # Id of the next peak row: never reused, so a removal cannot clash
         self.last_fit_result = None
         self.original_data_matrix = None  # For background subtraction
         self.background_applied = False
@@ -537,85 +538,6 @@ class PLAnalysisApp:
         )
 
         debug_print("Callbacks setup complete", "APP")
-
-    def _update_wavelength_range_on_spectrum(self, wavelength_range):
-        """Update only the wavelength range lines on spectrum plot"""
-        debug_print(f"Updating spectrum range to {wavelength_range}", "SPECTRUM")
-        debug_print(f"self.plot_manager = {self.plot_manager}", "SPECTRUM")
-        debug_print(
-            f"self.plot_manager.spectrum_fig = {self.plot_manager.spectrum_fig}", "SPECTRUM"
-        )
-        debug_print(f"spectrum_fig is None? {self.plot_manager.spectrum_fig is None}", "SPECTRUM")
-
-        if self.plot_manager.spectrum_fig is None:
-            debug_print("No spectrum fig, returning early", "SPECTRUM")
-            return
-
-        fig = self.plot_manager.spectrum_fig
-        debug_print(f"Number of shapes before: {len(fig.layout.shapes)}", "SPECTRUM")
-
-        # Debug: print all existing shapes
-        for i, shape in enumerate(fig.layout.shapes):
-            debug_print(
-                f"Shape {i}: type={shape.type}, color={getattr(shape.line, 'color', 'N/A')}, dash={getattr(shape.line, 'dash', 'N/A')}, x0={shape.x0}, x1={shape.x1}",
-                "SPECTRUM",
-            )
-
-        # Remove existing wavelength range shapes (vertical green dashed lines)
-        new_shapes = []
-        for shape in fig.layout.shapes:
-            # Remove if it's a vertical green dashed line
-            is_green = getattr(shape.line, "color", None) == "green"
-            is_dashed = getattr(shape.line, "dash", None) == "dash"
-            is_vertical = shape.type == "line" and shape.x0 == shape.x1
-
-            should_remove = is_green and is_dashed and is_vertical
-            debug_print(
-                f"Shape: green={is_green}, dashed={is_dashed}, vertical={is_vertical}, remove={should_remove}",
-                "SPECTRUM",
-            )
-
-            if should_remove:
-                continue  # Skip this shape (remove it)
-            new_shapes.append(shape)
-
-        fig.layout.shapes = new_shapes
-        debug_print(f"Number of shapes after removal: {len(fig.layout.shapes)}", "SPECTRUM")
-
-        # Add new shapes if range is specified
-        if wavelength_range is not None:
-            # Get y-axis range from figure
-            if fig.data and len(fig.data) > 0:
-                y_data = fig.data[0].y
-                y_min, y_max = min(y_data), max(y_data)
-            else:
-                y_min, y_max = 0, 1
-
-            debug_print(
-                f"Adding lines at x={wavelength_range[0]} and x={wavelength_range[1]}", "SPECTRUM"
-            )
-
-            # Add left line
-            fig.add_shape(
-                type="line",
-                x0=wavelength_range[0],
-                x1=wavelength_range[0],
-                y0=y_min,
-                y1=y_max,
-                line=dict(color="green", width=2, dash="dash"),
-            )
-
-            # Add right line
-            fig.add_shape(
-                type="line",
-                x0=wavelength_range[1],
-                x1=wavelength_range[1],
-                y0=y_min,
-                y1=y_max,
-                line=dict(color="green", width=2, dash="dash"),
-            )
-
-            debug_print(f"Number of shapes after adding: {len(fig.layout.shapes)}", "SPECTRUM")
 
     def _update_wavelength_range_on_heatmap(self, wavelength_range):
         """Update only the wavelength range lines on heatmap"""
@@ -1258,7 +1180,8 @@ class PLAnalysisApp:
                 "type": config.DEFAULT_PEAK_MODEL,
             }
 
-        peak_idx = len(self.peak_models)
+        peak_idx = self._peak_counter
+        self._peak_counter += 1
         debug_print(f"Adding peak model {peak_idx}", "APP")
 
         # Create peak row widget
@@ -1434,6 +1357,7 @@ class PLAnalysisApp:
         """Clear all peak models"""
         debug_print("Clearing all peak models", "APP")
         self.peak_models.clear()
+        self._peak_counter = 0
         self.update_peak_list_container()
 
     def update_peak_list_container(self):
@@ -1764,7 +1688,7 @@ class PLAnalysisApp:
             if self.last_fit_result is None:
                 with self.widgets["status_output"]:
                     self.widgets["status_output"].clear_output()
-                    debug_print("❌ No fit result available. Please fit current spectrum first.")
+                    print("❌ No fit result available. Please fit current spectrum first.")
                 return
 
             debug_print("Updating parameters from fit result", "APP")
@@ -1776,6 +1700,7 @@ class PLAnalysisApp:
                 self.widgets["status_output"].clear_output()
                 print("🔄 Updating model parameters with fitted values...")
 
+            report = []  # shown in the Output below: a print outside it is dropped under Voila
             # Update ALL model parameters in UI
             updated_count = 0
             for i, model in enumerate(self.peak_models):
@@ -1793,14 +1718,18 @@ class PLAnalysisApp:
                     center_param = f"{prefix}center"
                     if center_param in fitted_params:
                         model._widgets["center"].value = round(fitted_params[center_param].value, 3)
-                        print(f"  Model {i + 1} center: {fitted_params[center_param].value:.3f}")
+                        report.append(
+                            f"  Model {i + 1} center: {fitted_params[center_param].value:.3f}"
+                        )
                         updated_count += 1
 
                     # Update sigma
                     sigma_param = f"{prefix}sigma"
                     if sigma_param in fitted_params:
                         model._widgets["sigma"].value = round(fitted_params[sigma_param].value, 3)
-                        print(f"  Model {i + 1} sigma: {fitted_params[sigma_param].value:.3f}")
+                        report.append(
+                            f"  Model {i + 1} sigma: {fitted_params[sigma_param].value:.3f}"
+                        )
                         updated_count += 1
 
                     # Update gamma for models that have it
@@ -1810,7 +1739,9 @@ class PLAnalysisApp:
                             model._widgets["gamma"].value = round(
                                 fitted_params[gamma_param].value, 3
                             )
-                            print(f"  Model {i + 1} gamma: {fitted_params[gamma_param].value:.3f}")
+                            report.append(
+                                f"  Model {i + 1} gamma: {fitted_params[gamma_param].value:.3f}"
+                            )
                             updated_count += 1
 
                     # Update height: a fitted parameter for every peak type (see
@@ -1819,7 +1750,7 @@ class PLAnalysisApp:
                     if height_param in fitted_params:
                         height = fitted_params[height_param].value
                         model._widgets["height"].value = round(height, 3)
-                        print(f"  Model {i + 1} height: {height:.3f}")
+                        report.append(f"  Model {i + 1} height: {height:.3f}")
                         updated_count += 1
 
                 elif model_type == "Linear":
@@ -1829,14 +1760,16 @@ class PLAnalysisApp:
 
                     if slope_param in fitted_params:
                         model._widgets["slope"].value = round(fitted_params[slope_param].value, 3)
-                        print(f"  Model {i + 1} slope: {fitted_params[slope_param].value:.3f}")
+                        report.append(
+                            f"  Model {i + 1} slope: {fitted_params[slope_param].value:.3f}"
+                        )
                         updated_count += 1
 
                     if intercept_param in fitted_params:
                         model._widgets["intercept"].value = round(
                             fitted_params[intercept_param].value, 3
                         )
-                        print(
+                        report.append(
                             f"  Model {i + 1} intercept: {fitted_params[intercept_param].value:.3f}"
                         )
                         updated_count += 1
@@ -1857,9 +1790,9 @@ class PLAnalysisApp:
 
                     # Store them (we'll need to add a way to pass these)
                     # For now, just print them
-                    print(f"  Model {i + 1} (Polynomial degree {degree}):")
+                    report.append(f"  Model {i + 1} (Polynomial degree {degree}):")
                     for j, coeff in enumerate(coeffs):
-                        print(f"    c{j}: {coeff:.6f}")
+                        report.append(f"    c{j}: {coeff:.6f}")
 
                     # Store coefficients in the model for later use
                     if not hasattr(model, "_fitted_coeffs"):
@@ -1868,6 +1801,8 @@ class PLAnalysisApp:
                     updated_count += 1
 
             with self.widgets["status_output"]:
+                for line in report:
+                    print(line)
                 print(f"✅ Updated {updated_count} parameters from fit")
 
             debug_print(f"Updated {updated_count} parameters from fit", "APP")
@@ -2741,71 +2676,6 @@ class PLAnalysisApp:
             )
 
             fig.show(renderer=config.PLOT_RENDERER)
-
-    def on_subtract_background(self, button):
-        """Apply or remove manual background subtraction"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        try:
-            start_idx = self.widgets["background_time_start"].value
-            num_curves = self.widgets["background_num_curves"].value
-
-            # Ensure we don't go beyond the data
-            end_idx = min(start_idx + num_curves, len(self.data_manager.timestamps))
-
-            if start_idx >= len(self.data_manager.timestamps):
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print("❌ Start time index is beyond the data range")
-                return
-
-            # Calculate background (average of selected time range)
-            background_spectra = self.data_manager.data_matrix[start_idx:end_idx, :]
-            background_average = np.nanmean(background_spectra, axis=0)
-
-            # Store original data if not already stored
-            if self.original_data_matrix is None:
-                self.original_data_matrix = self.data_manager.data_matrix.copy()
-
-            # Apply or remove background subtraction
-            if self.widgets["background_subtract_checkbox"].value:
-                self.data_manager.data_matrix = self.original_data_matrix - background_average
-            else:
-                self.data_manager.data_matrix = self.original_data_matrix.copy()
-
-            # Update current spectrum
-            self.data_manager.current_spectrum = self.data_manager.data_matrix[
-                self.data_manager.current_time_idx, :
-            ]
-
-            # Force heatmap recreation since data changed
-            self.plot_manager.heatmap_fig = None
-
-            # Update visualizations
-            self.update_visualizations()
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                if self.widgets["background_subtract_checkbox"].value:
-                    time_start = self.data_manager.timestamps[start_idx]
-                    time_end = self.data_manager.timestamps[end_idx - 1]
-                    print("✅ Manual background subtracted from data")
-                    print(f"   Region: {time_start:.3f}s - {time_end:.3f}s ({num_curves} curves)")
-                    print("   💡 Tip: You can still use model-based background during fitting")
-                else:
-                    print("✅ Manual background removed - original data restored")
-
-            debug_print(
-                f"Background subtraction applied: {self.widgets['background_subtract_checkbox'].value}",
-                "APP",
-            )
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error in background subtraction: {str(e)}")
-            debug_print(f"Error in background subtraction: {e}", "APP")
 
     # =========================================================================
     # DISPLAY

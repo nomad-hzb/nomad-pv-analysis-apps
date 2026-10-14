@@ -826,10 +826,6 @@ class GUIComponents:
 
         return accordion
 
-    def get_widget(self, name):
-        """Get a widget by name"""
-        return self.widgets.get(name, None)
-
     def get_all_widgets(self):
         """Get all widgets dictionary"""
         return self.widgets
