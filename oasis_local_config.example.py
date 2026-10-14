@@ -24,12 +24,6 @@
 # HYSPRINT_DASHBOARD_HIDE_APPS = "XPS-Automated,SEM_crystal_counter"
 # Or show only these (an allow-list; the hide list is applied on top):
 # HYSPRINT_DASHBOARD_SHOW_APPS = "JV-Analysis,File_Uploader,Learning"
-# Order of the groups: the groups named here come first, in this order (case and spaces are
-# ignored, unknown names only log a warning); every other group follows in its default order.
-# Unset: the default order. Names: Data Management, Device Characterization,
-# Optical & Structural Analysis, Utilities & Calculators, Build Your Own,
-# Experimental / In Progress.
-# HYSPRINT_DASHBOARD_GROUP_ORDER = "Data Management,Device Characterization"
 
 # --- App Dashboard: the "Projects" cards (slot-die ML pipeline) ------------------------------
 # Each card links into a specific HZB upload. Set the upload id of your own copy, or set the
