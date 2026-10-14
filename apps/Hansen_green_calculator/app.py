@@ -12,6 +12,8 @@ import gui_components as gc
 import ipywidgets as widgets
 from IPython.display import display as ipydisplay
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,4 +118,4 @@ class HansenApp:
             "HySPRINT · unified app</p>"
         )
 
-        ipydisplay(widgets.VBox([header, tab_widget]))
+        ipydisplay(widgets.VBox([header, manual_panel(__file__), tab_widget]))
