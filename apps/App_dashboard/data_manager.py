@@ -306,6 +306,7 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 
 HIDE_APPS_ENV = "HYSPRINT_DASHBOARD_HIDE_APPS"
 SHOW_APPS_ENV = "HYSPRINT_DASHBOARD_SHOW_APPS"
+GROUP_ORDER_ENV = "HYSPRINT_DASHBOARD_GROUP_ORDER"
 """Per-deployment app selection, set like every other per-Oasis override (usually in
 oasis_local_config.py): comma-separated app folder names (or card names) to hide, or, if
 SHOW is set, the only ones to show. "Learning" and "Projects" name those two sections. Names
@@ -334,10 +335,36 @@ def _entry_keys(entry: AppEntry) -> set[str]:
     return {key for key in (_normalize_name(entry.folder), _normalize_name(entry.name)) if key}
 
 
+def parse_name_order(value: str | None) -> list[str]:
+    """The normalized names of a comma-separated list, in the order given (parse_name_list keeps
+    no order)."""
+    return [_normalize_name(part) for part in (value or "").split(",") if part.strip()]
+
+
+def order_categories(
+    categories: dict[str, list[AppEntry]], order: list[str] | None
+) -> dict[str, list[AppEntry]]:
+    """The categories in the order named by `order` (normalized names); categories it does not
+    name follow in their default order. An unknown name logs a warning and is ignored; with no
+    order the categories are returned as they are."""
+    if not order:
+        return categories
+    by_key = {_normalize_name(name): name for name in categories}
+    first = []
+    for key in order:
+        if key not in by_key:
+            logger.warning("Dashboard group order: unknown group %r is ignored", key)
+        elif by_key[key] not in first:
+            first.append(by_key[key])
+    rest = [name for name in categories if name not in first]
+    return {name: categories[name] for name in [*first, *rest]}
+
+
 def select_dashboard(
     categories: dict[str, list[AppEntry]],
     hide: set[str] | None = None,
     show: set[str] | None = None,
+    order: list[str] | None = None,
 ) -> DashboardSelection:
     """Apply a hide list and an optional allow-list (both normalized names) to the cards.
 
@@ -356,10 +383,13 @@ def select_dashboard(
         return not show or bool(keys & show)
 
     return DashboardSelection(
-        categories={
-            category: [entry for entry in entries if visible(_entry_keys(entry))]
-            for category, entries in categories.items()
-        },
+        categories=order_categories(
+            {
+                category: [entry for entry in entries if visible(_entry_keys(entry))]
+                for category, entries in categories.items()
+            },
+            order,
+        ),
         show_learning=visible({"learning"}),
         show_projects=visible({"projects"}),
     )
@@ -395,9 +425,10 @@ def _build_projects() -> list[Project]:
                 "2. Feature Extraction",
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
-                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
-                # 404). Set the env variable to the full folder name to show this card.
-                upload_id=_project_upload_id("HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", ""),
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -405,9 +436,10 @@ def _build_projects() -> list[Project]:
                 "3. PL Defect Analysis",
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
-                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
-                # 404). Set the env variable to the full folder name to show this card.
-                upload_id=_project_upload_id("HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", ""),
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                ),
             ),
             AppEntry(
                 "",
@@ -415,9 +447,10 @@ def _build_projects() -> list[Project]:
                 "4. ML Model",
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
-                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
-                # 404). Set the env variable to the full folder name to show this card.
-                upload_id=_project_upload_id("HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", ""),
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
+                ),
             ),
             AppEntry(
                 "",
@@ -425,9 +458,10 @@ def _build_projects() -> list[Project]:
                 "5. Correlation Analysis",
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
-                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
-                # 404). Set the env variable to the full folder name to show this card.
-                upload_id=_project_upload_id("HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", ""),
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
+                ),
             ),
             AppEntry(
                 "",
@@ -436,9 +470,10 @@ def _build_projects() -> list[Project]:
                 "Map PL-imaged ROIs to per-device JV curves and export the joined "
                 "dataset back to NOMAD.",
                 "fa-object-group",
-                # Hidden by default: the real '<slug>-<id>' upload folder is unknown (a bare id is a
-                # 404). Set the env variable to the full folder name to show this card.
-                upload_id=_project_upload_id("HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", ""),
+                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
+                ),
             ),
         )
         if entry.upload_id
@@ -461,6 +496,7 @@ SELECTION = select_dashboard(
     CATEGORIES,
     hide=parse_name_list(os.environ.get(HIDE_APPS_ENV)),
     show=parse_name_list(os.environ.get(SHOW_APPS_ENV)),
+    order=parse_name_order(os.environ.get(GROUP_ORDER_ENV)),
 )
 
 

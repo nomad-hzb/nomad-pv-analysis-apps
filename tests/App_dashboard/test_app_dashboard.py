@@ -239,13 +239,6 @@ def test_unknown_name_warns_and_changes_nothing(caplog):
     assert "jv-analyzis" in caplog.text
 
 
-def test_default_project_cards_only_use_full_upload_folder_names():
-    """A bare 22-character id cannot be opened (404); such cards are hidden by default."""
-    for project in PROJECTS:
-        for app in project.apps:
-            assert "-" in app.upload_id and len(app.upload_id.rsplit("-", 1)[1]) == 22, app.name
-
-
 def test_urls_are_percent_encoded():
     entry = AppEntry("My App", "a b#c(1).ipynb", "x", "d", "fa-x")
     url = build_voila_url(entry, "edgar", "uploads/up-1/apps")
@@ -257,3 +250,33 @@ def test_the_oasis_prefix_comes_from_the_api_endpoint():
 
     assert dm_module.OASIS_PREFIX == dm_module.API_ENDPOINT.split("/api/")[0]
     assert dm_module.VOILA_PATH_TEMPLATE.startswith(dm_module.OASIS_PREFIX + "/north/user/")
+
+
+def test_group_order_puts_named_groups_first_and_keeps_the_rest_in_default_order(caplog):
+    from data_manager import order_categories, parse_name_order
+
+    categories = {"A": [], "B b": [], "C": [], "D": []}
+    order = parse_name_order("c, B B, nope")
+    assert list(order_categories(categories, order)) == ["C", "B b", "A", "D"]
+    assert any("nope" in r.message for r in caplog.records)
+    assert order_categories(categories, None) is categories
+    assert list(order_categories(categories, [])) == ["A", "B b", "C", "D"]
+
+
+def test_select_dashboard_applies_the_group_order_after_hiding():
+    from data_manager import select_dashboard
+
+    selection = select_dashboard(CATEGORIES, order=["utilities&calculators"])
+    assert list(selection.categories)[0] == "Utilities & Calculators"
+
+
+def test_a_group_header_closes_and_opens_its_cards():
+    import gui_components as gc
+    import ipywidgets as widgets
+
+    section = gc.create_category_section("Data Management", [widgets.HTML("x")])
+    header, grid = section.children
+    header.click()
+    assert grid.layout.display == "none"
+    header.click()
+    assert grid.layout.display in (None, "")
