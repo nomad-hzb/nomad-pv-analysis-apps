@@ -47,7 +47,6 @@ NO_MANUAL_YET = {
     "TRPL_Analysis",
     "Thickness_tracer",
     "Wetting_envelope",
-    "XRD_peak_finder",
     "bitmap_maker",
     "smart_databaser",
 }
