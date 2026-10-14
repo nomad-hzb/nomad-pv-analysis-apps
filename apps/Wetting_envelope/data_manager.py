@@ -93,9 +93,9 @@ PRESET_SOLVENTS: list[dict] = [
     {"name": "Chloroform", "polar": 3.80, "dispersive": 23.70},
 ]
 
-# Total surface tension of the preset liquids, mN/m at 20 C (https://surface-tension.de/). The polar
-# and dispersive parts of a preset must add up to this; a preset whose parts do not is flagged in the
-# app.
+# Total surface tension of the preset liquids, mN/m at 20 C (https://surface-tension.de/). The
+# polar and dispersive parts of a preset must add up to this; a preset whose parts do not is
+# flagged in the app.
 LITERATURE_TOTALS: dict[str, float] = {
     "Water": 72.8,
     "Ethanol": 22.1,
