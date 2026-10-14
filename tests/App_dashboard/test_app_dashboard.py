@@ -280,3 +280,31 @@ def test_a_group_header_closes_and_opens_its_cards():
     assert grid.layout.display == "none"
     header.click()
     assert grid.layout.display in (None, "")
+
+
+def test_every_project_card_has_a_full_upload_folder_name_and_unique_names():
+    """A bare 22-character id cannot be opened; the folder is '<slug>-<id>'."""
+    import re
+
+    names = []
+    for project in PROJECTS:
+        for app in project.apps:
+            assert re.fullmatch(r"ml-[a-z0-9-]+-[0-9]*-?[A-Za-z0-9_-]{22}", app.upload_id), app.name
+            names.append(app.name)
+    assert len(names) == len(set(names)) == 8
+
+
+def test_project_cards_open_exactly_the_paths_of_the_ml_uploads():
+    expected = {
+        "1. Image Cropper": "uploads/ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg/image_cropper.ipynb",
+        "2. Feature Extraction": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/feature_extraction_app.ipynb",
+        "3. PL Defect Analysis": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/pl_defect_voila_app.ipynb",
+        "4. ML Model": "uploads/ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA/nomad_ml_app.ipynb",
+        "5. Correlation Analysis": "uploads/ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA/correlation_analysis_app.ipynb",
+        "6. PL ROI → JV Assignment": "uploads/ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg/ROI_JV_NOMAD_app.ipynb",
+        "7. Section 1": "uploads/ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg/section1_app.ipynb",
+        "8. Profile Generator": "uploads/ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA/profile_generator_app.ipynb",
+    }
+    apps = {a.name: a for project in PROJECTS for a in project.apps}
+    for name, tail in expected.items():
+        assert build_voila_url(apps[name], "u", "unused").endswith("/" + tail), name

@@ -425,9 +425,9 @@ def _build_projects() -> list[Project]:
                 "2. Feature Extraction",
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
                 ),
             ),
             AppEntry(
@@ -436,9 +436,9 @@ def _build_projects() -> list[Project]:
                 "3. PL Defect Analysis",
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
                 ),
             ),
             AppEntry(
@@ -447,9 +447,8 @@ def _build_projects() -> list[Project]:
                 "4. ML Model",
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
+                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA"
                 ),
             ),
             AppEntry(
@@ -458,9 +457,9 @@ def _build_projects() -> list[Project]:
                 "5. Correlation Analysis",
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
+                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID",
+                    "ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA",
                 ),
             ),
             AppEntry(
@@ -470,9 +469,30 @@ def _build_projects() -> list[Project]:
                 "Map PL-imaged ROIs to per-device JV curves and export the joined "
                 "dataset back to NOMAD.",
                 "fa-object-group",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
+                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg"
+                ),
+            ),
+            AppEntry(
+                "",
+                "section1_app.ipynb",
+                "7. Section 1",
+                "Section 1 app of the feature-extractor upload.",
+                "fa-th-large",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_SECTION1_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
+                ),
+            ),
+            AppEntry(
+                "",
+                "profile_generator_app.ipynb",
+                "8. Profile Generator",
+                "Generate the profiles used for labeling.",
+                "fa-chart-line",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID",
+                    "ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA",
                 ),
             ),
         )
