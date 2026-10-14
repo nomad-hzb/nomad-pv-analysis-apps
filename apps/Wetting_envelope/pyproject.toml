@@ -1,6 +1,6 @@
 [project]
 name = "wetting-envelope"
-version = "0.2.0"
+version = "0.2.1"
 description = "Interactive wetting envelope plotter (Owens-Wendt model)"
 requires-python = ">=3.10"
 dependencies = [

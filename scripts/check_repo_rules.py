@@ -43,7 +43,6 @@ NO_MANUAL_YET = {
 >>>>>>> hzb/main
     "ISA_Previewer",
     "Thickness_tracer",
-    "Wetting_envelope",
     "bitmap_maker",
     "smart_databaser",
 }
