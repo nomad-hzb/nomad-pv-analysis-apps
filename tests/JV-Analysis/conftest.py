@@ -19,6 +19,14 @@ sys.modules["dm_jv"] = _dm
 sys.modules["data_manager"] = _dm
 _spec.loader.exec_module(_dm)
 
+# plot_manager imports its two mixin modules by bare name: load those first, the same way.
+for _name in ("jv_curve_plots", "jv_stat_plots"):
+    sys.modules.pop(_name, None)
+    _mixin_spec = importlib.util.spec_from_file_location(_name, _APP_DIR / f"{_name}.py")
+    _mixin = importlib.util.module_from_spec(_mixin_spec)
+    sys.modules[_name] = _mixin
+    _mixin_spec.loader.exec_module(_mixin)
+
 # The tests also import plot_manager by bare name; load it from this app the same way.
 sys.modules.pop("plot_manager", None)
 _pm_spec = importlib.util.spec_from_file_location("pm_jv", _APP_DIR / "plot_manager.py")
