@@ -4,26 +4,12 @@ Consolidated data handling module
 Contains all data loading, parsing, and management functionality
 """
 
-import logging
+import os
+from urllib.parse import parse_qs
 
 import config
 import numpy as np
 from utils import debug_print
-
-try:
-    from hysprint_utils.access_token import log_notebook_usage
-except ImportError:
-    logging.getLogger(__name__).warning(
-        "hysprint_utils.access_token not found; skipping usage logging"
-    )
-
-    def log_notebook_usage():
-        pass
-
-
-# Log notebook usage
-log_notebook_usage()
-
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -53,38 +39,51 @@ def get_axes_from_extent(extent, data):
     return xaxes, yaxes
 
 
+HANDOVER_H5_PARAM = "h5"
+"""Query-string parameter with which the ISA Previewer links to this app (same name there)."""
+
+
+def _handed_over_h5_path():
+    """The h5 path from the page's query string (Voila puts it into QUERY_STRING), or from
+    the IPython store the previewer writes to, or None."""
+    values = parse_qs(os.environ.get("QUERY_STRING", "")).get(HANDOVER_H5_PARAM)
+    if values and values[0]:
+        return values[0]
+
+    from IPython import get_ipython
+
+    ipython = get_ipython()
+    if ipython is None:
+        return None
+    ipython.run_line_magic("store", "-r h5_path")
+    return ipython.user_ns.get("h5_path")
+
+
 def get_h5_path_from_ipython():
     """
-    Retrieve h5_path from IPython stored variables (ISA Voila integration)
+    The h5 file the ISA Previewer handed over, if there is one and it still exists.
+
+    The IPython store is an on-disk database, not session state: without the existence check
+    an app opened cold from the dashboard would reopen (and later write fit results into)
+    whatever file some previewer session stored days ago, or fail on one that was removed.
 
     Returns:
     --------
-    tuple: (h5_path, success) where success is True if path was found
+    tuple: (h5_path, success) where success is True if a usable path was found
     """
     try:
-        debug_print("Attempting to retrieve h5_path from IPython store", "H5")
-
-        # Use IPython magic to retrieve stored variable
-        from IPython import get_ipython
-
-        ipython = get_ipython()
-
-        if ipython is not None:
-            # Execute the magic command
-            ipython.run_line_magic("store", "-r h5_path")
-
-            # Try to access the variable from user namespace
-            if "h5_path" in ipython.user_ns:
-                h5_path = ipython.user_ns["h5_path"]
-                debug_print(f"Found h5_path: {h5_path}", "H5")
-                return h5_path, True
-
-        debug_print("h5_path not found in IPython store", "H5")
-        return None, False
-
+        h5_path = _handed_over_h5_path()
     except Exception as e:
         debug_print(f"Error retrieving h5_path: {e}", "H5")
         return None, False
+    if not h5_path:
+        debug_print("No h5_path handed over", "H5")
+        return None, False
+    if not os.path.exists(h5_path):
+        debug_print(f"Handed-over h5 file no longer exists: {h5_path}", "H5")
+        return None, False
+    debug_print(f"Found h5_path: {h5_path}", "H5")
+    return h5_path, True
 
 
 def sanitize_float(value, default=0.0):
@@ -683,6 +682,8 @@ class DataManager:
         self.data_source = None  # 'csv', 'h5', or None
         self.h5_mode = None
         self.h5_path = None
+        # CSV files carry no mode: is the intensity a spectral density (PL)? The GUI sets it.
+        self.csv_intensity_is_density = True
 
         # Check for H5 data availability
         self.h5_available = self.h5_loader.check_for_h5_data()
@@ -877,10 +878,25 @@ class DataManager:
             return {"source": "H5 file", "mode": self.h5_mode, "h5_path": self.h5_loader.h5_path}
         return {}
 
+    @property
+    def intensity_is_density(self):
+        """True when the intensities are a spectral density per wavelength interval (PL
+        emission), which has to be rescaled when the axis moves between nm and eV.
+        Transmission, absorbance and GIWAXS are values at a point, not densities. CSV data
+        carries no mode, so it follows `csv_intensity_is_density` (the user's choice)."""
+        if self.data_source == "h5":
+            return bool(self.h5_mode) and str(self.h5_mode).startswith("pl_")
+        return self.csv_intensity_is_density
+
     def convert_wavelength_to_energy(self):
         """
-        Convert wavelength (nm) to energy (eV)
-        E (eV) = 1239.8 / λ (nm)
+        Convert wavelength (nm) to energy (eV): E = hc / lambda, with hc = config.HC_EV_NM.
+
+        A spectral density (PL) is rescaled with the Jacobian |d lambda / dE|:
+        I(E) = I(lambda) * lambda^2 / hc, so the integral of the spectrum is the same on
+        both axes and peaks fitted in eV have the right position, width and area.
+        Transmission and absorbance are not rescaled. The points stay where they are
+        (the eV axis is not evenly spaced); only their order is reversed.
 
         Returns:
         --------
@@ -896,30 +912,11 @@ class DataManager:
             "DATA",
         )
 
-        # TODO (needs a decision with Erik/Edgar before changing, it alters every eV
-        # result): only the x-axis is converted here, the intensities are not.
-        #   - A spectral density measured per wavelength interval (PL emission)
-        #     must be rescaled when moving to energy intervals:
-        #     I(E) = I(λ) · λ² / hc, with hc = 1239.84 eV·nm (Jacobian |dλ/dE|).
-        #     Without it, peak shapes are distorted (a Gaussian in nm is not a
-        #     Gaussian in eV, the red side is weighted too strongly), so fitted
-        #     centers, widths, heights and areas in eV are biased, most for broad
-        #     peaks. Reference: Mooney & Kambhampati, J. Phys. Chem. Lett. 4, 3316
-        #     (2013).
-        #   - Absorbance and transmission are ratios at each wavelength, not
-        #     densities per interval, and need no rescaling. So the correction
-        #     must depend on h5_mode (pl_* only); CSV/TXT data carries no mode,
-        #     so there it would need a user choice.
-        #   - convert_energy_to_wavelength() must apply the inverse factor
-        #     (· hc / λ²) so that nm -> eV -> nm round-trips exactly.
-        #   - 1239.8 should be 1239.84 (hc in eV·nm); also used for the
-        #     center-bound rescaling in gui_layouts.py (on_convert_energy).
-        # E (eV) = 1239.8 / λ (nm)
-        # Note: energy is inversely proportional, so order reverses
-        self.wavelengths = 1239.8 / self.wavelengths
-        # Reverse the array so it's still in ascending order
-        self.wavelengths = self.wavelengths[::-1]
-        # Also need to reverse data matrix wavelength dimension
+        hc = config.HC_EV_NM
+        if self.intensity_is_density:
+            self.data_matrix = self.data_matrix * (self.wavelengths**2 / hc)
+        # Energy is inversely proportional to wavelength, so the order reverses
+        self.wavelengths = (hc / self.wavelengths)[::-1]
         self.data_matrix = self.data_matrix[:, ::-1]
 
         debug_print(
@@ -931,8 +928,9 @@ class DataManager:
 
     def convert_energy_to_wavelength(self):
         """
-        Convert energy (eV) to wavelength (nm)
-        λ (nm) = 1239.8 / E (eV)
+        Convert energy (eV) to wavelength (nm): lambda = hc / E. Inverse of
+        convert_wavelength_to_energy, including the density factor
+        I(lambda) = I(E) * E^2 / hc, so nm -> eV -> nm gives the original data back.
 
         Returns:
         --------
@@ -948,12 +946,10 @@ class DataManager:
             "DATA",
         )
 
-        # TODO: intensities are not rescaled here either; see the note in
-        # convert_wavelength_to_energy() before changing one of the two.
-        # λ (nm) = 1239.8 / E (eV)
-        self.wavelengths = 1239.8 / self.wavelengths
-        # Reverse back to original order
-        self.wavelengths = self.wavelengths[::-1]
+        hc = config.HC_EV_NM
+        if self.intensity_is_density:
+            self.data_matrix = self.data_matrix * (self.wavelengths**2 / hc)
+        self.wavelengths = (hc / self.wavelengths)[::-1]
         self.data_matrix = self.data_matrix[:, ::-1]
 
         debug_print(

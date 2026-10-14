@@ -130,6 +130,9 @@ H5_MODES = {
 }
 DEFAULT_H5_MODE = "giwaxs"
 
+# hc in eV nm: E (eV) = HC_EV_NM / wavelength (nm)
+HC_EV_NM = 1239.84
+
 # H5 paths (dataset locations within H5 file)
 H5_PATHS = {
     "pl_raw": {
