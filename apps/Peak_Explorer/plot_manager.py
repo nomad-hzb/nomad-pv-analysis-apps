@@ -13,6 +13,16 @@ from plotly.subplots import make_subplots
 from utils import debug_print
 
 
+def _close_widget(widget):
+    """Free a FigureWidget that is being replaced: clear_output only hides a widget, it stays
+    alive in the kernel and the browser, one more for every time step that is scrubbed."""
+    if widget is not None:
+        try:
+            widget.close()
+        except Exception:  # noqa: BLE001 - freeing memory must never break the plot
+            pass
+
+
 class Plotter:
     """Class to handle visualization of photoluminescence data"""
 
@@ -65,7 +75,7 @@ class Plotter:
                 y=wavelengths,
                 colorscale=self.colorscale,
                 colorbar=colorbar_cfg,
-                hovertemplate=f"Time Index: %{{pointNumber[1]}}<br>Time: %{{x:.2f}} {time_unit}<br>Wavelength: %{{y:.3f}} {wavelength_unit}<br>Intensity: %{{z:.0f}}<extra></extra>",
+                hovertemplate=f"Time Index: %{{pointNumber[1]}}<br>Time: %{{x:.2f}} {time_unit}<br>Wavelength: %{{y:.3f}} {wavelength_unit}<br>Intensity: %{{z:.6~g}}<extra></extra>",
                 name="PL Data",
             )
         )
@@ -116,7 +126,7 @@ class Plotter:
 
         # Improve axis formatting
         fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor="lightgray", tickformat=".2f")
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray", tickformat=".0f")
+        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="lightgray")
 
         return fig
 
@@ -162,7 +172,7 @@ class Plotter:
                     mode="lines",
                     name="Raw Data",
                     line=dict(color="black", width=3),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.6~g}}<extra></extra>",
                 ),
                 row=1,
                 col=1,
@@ -177,7 +187,7 @@ class Plotter:
                         mode="lines",
                         name="Background",
                         line=dict(color="red", width=2, dash="dash"),
-                        hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Background: %{{y:.0f}}<extra></extra>",
+                        hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Background: %{{y:.6~g}}<extra></extra>",
                     )
                 )
 
@@ -192,7 +202,7 @@ class Plotter:
                     mode="lines",
                     name="Fitted Curve",
                     line=dict(color="red", width=3, dash="dash"),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Fitted: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Fitted: %{{y:.6~g}}<extra></extra>",
                 ),
                 row=1,
                 col=1,
@@ -232,7 +242,7 @@ class Plotter:
                                     width=2,
                                     dash="dot",
                                 ),
-                                hovertemplate=f"{label}<br>Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.0f}}<extra></extra>",
+                                hovertemplate=f"{label}<br>Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.6~g}}<extra></extra>",
                             ),
                             row=1,
                             col=1,
@@ -251,7 +261,7 @@ class Plotter:
                     mode="lines",
                     name="Residuals",
                     line=dict(color="blue", width=1.5),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Residual: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Residual: %{{y:.6~g}}<extra></extra>",
                     showlegend=False,
                 ),
                 row=2,
@@ -282,7 +292,7 @@ class Plotter:
                     mode="lines",
                     name="Spectrum",
                     line=dict(color="blue", width=3),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.6~g}}<extra></extra>",
                 )
             )
 
@@ -295,7 +305,7 @@ class Plotter:
                         mode="lines",
                         name="Background",
                         line=dict(color="red", width=2, dash="dash"),
-                        hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Background: %{{y:.0f}}<extra></extra>",
+                        hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Background: %{{y:.6~g}}<extra></extra>",
                     )
                 )
 
@@ -334,76 +344,6 @@ class Plotter:
             )
 
         return fig
-
-    def update_heatmap_line_position(self, fig, timestamps, current_time_idx):
-        """
-        Update only the red line position on an existing heatmap
-
-        Parameters:
-        -----------
-        fig : plotly.graph_objects.Figure
-            Existing heatmap figure
-        timestamps : array
-            Time values
-        current_time_idx : int
-            New time index
-
-        Returns:
-        --------
-        plotly.graph_objects.Figure: Updated figure
-        """
-        if current_time_idx >= len(timestamps):
-            return fig
-
-        current_time = timestamps[current_time_idx]
-
-        try:
-            # Get wavelength range from figure data
-            if fig.data and len(fig.data) > 0:
-                heatmap_data = fig.data[0]
-                if hasattr(heatmap_data, "y") and heatmap_data.y is not None:
-                    y_min = min(heatmap_data.y)
-                    y_max = max(heatmap_data.y)
-                else:
-                    y_min = min(timestamps)
-                    y_max = max(timestamps)
-            else:
-                y_min = min(timestamps)
-                y_max = max(timestamps)
-
-            # Clear existing shapes and annotations
-            fig.layout.shapes = []
-            fig.layout.annotations = []
-
-            # Add new vertical line using add_shape (more reliable)
-            fig.add_shape(
-                type="line",
-                x0=current_time,
-                x1=current_time,
-                y0=y_min,
-                y1=y_max,
-                line=dict(color="red", width=3),
-            )
-
-            # Add annotation
-            fig.add_annotation(
-                x=current_time,
-                y=y_max,
-                text=f"t = {current_time:.3f}s",
-                showarrow=False,
-                font=dict(color="red", size=12, family="Arial Black"),
-                bgcolor="rgba(255,255,255,0.8)",
-                bordercolor="red",
-                borderwidth=1,
-                yanchor="bottom",
-            )
-
-        except Exception as e:
-            print(f"Error in heatmap update: {e}")
-            # Return original figure if update fails
-            pass
-
-        return fig  # visualization/plot_manager.py
 
 
 """
@@ -465,6 +405,7 @@ class PlotManager:
         )
 
         # Convert to FigureWidget for efficient updates
+        _close_widget(getattr(self, "heatmap_fig", None))
         self.heatmap_fig = go.FigureWidget(fig)
 
         return self.heatmap_fig
@@ -565,6 +506,9 @@ class PlotManager:
         )
 
         # Convert to FigureWidget for dynamic updates
+        _close_widget(
+            getattr(self, "spectrum_fig", None)
+        )  # one live widget per step, not one per step
         self.spectrum_fig = go.FigureWidget(fig)
 
         return self.spectrum_fig
@@ -907,7 +851,7 @@ class PlotManager:
                 mode="lines",
                 name="Raw Data",
                 line=dict(color="black", width=2),
-                hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.0f}}<extra></extra>",
+                hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.6~g}}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -922,7 +866,7 @@ class PlotManager:
                     mode="lines",
                     name="Total Fit",
                     line=dict(color="red", width=2, dash="dash"),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Fit: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Fit: %{{y:.6~g}}<extra></extra>",
                 ),
                 row=1,
                 col=1,
@@ -957,7 +901,7 @@ class PlotManager:
                                 width=2,
                                 dash="dot",
                             ),
-                            hovertemplate=f"{label}<br>Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.0f}}<extra></extra>",
+                            hovertemplate=f"{label}<br>Wavelength: %{{x:.3f}} {wavelength_unit}<br>Intensity: %{{y:.6~g}}<extra></extra>",
                         ),
                         row=1,
                         col=1,
@@ -975,7 +919,7 @@ class PlotManager:
                     mode="lines",
                     name="Residuals",
                     line=dict(color="blue", width=1.5),
-                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Residual: %{{y:.0f}}<extra></extra>",
+                    hovertemplate=f"Wavelength: %{{x:.3f}} {wavelength_unit}<br>Residual: %{{y:.6~g}}<extra></extra>",
                     showlegend=False,
                 ),
                 row=2,
@@ -1010,10 +954,6 @@ class PlotManager:
     #     debug_print(f"Exporting plots to {output_dir}", "PLOT")
     #
     #     self.export_utils.export_plots(fitting_results, output_dir)
-
-    def get_current_heatmap(self):
-        """Get current heatmap figure"""
-        return self.heatmap_fig
 
     def get_current_spectrum(self):
         """Get current spectrum figure"""

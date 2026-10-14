@@ -42,9 +42,6 @@ CONTROL_PANEL_WIDTH = "420px"
 TIME_SLIDER_WIDTH = "300px"
 TIME_INPUT_WIDTH = "150px"
 
-# Plot dimensions
-HEATMAP_HEIGHT = 500
-HEATMAP_WIDTH = 800
 SPECTRUM_HEIGHT = 600
 SPECTRUM_WIDTH = 800
 
@@ -57,23 +54,6 @@ DEFAULT_COLORSCALE = "Viridis"
 # Plot rendering
 PLOT_RENDERER = "jupyterlab"  # Options: 'svg', 'png', 'notebook'
 
-# =============================================================================
-# FITTING SETTINGS
-# =============================================================================
-# Peak detection defaults
-PEAK_DETECTION_DEFAULTS = {
-    "height": None,
-    "threshold": None,
-    "distance": 5,
-    "prominence": None,
-    "width": None,
-    "wlen": None,
-    "rel_height": 0.5,
-    "plateau_size": None,
-}
-
-# Fitting defaults
-DEFAULT_BACKGROUND_MODEL = "Linear"
 DEFAULT_PEAK_MODEL = "Gaussian"
 
 # Default half-width of the center parameter search window (in the current x-axis unit).
@@ -101,17 +81,6 @@ MAX_WORKERS = None  # None = auto-detect based on CPU count
 
 # Smart initialization for batch fitting
 USE_SMART_INIT = True
-SMART_INIT_SEARCH_RADIUS = 5
-
-# =============================================================================
-# EXPORT SETTINGS
-# =============================================================================
-# Default export formats
-EXPORT_FORMATS = ["xlsx", "csv", "json", "hdf5"]
-DEFAULT_EXPORT_FORMAT = "xlsx"
-
-# Output directory naming
-OUTPUT_DIR_PREFIX = "pl_analysis_results"
 TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
 # =============================================================================
@@ -168,17 +137,3 @@ H5_PATHS = {
 # Absorbance modes compute A = -ln(T / T_ref), where T_ref is the mean transmission
 # spectrum over this time window (inclusive, in seconds).
 ABSORBANCE_REFERENCE_WINDOW = (1, 6)
-
-# =============================================================================
-# FILE UPLOAD SETTINGS
-# =============================================================================
-ACCEPTED_FILE_TYPES = ".txt,.csv,.dat"
-ACCEPT_MULTIPLE_FILES = False
-
-# =============================================================================
-# DATA VALIDATION
-# =============================================================================
-CHECK_FOR_NAN = True
-CHECK_FOR_NEGATIVE = True
-CHECK_WAVELENGTH_ORDER = True
-CHECK_TIME_ORDER = True

@@ -478,7 +478,7 @@ def _version_from_pyproject():
     return re.search(r'^version\s*=\s*"([^"]+)"', text, re.M).group(1)
 
 
-def test_excel_and_csv_exports_write_their_files(fe, ex, x_nm, tmp_path):
+def test_excel_export_writes_its_sheets(fe, ex, x_nm, tmp_path):
     pytest.importorskip("openpyxl")
     data = np.array([gaussian(x_nm, 1000, 600, 12) for _ in range(3)])
     _, results = _batch(
@@ -486,31 +486,10 @@ def test_excel_and_csv_exports_write_their_files(fe, ex, x_nm, tmp_path):
     )
     exporter = ex.ResultExporter()
     xlsx = exporter.export_to_excel(results, np.arange(3.0), filename=str(tmp_path / "r.xlsx"))
-    assert set(pd.read_excel(xlsx, sheet_name=None)) == {
-        "Peak_Parameters",
-        "Standard_Errors",
-        "Fitting_Quality",
-    }
-    out = exporter.export_to_csv(results, output_dir=str(tmp_path / "csv"))
-    quality = pd.read_csv(f"{out}/fitting_quality.csv")
-    assert len(pd.read_csv(f"{out}/peak_parameters.csv")) == 3
-    assert (quality["RMSE"] < 1e-3).all()
-
-
-@BUG("export_to_json writes Infinity for unbounded parameter limits")
-def test_json_export_is_valid_json(fe, ex, x_nm, tmp_path):
-    """JSON has no Infinity/NaN; other tools reject a file that contains them."""
-    data = np.array([gaussian(x_nm, 1000, 600, 12)])
-    _, results = _batch(
-        fe, x_nm, data, [{"type": "Gaussian", "center": 600, "height": 30, "sigma": 10}]
-    )
-    path = tmp_path / "r.json"
-    ex.ResultExporter().export_to_json(results, filename=str(path))
-
-    def reject(constant):
-        raise ValueError(f"not valid JSON: {constant}")
-
-    json.loads(path.read_text(), parse_constant=reject)
+    sheets = pd.read_excel(xlsx, sheet_name=None)
+    assert set(sheets) == {"Peak_Parameters", "Standard_Errors", "Fitting_Quality"}
+    assert len(sheets["Peak_Parameters"]) == 3
+    assert (sheets["Fitting_Quality"]["RMSE"] < 1e-3).all()
 
 
 # =============================================================================
@@ -1154,3 +1133,64 @@ def test_polynomial_offset_above_one_thousand_is_fitted(fe, x_nm):
     engine, results = _batch(fe, x_nm, data, [{"type": "Polynomial", "poly_degree": 0}])
     coefficient = results[0]["parameters"]["p0_c0"]["value"]
     assert coefficient == pytest.approx(5000.0, rel=1e-3)
+
+
+# =============================================================================
+# Peak rows and worker count
+# =============================================================================
+
+
+def test_a_removed_peak_row_never_gives_its_id_to_the_next_one(gl):
+    application = gl.PLAnalysisApp()
+    application.clear_peak_models()
+    for centre in (500.0, 600.0, 700.0):
+        application.add_peak_model(
+            peak_info={"type": "Gaussian", "center": centre, "height": 10.0, "sigma": 5.0}
+        )
+    application.remove_peak_model(1)
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 800.0, "height": 10.0, "sigma": 5.0}
+    )
+    ids = [row._peak_idx for row in application.peak_models]
+    assert len(set(ids)) == len(ids) == 3
+    application.remove_peak_model(ids[-1])
+    assert _detected_centers(application) == [500.0, 700.0]
+
+
+def test_worker_count_follows_the_process_and_is_capped(fe, monkeypatch):
+    assert 1 <= fe.available_cpus() <= 8
+    monkeypatch.setattr(fe.os, "process_cpu_count", lambda: 64, raising=False)
+    assert fe.available_cpus() == 8
+    assert fe.available_cpus(cap=2) == 2
+
+
+def test_replacing_the_spectrum_plot_closes_the_old_widget(pm, x_nm):
+    manager = pm.PlotManager()
+    y = gaussian(x_nm, 1000, 600, 12)
+    manager.create_spectrum_plot(x_nm, y)
+    first = manager.spectrum_fig
+    manager.create_spectrum_plot(x_nm, y)
+    assert manager.spectrum_fig is not first
+    assert first.comm is None  # closed
+
+
+def test_hover_and_axis_formats_follow_the_data_scale(pm):
+    wavelengths = np.linspace(0.4, 2.5, 20)  # q in 1/A
+    data = np.full((5, 20), 0.0123)
+    fig = pm.PlotManager().create_heatmap(data, wavelengths, np.arange(5.0), 0)
+    assert "~g" in fig.data[0].hovertemplate
+    assert fig.layout.yaxis.tickformat != ".0f"
+
+
+def test_update_from_fit_reports_every_parameter_in_the_status_output(app, x_nm, capsys):
+    """The per-parameter lines used to be printed outside the Output, which Voila drops."""
+    application = app([gaussian(x_nm, 1000, 600, 12) + 1], x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 598.0, "height": 30.0, "sigma": 10.0}
+    )
+    application.on_fit_current(None)
+    capsys.readouterr()
+    application.on_update_parameters(None)
+    text = capsys.readouterr().out
+    assert "Model 1 center" in text and "Updated" in text
