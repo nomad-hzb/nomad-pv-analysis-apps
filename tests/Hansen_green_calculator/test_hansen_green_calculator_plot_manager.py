@@ -287,3 +287,21 @@ def test_every_tab_links_the_database_it_reads():
         "github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Hansen_green_calculator/db.csv"
         in link
     )
+
+
+def test_the_table_and_the_csv_follow_the_plotted_only_checkbox(loaded_solvent_dm):
+    from types import SimpleNamespace
+
+    import gui_components as gc
+
+    panel = gc.DataVisualizerPanel(loaded_solvent_dm)
+    panel._on_point_click(None, SimpleNamespace(point_inds=[0]), None)
+    shown = []
+    panel._table_out.append_display_data = lambda obj: None  # the table is rendered by display()
+    panel._selected_table = lambda only_plotted=False: (
+        shown.append(only_plotted) or panel._dm.data.iloc[:1]
+    )
+    panel._only_plotted.value = True
+    assert shown[-1] is True  # the table was redrawn with the checkbox on
+    panel._only_plotted.value = False
+    assert shown[-1] is False

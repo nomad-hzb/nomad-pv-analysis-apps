@@ -209,7 +209,7 @@ class DataVisualizerPanel:
         self._download_btn = _btn("Download CSV", "info")
         self._only_plotted = widgets.Checkbox(
             value=False,
-            description="Only the plotted values (name and the plotted columns), not every column",
+            description="Only the plotted values (name and plotted columns) in table and CSV",
             indent=False,
             layout=widgets.Layout(width="auto"),
         )
@@ -219,6 +219,7 @@ class DataVisualizerPanel:
         self._corr_btn.on_click(self._show_corr)
         self._reset_btn.on_click(self._on_reset)
         self._download_btn.on_click(self._on_download)
+        self._only_plotted.observe(lambda _change: self._refresh_table(), names="value")
 
         controls = widgets.HBox([self._x_dd, self._y_dd, self._c_dd])
         self.widget = widgets.VBox(
@@ -306,7 +307,7 @@ class DataVisualizerPanel:
                 ipydisplay(HTML("<i>No points selected yet: click points in the plot.</i>"))
                 return
             ipydisplay(HTML(f"<b>{len(self._selected)} selected</b>"))
-            ipydisplay(self._selected_table())
+            ipydisplay(self._selected_table(self._only_plotted.value))
 
     def _on_download(self, _):
         self._download_out.clear_output()
