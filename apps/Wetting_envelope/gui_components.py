@@ -210,6 +210,16 @@ class MaterialPanel:
     def widget(self) -> widgets.VBox:
         return widgets.VBox(
             [
+                *(
+                    [
+                        widgets.HTML(
+                            "<div style='color:#c0392b'>Could not read the presets: "
+                            f"{html.escape('; '.join(dm.PRESET_LOAD_ERRORS))}</div>"
+                        )
+                    ]
+                    if dm.PRESET_LOAD_ERRORS
+                    else []
+                ),
                 _section_header("Materials"),
                 _subheader("Pick a preset or enter values manually:"),
                 widgets.HTML(

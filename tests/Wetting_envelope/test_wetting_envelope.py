@@ -131,3 +131,12 @@ def test_preset_note_says_where_values_come_from_and_flags_sums_that_do_not_matc
     assert "do not add up" in solvent_preset_note("Acetone")
     assert "do not add up" in solvent_preset_note("Isopropanol (IPA)")
     assert solvent_preset_note("nothing") == ""
+
+
+def test_a_missing_preset_file_gives_no_presets_and_a_reason_instead_of_a_crash():
+    import data_manager as dm_module
+
+    before = list(dm_module.PRESET_LOAD_ERRORS)
+    assert dm_module.load_presets("does_not_exist.csv") == []
+    assert len(dm_module.PRESET_LOAD_ERRORS) == len(before) + 1
+    del dm_module.PRESET_LOAD_ERRORS[len(before) :]

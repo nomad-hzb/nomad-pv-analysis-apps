@@ -74,17 +74,28 @@ GITHUB_BLOB_URL = (
 MAX_THETA = 179.0
 
 
+PRESET_LOAD_ERRORS: list[str] = []
+
+
 def load_presets(filename: str) -> list[dict]:
-    """The rows of a preset CSV as dicts: the numeric columns as floats, empty cells as None."""
+    """The rows of a preset CSV as dicts: the numeric columns as floats, empty cells as None.
+
+    A file that is missing or cannot be read gives no presets (the app still starts, the values
+    can be typed in) and the reason is kept in PRESET_LOAD_ERRORS for the app to show."""
     numeric = {"polar", "dispersive", "theta", "literature_total"}
     rows = []
-    with open(_APP_DIR / filename, encoding="utf-8", newline="") as handle:
-        for raw in csv.DictReader(handle):
-            row = {}
-            for key, value in raw.items():
-                value = (value or "").strip()
-                row[key] = (float(value) if key in numeric else value) if value else None
-            rows.append(row)
+    try:
+        with open(_APP_DIR / filename, encoding="utf-8", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                row = {}
+                for key, value in raw.items():
+                    value = (value or "").strip()
+                    row[key] = (float(value) if key in numeric else value) if value else None
+                rows.append(row)
+    except (OSError, ValueError) as exc:
+        logger.error("Could not read the presets in %s: %s", filename, exc)
+        PRESET_LOAD_ERRORS.append(f"{filename}: {exc}")
+        return []
     return rows
 
 
