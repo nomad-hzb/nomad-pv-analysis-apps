@@ -501,10 +501,16 @@ class DataManager:
         self._color_material_is_all = False
         self._source_material_columns = {}
         self.sample_entry_links = {}  # {lab_id: gui_url}
+        self.sample_batch = {}  # {lab_id: the batch it was selected from}
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
         return _get_material_column(df)
+
+    def batch_for_sample(self, sample_id: str) -> str:
+        """The batch the user selected this sample from; when that is not known (data that did
+        not come from a batch selection), the sub-batch read from the sample id."""
+        return self.sample_batch.get(sample_id) or self.extract_subbatch(sample_id)[0]
 
     def extract_subbatch(self, sample_id: str) -> tuple:
         """
@@ -631,9 +637,7 @@ class DataManager:
                 if measurement_type not in self.current_metadata:
                     metadata_df = loader_func(sample_ids, variation)
                     if metadata_df is not None and not metadata_df.empty:
-                        metadata_df["batch"] = metadata_df["sample_id"].apply(
-                            lambda sid: self.extract_subbatch(sid)[0]
-                        )
+                        metadata_df["batch"] = metadata_df["sample_id"].apply(self.batch_for_sample)
                         self.current_metadata[measurement_type] = metadata_df
             except Exception:
                 pass
@@ -1278,7 +1282,7 @@ class DataManager:
             "",
         ]
 
-        # "batch" (added in load_all_data_for_summary via extract_subbatch) is a
+        # "batch" (added in load_all_data_for_summary: the batch the sample was selected from) is a
         # derived subbatch label, not a real process parameter - it's a string
         # column, so it never feeds Correlation/RF/BO anyway (those only look at
         # numeric columns), and listing it here just adds noise when a load
