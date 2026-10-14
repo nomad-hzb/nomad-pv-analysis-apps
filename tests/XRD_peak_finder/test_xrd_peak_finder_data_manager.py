@@ -139,3 +139,29 @@ def test_measurement_type_constant():
 def test_headerless_xy_file_keeps_its_first_data_point():
     x, y, meta = parse_xy_file("10 1\n20 2\n30 3", "plain.xy")
     assert (x, y, meta) == ([10.0, 20.0, 30.0], [1.0, 2.0, 3.0], {})
+
+
+def test_csv_has_the_sample_id_once_and_no_index_column():
+    mgr = XRDDataManager(url="http://mock", token="t")
+    mgr.data = {
+        "S1": {
+            "angle": [5.0, 6.0],
+            "intensity": [0.0, 1.0],
+            "variation": "v",
+            "name": "n",
+            "sample_id": "S1",
+        }
+    }
+    csv = mgr.to_csv_string()
+    assert csv.splitlines()[0] == "sample_id,variation,name,angle,intensity"
+    mgr.data["S2_meas_1"] = {
+        "angle": [5.0],
+        "intensity": [1.0],
+        "variation": "",
+        "name": "",
+        "sample_id": "S2",
+    }
+    assert (
+        mgr.to_csv_string().splitlines()[0]
+        == "sample_id,measurement,variation,name,angle,intensity"
+    )

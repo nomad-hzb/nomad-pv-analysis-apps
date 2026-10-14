@@ -212,22 +212,29 @@ class XRDDataManager:
         return get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
 
     def to_csv_string(self) -> str:
-        """Export all loaded data as a CSV string."""
+        """Export all loaded data as a CSV string.
+
+        One row per data point: sample_id, variation, name, angle, intensity. A sample with
+        several measurements also gets a "measurement" column (its key); the sample id is not
+        repeated under a second name when the key is the sample id itself."""
         rows = []
+        several = any(key != entry.get("sample_id", key) for key, entry in self.data.items())
         for key, entry in self.data.items():
             angle = entry.get("angle") or []
             intensity = entry.get("intensity") or []
             for a, i in zip(angle, intensity):
-                rows.append(
+                row = {"sample_id": entry.get("sample_id", key)}
+                if several:
+                    row["measurement"] = key
+                row.update(
                     {
-                        "key": key,
-                        "sample_id": entry.get("sample_id", ""),
                         "variation": entry.get("variation", ""),
                         "name": entry.get("name", ""),
                         "angle": a,
                         "intensity": i,
                     }
                 )
+                rows.append(row)
         if not rows:
             return ""
-        return pd.DataFrame(rows).to_csv()
+        return pd.DataFrame(rows).to_csv(index=False)
