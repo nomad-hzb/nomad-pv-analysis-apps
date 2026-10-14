@@ -112,6 +112,14 @@ LITERATURE_TOTALS: dict[str, float] = {
     "Chloroform": 27.2,
 }
 
+# Where the preset data lives (it is Python data in this file, not an Excel or CSV file) and the
+# page the values were tabulated from. Shown as links in the app.
+DATA_FILE_URL = (
+    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/"
+    "apps/Wetting_envelope/data_manager.py"
+)
+SOURCE_PAGE_URL = "https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/"
+
 _ZDZIENNICKA = "Zdziennicka et al., Colloids Surf. A 529 (2017) 864 (20 °C)"
 _HWANG = "Hwang et al., J. Ind. Eng. Chem. 17 (2011) 125 (20 °C)"
 
@@ -138,6 +146,8 @@ def solvent_preset_note(name: str) -> str:
     literature = LITERATURE_TOTALS.get(name)
     source = SPLIT_SOURCES.get(name, "the split has no recorded source")
     note = f"Polar + dispersive = {total:.1f} mN/m; {source}."
+    if name in SPLIT_SOURCES:
+        note += " Tabulated at the page linked below."
     if literature is not None:
         note += f" Literature total {literature:g} mN/m."
         if abs(total - literature) > 1.0:

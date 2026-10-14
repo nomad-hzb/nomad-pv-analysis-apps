@@ -291,7 +291,13 @@ class SolventPanel:
         self._name.value = preset["name"]
         self._polar.value = preset["polar"]
         self._dispersive.value = preset["dispersive"]
-        self._source_note.value = f"<div style='color:#666;font-size:0.9em'>{html.escape(dm.solvent_preset_note(preset['name']))}</div>"
+        note = html.escape(dm.solvent_preset_note(preset["name"]))
+        self._source_note.value = (
+            f"<div style='color:#666;font-size:0.9em'>{note}<br>"
+            f"<a href='{dm.SOURCE_PAGE_URL}' target='_blank'>Table of the values</a> | "
+            f"<a href='{dm.DATA_FILE_URL}' target='_blank'>Preset data in the repository "
+            f"(PRESET_SOLVENTS)</a></div>"
+        )
 
     def _on_add(self, _b) -> None:
         ok, msg = self._dm.add_solvent(
@@ -315,6 +321,11 @@ class SolventPanel:
             [
                 _section_header("Solvents / Liquid Points"),
                 _subheader("Pick a preset or enter values manually:"),
+                widgets.HTML(
+                    "<div style='color:#666;font-size:0.9em'>The presets are listed in "
+                    f"<a href='{dm.DATA_FILE_URL}' target='_blank'>data_manager.py</a> "
+                    "(Python lists, with their sources in the comments above them).</div>"
+                ),
                 self._preset_dd,
                 self._source_note,
                 self._name,
