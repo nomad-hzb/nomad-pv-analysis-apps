@@ -44,7 +44,6 @@ NO_MANUAL_YET = {
     "ISA_Previewer",
     "LCC_Calculator",
     "NMR_Analysis",
-    "PeroDatabase_downloader",
     "TRPL_Analysis",
     "Thickness_tracer",
     "Wetting_envelope",

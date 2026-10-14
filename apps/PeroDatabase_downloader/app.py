@@ -7,9 +7,12 @@ example to Dash), swap the GUI class here and leave the rest untouched.
 """
 
 import config
+import ipywidgets as widgets
 from auth import authenticate
 from data_manager import DataManager
 from gui_components import ExtractorGUI
+
+from hysprint_utils.manual import manual_panel
 
 
 class NomadExtractorApp:
@@ -19,4 +22,4 @@ class NomadExtractorApp:
         self.gui = ExtractorGUI(self.data_manager, auth=self.auth)
 
     def launch(self):
-        return self.gui.render()
+        return widgets.VBox([manual_panel(__file__), self.gui.render()])
