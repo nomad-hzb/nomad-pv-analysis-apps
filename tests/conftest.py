@@ -15,8 +15,14 @@ app's data_manager/plot_manager) gets imported, so the real stdlib
 walk-up discovery in get_token(), which is Path-based, not sys.path-based.
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Outside a notebook plotly's default renderer is the browser: any test that reaches
+# fig.show() (DesignOfExperiments, EQE_Analysis) would start a local server and open a tab.
+# Tests never need to see a figure, so use the renderer that only produces JSON.
+os.environ.setdefault("PLOTLY_RENDERER", "json")
 
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
