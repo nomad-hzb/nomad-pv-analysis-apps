@@ -19,6 +19,8 @@ from plot_manager import PlotManager
 from sampling_algorithms import SamplingEngine, get_notes
 from utils import Constants, ValidationUtils
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,7 +90,7 @@ class DoEApplication:
             self.tabs.set_title(i, title)
 
         header = self._create_header()
-        return widgets.VBox([header, self.tabs])
+        return widgets.VBox([header, manual_panel(__file__), self.tabs])
 
     def _create_header(self):
         """Create application header with title and status."""
