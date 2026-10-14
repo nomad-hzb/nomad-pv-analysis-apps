@@ -53,13 +53,11 @@ from data_manager import (
 from gui_components import GUIManager
 from IPython.display import HTML, Markdown, clear_output
 from IPython.display import display as ipy_display
-from natsort import natsorted
 from plot_manager import PlotManager
 from utils import ParameterManager, ProcessStepManager, trigger_csv_download
 
 from hysprint_utils.api_calls import (
     get_all_eqe,
-    get_batch_ids,
     get_ids_in_batch,
     get_processing_steps,
     get_sample_description,
@@ -774,28 +772,6 @@ class SampleDataExplorer:
             self._on_run_random_forest(None)
         if self._last_bo_result is not None:
             self._on_suggest_experiments(None)
-
-    def _initialize_batch_options(self):
-        """Initialize batch options from API."""
-        try:
-            all_batch_ids = get_batch_ids(self.url, self.token)
-            self.gui.batch_selector.options = natsorted(all_batch_ids)
-            self._update_status("✓ Batch options loaded. Select batches to continue.")
-        except Exception as e:
-            self._update_status(f"❌ Error loading batches: {str(e)}")
-
-    def _filter_batches(self, change):
-        """Filter batches based on search term."""
-        search_term = change["new"].lower()
-        try:
-            all_batch_ids = get_batch_ids(self.url, self.token)
-            if search_term:
-                filtered = [b for b in all_batch_ids if search_term in b.lower()]
-            else:
-                filtered = all_batch_ids
-            self.gui.batch_selector.options = natsorted(filtered)
-        except Exception as e:
-            self._update_status(f"❌ Error filtering batches: {str(e)}")
 
     def _on_load_batches(self, button):
         """Handle batch loading."""

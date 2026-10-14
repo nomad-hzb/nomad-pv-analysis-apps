@@ -204,9 +204,6 @@ class XRDDataManager:
     # Helpers
     # ------------------------------------------------------------------
 
-    def get_entry(self, key: str) -> dict:
-        return self.data[key]
-
     def get_batches_with_data(self) -> list[str]:
         """Return batch IDs that actually contain XRD measurements."""
         return get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
