@@ -26,7 +26,7 @@ def read_manual(app_file, filename=MANUAL_FILE) -> str | None:
 
 def manual_panel(app_file, filename=MANUAL_FILE) -> widgets.Widget:
     """A "Manual" toggle button and the rendered manual below it."""
-    toggle = widgets.ToggleButton(description="📖 Manual", icon="book")
+    toggle = widgets.ToggleButton(description="📖 Manual")
     out = widgets.Output()
 
     def show(change):
