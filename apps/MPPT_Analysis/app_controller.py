@@ -12,7 +12,7 @@ from gui_components import GUIComponents
 from IPython.display import display
 from plot_manager import PlotManager
 
-from hysprint_utils import plotting_utils
+from hysprint_utils.manual import manual_panel
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -92,7 +92,7 @@ class MPPTAnalysisApp:
 
         # Display the interface
         display(self._demo_btn)
-        display(plotting_utils.create_manual("mppt_manual.md"))
+        display(manual_panel(__file__))
         display(self.tab_widget)
 
     def enable_sample_tab(self):

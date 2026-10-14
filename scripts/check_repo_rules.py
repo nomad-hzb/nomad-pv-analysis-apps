@@ -44,7 +44,6 @@ NO_MANUAL_YET = {
     "Hansen_green_calculator",
     "ISA_Previewer",
     "LCC_Calculator",
-    "MPPT_Analysis",
     "NMR_Analysis",
     "PeroDatabase_downloader",
     "TRPL_Analysis",
