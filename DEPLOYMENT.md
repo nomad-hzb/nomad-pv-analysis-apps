@@ -30,7 +30,9 @@ Look for:
 
 CE-AME was probed and returns NOMAD 1.4.2, the `hysprint_package` schema, and
 both `voila` and `jupyter2`, so no schema work is needed. If your Oasis runs a
-different schema package, `ENTRY_TYPES` is the single place to remap the names.
+different schema package, `ENTRY_TYPES` remaps the entry-type names for the apps that use it.
+Global_analyzer and Entry_Auditor still hardcode about 90 `HySprint_*` names, so they need those
+edited by hand on such an Oasis.
 
 Also note the API base path. CE-AME serves at `/nomad-oasis` like HZB; if yours
 differs, see the known gap on path literals at the end of this document.
@@ -153,7 +155,7 @@ Every uppercase string assignment in it is exported as an environment variable
 of the same name before `hysprint_utils` is imported or installed. Anything
 already set at the container level wins; this file never overwrites it.
 
-### The CE-AME file
+### Template with every option (and the CE-AME values)
 
 The proxy host below is a placeholder. Deployment-specific values like the
 real proxy address belong in the gitignored `oasis_local_config.py` of that
@@ -165,15 +167,60 @@ that deployment needs no local file. To opt out, set `HTTP_PROXY = ""` and
 `HTTPS_PROXY = ""` in `oasis_local_config.py`; any other `HYSPRINT_URL_BASE`
 turns the default off.
 
-```python
-# --- Which Oasis the apps talk to ---
-HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
-HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
+Every option below is optional; copy the block into `oasis_local_config.py` and un-comment what your
+Oasis needs. The table after it explains each variable.
 
-# --- Outbound network ---
-HTTP_PROXY = "http://proxy.example.org:3128"
-HTTPS_PROXY = "http://proxy.example.org:3128"
-NO_PROXY = "localhost,127.0.0.1"
+```python
+# --- Which Oasis -----------------------------------------------------------------------------
+# Required on any Oasis other than the HZB SE one. No trailing slash.
+# HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
+# Only if the API is not at /nomad-oasis/api/v1:
+# HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
+
+# --- Outbound proxy (only if the container has no direct route out) --------------------------
+# The HZB SE Oasis gets the HZB proxy by default; any other deployment gets none unless set here.
+# To switch the proxy off on HZB SE, set both to the empty string.
+# HTTP_PROXY = "http://proxy.example.org:3128"
+# HTTPS_PROXY = "http://proxy.example.org:3128"
+# NO_PROXY = "localhost,127.0.0.1"
+
+# --- App Dashboard: which apps are listed ----------------------------------------------------
+# Hide apps (comma-separated app folder names or card names; case and spaces are ignored; unknown
+# names only log a warning). "Learning" and "Projects" name those two sections.
+# HYSPRINT_DASHBOARD_HIDE_APPS = "XPS-Automated,SEM_crystal_counter"
+# Or show only these (an allow-list; the hide list is applied on top):
+# HYSPRINT_DASHBOARD_SHOW_APPS = "JV-Analysis,File_Uploader,Learning"
+# Order of the groups: the groups named here come first, in this order (case and spaces are
+# ignored, unknown names only log a warning); every other group follows in its default order.
+# Unset: the default order. Names: Data Management, Device Characterization,
+# Optical & Structural Analysis, Utilities & Calculators, Build Your Own,
+# Experimental / In Progress.
+# HYSPRINT_DASHBOARD_GROUP_ORDER = "Data Management,Device Characterization"
+
+# --- App Dashboard: the "Projects" cards (slot-die ML pipeline) ------------------------------
+# Each card links into a specific HZB upload. Set the upload folder ('<slug>-<id>') of your own copy, or set the
+# variable to the empty string to drop that card (all six empty: the section disappears).
+# HYSPRINT_PROJECT_IMAGE_CROPPER_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_SECTION1_UPLOAD_ID = ""
+# HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID = ""
+
+# --- Keys and tokens (never put them in the code, a notebook or git) -------------------------
+# A key an app needs is read from an environment variable of the same name. Set it here, in this
+# gitignored file (it becomes the variable before the apps start), or in the container's own
+# environment, which wins. Currently used: the Global_analyzer "AI summary" panel (Helmholtz
+# Blablador key). A leaked key must be revoked and replaced, deleting the file is not enough.
+# BLABLADOR_API_KEY = "<your key>"
+
+# --- Logs and debugging ----------------------------------------------------------------------
+# Where notebook_usage.log and button_usage.log are written (default: shared/log/ of the upload).
+# HYSPRINT_USAGE_LOG_DIR = "/home/jovyan/hysprint_logs"
+# Show the banner some packages print on import (silenced by default):
+# HYSPRINT_KEEP_IMPORT_OUTPUT = "1"
 ```
 
 ### What each variable does
@@ -184,6 +231,12 @@ NO_PROXY = "localhost,127.0.0.1"
 | `HYSPRINT_API_ENDPOINT` | only if the API is not at `/nomad-oasis/api/v1` | Identical to the HZB default on CE-AME. Set anyway so the deployment is fully described by one file. |
 | `HTTP_PROXY`, `HTTPS_PROXY` | the container has no direct outbound route | Applied *before* `pip install shared/` runs, because pip fetches `hatchling` from PyPI to build it. Also picked up by `git` for the `insitu_analyser` dependency. |
 | `NO_PROXY` | whenever a proxy is set | Hosts that must be reached *without* the proxy. Defaults to `localhost,127.0.0.1` if omitted. Do not add the Oasis host unless a direct call to it actually works from the container - on CE-AME it does not, and excluding it breaks every API call with `Errno 113 No route to host`. |
+| `HYSPRINT_USAGE_LOG_DIR` | only to keep usage logs somewhere else | Folder for `notebook_usage.log` and `button_usage.log` (`hysprint_utils.usage_tracking`). Defaults to `shared/log/` in the uploaded repo, so every app in one upload writes to the same two files. Logs from older versions, kept next to `hysprint_utils`, are moved there on first use. |
+| `HYSPRINT_DASHBOARD_HIDE_APPS` | only to drop apps from the App Dashboard | Comma-separated app folder names (or card names) to hide, e.g. `"XPS-Automated,SEM_crystal_counter"`. `Learning` and `Projects` name those two sections. Case and spaces are ignored; an unknown name logs a warning and is ignored. A category with no apps left disappears. Hidden apps stay in the upload and can still be opened directly. Unset: the dashboard is unchanged. |
+| `HYSPRINT_DASHBOARD_SHOW_APPS` | only to show a few apps | An allow-list of the same kind of names: when set, only these appear (and `Learning`/`Projects` only if named). The hide list is applied on top. Example: `"JV-Analysis,File_Uploader,Learning"`. |
+| `HYSPRINT_DASHBOARD_GROUP_ORDER` | only to change the order of the groups | Comma-separated group names (`Data Management`, `Device Characterization`, ...): these come first in this order, the rest follow in the default order. Case and spaces are ignored; an unknown name logs a warning. Unset: the default order. |
+
+**Before adding a new dashboard setting:** the App Dashboard already reads three optional settings from `oasis_local_config.py` (`HYSPRINT_DASHBOARD_HIDE_APPS`, `HYSPRINT_DASHBOARD_SHOW_APPS`, `HYSPRINT_DASHBOARD_GROUP_ORDER`, parsed in `apps/App_dashboard/data_manager.py` by `select_dashboard`). To hide, allow-list or reorder apps or groups, use those; extend `select_dashboard` for anything similar instead of adding a separate mechanism. Groups open and close in the page by clicking their header.
 
 ### Ordering, and why it is not cosmetic
 

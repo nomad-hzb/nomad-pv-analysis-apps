@@ -10,7 +10,6 @@ import io
 import logging
 import re
 import warnings
-from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -176,6 +175,10 @@ class SolventDataManager:
                 mask |= self.data[col].astype(str).str.lower().str.contains(t, na=False)
         return self.data[mask].copy()
 
+    def all_solvents(self) -> pd.DataFrame:
+        """Every solvent of the database (what the pick lists show before anything is typed)."""
+        return self.data.copy() if self.is_loaded else pd.DataFrame()
+
     def get_by_index(self, idx: int) -> Optional[pd.Series]:
         if idx in self.data.index:
             return self.data.loc[idx]
@@ -243,6 +246,37 @@ class InkDataManager:
 
 PEROVSKITE_COLOR_COLS = ["DN", "BP", "heat of Vap", "hov_temp", "mw", "vis_temp", "Viscosity"]
 
+# Sheet3 of PlottedInks.xlsx spells several columns differently from Sheet2 ("Solutes", "bp",
+# "Hov Temp", "MW", "Vis Temp"). Matched case-insensitively and mapped to the Sheet2 names, so
+# the solute filter, the hover text and the colour options work on both sheets.
+PEROVSKITE_COLUMN_ALIASES = {
+    "solutes": "Solute",
+    "solute": "Solute",
+    "solvents": "Solvent",
+    "solvent": "Solvent",
+    "bp": "BP",
+    "hov temp": "hov_temp",
+    "hov_temp": "hov_temp",
+    "mw": "mw",
+    "vis temp": "vis_temp",
+    "vis_temp": "vis_temp",
+    "heat of vap": "heat of Vap",
+    "dn": "DN",
+    "viscosity": "Viscosity",
+    "stability": "Stability",
+}
+
+
+def normalise_perovskite_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename a perovskite sheet's columns to the canonical names (see
+    PEROVSKITE_COLUMN_ALIASES); columns without an alias are kept as they are."""
+    renames = {}
+    for column in df.columns:
+        canonical = PEROVSKITE_COLUMN_ALIASES.get(str(column).strip().lower())
+        if canonical and canonical != column and canonical not in df.columns:
+            renames[column] = canonical
+    return df.rename(columns=renames)
+
 
 class PerovskiteDataManager:
     """Loads and queries perovskite data from PlottedInks.xlsx."""
@@ -264,15 +298,13 @@ class PerovskiteDataManager:
             try:
                 raw = pd.read_excel(self.xlsx_path, sheet_name=sheet)
                 raw = raw.dropna(subset=["D", "P", "H"])
-                # Normalise column name
-                if "heat of Vap" in raw.columns:
-                    raw = raw.rename(columns={"heat of Vap": "heat of Vap"})
+                raw = normalise_perovskite_columns(raw)
                 setattr(self, attr, raw.reset_index(drop=True))
                 msgs.append(f"{sheet}: {len(raw)} rows")
             except Exception as exc:
                 msgs.append(f"{sheet}: failed ({exc})")
-        self._loaded = True
-        return True, "  |  ".join(msgs)
+        self._loaded = not (self.sheet2.empty and self.sheet3.empty)
+        return self._loaded, "  |  ".join(msgs)
 
     def get_sheet(self, sheet_key: str) -> pd.DataFrame:
         """sheet_key: 'Sheet2' or 'Sheet3'"""
@@ -372,14 +404,21 @@ def weighted_average(
 # ---------------------------------------------------------------------------
 
 
+HANSEN_D_WEIGHT = 2.0  # Ra = sqrt(4 dD^2 + dP^2 + dH^2): dD counts twice
+
+
 def calculate_enclosing_sphere(
     group_df: pd.DataFrame,
+    d_scale: float = 1.0,
 ) -> tuple[np.ndarray, float]:
+    """Centre and radius of the sphere around a group of points, in the space whose D axis is
+    multiplied by d_scale. With d_scale = HANSEN_D_WEIGHT the radius is the largest Hansen
+    distance Ra from the centre, and the sphere is a true Hansen sphere in that space."""
+    scale = np.array([d_scale, 1.0, 1.0])
+    pts = group_df[["D", "P", "H"]].values.astype(float) * scale
     if len(group_df) == 1:
-        c = group_df[["D", "P", "H"]].iloc[0].values.astype(float)
-        return c, 0.1
-    center = group_df[["D", "P", "H"]].mean().values.astype(float)
-    pts = group_df[["D", "P", "H"]].values.astype(float)
+        return pts[0], 0.1
+    center = pts.mean(axis=0)
     dists = np.linalg.norm(pts - center, axis=1)
     return center, float(dists.max()) * 1.05
 
@@ -421,11 +460,6 @@ def export_blend_csv(
     temperature_k: Optional[float] = None,
 ) -> str:
     """Return CSV string for blend results."""
-    lines = [
-        "# Hansen Blend Calculator Results",
-        f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
-    ]
     summary = {
         "Parameter": [
             "Target_D",

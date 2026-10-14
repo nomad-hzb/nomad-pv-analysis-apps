@@ -17,9 +17,8 @@ from pathlib import Path
 import ipywidgets as widgets
 import openpyxl
 import pandas as pd
-import requests
 from data_manager import DataManager
-from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, InfoUI, PlotUI, SaveUI
+from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, PlotUI, SaveUI
 from IPython.display import Javascript, Markdown, clear_output, display
 from openpyxl.utils.dataframe import dataframe_to_rows
 from plot_manager import plotting_string_action
@@ -32,8 +31,10 @@ from utils import (
     save_combined_excel_data,
 )
 
+from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -56,86 +57,12 @@ except ImportError:
     logger.warning("Warning: Some API modules not available")
 
 
-class SimpleAuthManager:
-    """Simplified authentication manager"""
-
-    def __init__(self, base_url, api_endpoint):
-        self.base_url = base_url
-        self.api_endpoint = api_endpoint
-        self.url = f"{base_url}{api_endpoint}"
-        self.current_token = None
-        self.current_user_info = None
-        self.status_callback = None
-        self.api_client = self  # Compatibility
-
-    def set_status_callback(self, callback):
-        self.status_callback = callback
-
-    def _update_status(self, message, color=None):
-        if self.status_callback:
-            self.status_callback(message, color)
-
-    def authenticate_with_token(self, token=None):
-        if token is None:
-            token = os.environ.get("NOMAD_CLIENT_ACCESS_TOKEN")
-        if not token:
-            token = self._token_from_secrets()
-        if not token:
-            raise ValueError(
-                "No token found. Set NOMAD_CLIENT_ACCESS_TOKEN env var or add a secrets.py "
-                "two levels above this app with NOMAD_TOKEN = '...'."
-            )
-        self.current_token = token
-        return self.current_token
-
-    @staticmethod
-    def _token_from_secrets():
-        """Try to load NOMAD_TOKEN from secrets.py two levels above this file."""
-        import importlib.util
-
-        secrets_path = Path(__file__).parent.parent.parent / "secrets.py"
-        try:
-            spec = importlib.util.spec_from_file_location("_secrets", secrets_path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return getattr(mod, "NOMAD_TOKEN", None)
-        except Exception:
-            return None
-
-    def verify_token(self):
-        if not self.current_token:
-            raise ValueError("No token available for verification.")
-
-        verify_url = f"{self.url}/users/me"
-        headers = {"Authorization": f"Bearer {self.current_token}"}
-
-        verify_response = requests.get(verify_url, headers=headers, timeout=10)
-        verify_response.raise_for_status()
-
-        self.current_user_info = verify_response.json()
-        return self.current_user_info
-
-    def is_authenticated(self):
-        return self.current_token is not None and self.current_user_info is not None
-
-    def clear_authentication(self):
-        self.current_token = None
-        self.current_user_info = None
-
-    def get_user_display_name(self):
-        if not self.current_user_info:
-            return "Unknown User"
-        return self.current_user_info.get(
-            "name", self.current_user_info.get("username", "Unknown User")
-        )
-
-
 class JVAnalysisApp:
     """Simplified main application controller"""
 
     def __init__(self):
         # Initialize core components
-        self.auth_manager = SimpleAuthManager(URL_BASE, API_ENDPOINT)
+        self.auth_manager = AuthenticationManager(URL_BASE, API_ENDPOINT)
         self.data_manager = DataManager(self.auth_manager)
 
         # Application state
@@ -155,7 +82,6 @@ class JVAnalysisApp:
         self.plot_ui = PlotUI()
         self.save_ui = SaveUI()
         self.color_selector = ColorSchemeSelector()
-        self.info_ui = InfoUI()  # ADD this line
 
         # Give FilterUI access to DataManager for preview functionality
         self.filter_ui.data_manager = self.data_manager
@@ -555,7 +481,7 @@ If you tested specific variables or conditions for each sample, please write the
                     df = pd.DataFrame()
 
                     def make_clickable(r):
-                        base_url = self.auth_manager.base_url
+                        base_url = self.auth_manager.url_base
                         if "SEM" in r[1]["entry_type"]:
                             return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data/images:0/image_preview/preview" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
                         return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
@@ -1107,7 +1033,7 @@ If you tested specific variables or conditions for each sample, please write the
         header = widgets.HBox(
             [
                 widgets.HTML("<h1 style='margin: 0; flex-grow: 1;'>JV Analysis Dashboard</h1>"),
-                self.info_ui.get_widget(),
+                manual_panel(__file__),
             ],
             layout=widgets.Layout(
                 justify_content="space-between", align_items="flex-start", margin="0 0 20px 0"
@@ -1116,7 +1042,7 @@ If you tested specific variables or conditions for each sample, please write the
 
         return widgets.VBox(
             [
-                header,  # Header with What's New and Manual buttons
+                header,  # Title and the Manual button
                 self.auth_ui.get_widget(),
                 self.tabs,
                 self.js_output,

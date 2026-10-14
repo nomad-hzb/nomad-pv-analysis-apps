@@ -678,7 +678,7 @@ def test_data_info_intensity_range_without_finite_values_uses_default(dm):
     assert manager.get_data_info()["intensity_range"] == (0.0, 1000.0)
 
 
-def test_nm_ev_round_trip_restores_data(dm):
+def test_nm_ev_round_trip_restores_data(dm, cfg):
     manager = dm.DataManager()
     wl = np.linspace(400, 800, 50)
     data = np.random.default_rng(0).random((3, 50))
@@ -689,7 +689,7 @@ def test_nm_ev_round_trip_restores_data(dm):
     )
     manager.convert_wavelength_to_energy()
     assert np.all(np.diff(manager.wavelengths) > 0)
-    np.testing.assert_allclose(manager.wavelengths[0], 1239.8 / 800)
+    np.testing.assert_allclose(manager.wavelengths[0], cfg.HC_EV_NM / 800)
     manager.convert_energy_to_wavelength()
     np.testing.assert_allclose(manager.wavelengths, wl)
     np.testing.assert_allclose(manager.data_matrix, data)
@@ -773,7 +773,11 @@ def test_background_remove_after_ev_conversion_keeps_axis_order(app, x_nm):
     application.on_background_apply(None)
     application.on_convert_energy(None)
     application.on_background_remove(None)
-    np.testing.assert_allclose(application.data_manager.data_matrix, frames[:, ::-1])
+    energy = application.data_manager.wavelengths
+    # the data is a PL spectrum (CSV default), so it was rescaled by hc / E^2 on the way
+    np.testing.assert_allclose(
+        application.data_manager.data_matrix, frames[:, ::-1] * 1239.84 / energy**2
+    )
 
 
 def test_new_data_load_forgets_the_previous_background_original(app, x_nm):
@@ -987,3 +991,166 @@ def test_every_fix_checkbox_explains_what_it_fixes(gl):
     fields = application.peak_models[-1]._widgets
     for key in ("fix_center", "fix_height", "fix_sigma", "fix_gamma"):
         assert "value above" in fields[key].tooltip, key
+
+
+# =============================================================================
+# nm <-> eV: the Jacobian, peak rows, and where the data comes from
+# =============================================================================
+
+
+def _loaded_manager(dm, source="csv", mode=None):
+    manager = dm.DataManager()
+    wl = np.linspace(500, 900, 401)
+    manager.wavelengths = wl.copy()
+    manager.data_matrix = np.array([gaussian(wl, 1000, 700, 40) + 5, gaussian(wl, 500, 650, 30)])
+    manager.timestamps = np.arange(2.0)
+    manager.data_source, manager.h5_mode = source, mode
+    return manager
+
+
+def test_pl_spectrum_keeps_its_integral_when_converted_to_ev(dm):
+    manager = _loaded_manager(dm)
+    area_nm = np.trapezoid(manager.data_matrix, manager.wavelengths, axis=1)
+    manager.convert_wavelength_to_energy()
+    area_ev = np.trapezoid(manager.data_matrix, manager.wavelengths, axis=1)
+    np.testing.assert_allclose(area_ev, area_nm, rtol=2e-3)
+
+
+def test_pl_peak_fitted_in_ev_sits_at_the_converted_centre(dm, fe, cfg):
+    manager = _loaded_manager(dm)
+    manager.data_matrix = np.array([gaussian(manager.wavelengths, 1000, 700, 12)])
+    manager.convert_wavelength_to_energy()
+    centre_ev = cfg.HC_EV_NM / 700
+    peak = {"type": "Gaussian", "center": centre_ev, "height": 1000, "sigma": 0.1}
+    _, results = _batch(fe, manager.wavelengths, manager.data_matrix, [peak], center_bound=0.3)
+    assert results[0]["success"]
+    assert results[0]["parameters"]["p0_center"]["value"] == pytest.approx(centre_ev, abs=0.02)
+
+
+@pytest.mark.parametrize(
+    "source, mode, rescaled",
+    [
+        ("h5", "pl_raw", True),
+        ("h5", "pl_binned", True),
+        ("h5", "transmission_raw", False),
+        ("h5", "absorbance_binned", False),
+        ("csv", None, True),
+    ],
+)
+def test_only_pl_data_is_rescaled_by_the_conversion(dm, source, mode, rescaled):
+    manager = _loaded_manager(dm, source, mode)
+    before = manager.data_matrix.copy()
+    manager.convert_wavelength_to_energy()
+    unchanged = np.allclose(manager.data_matrix, before[:, ::-1])
+    assert unchanged == (not rescaled)
+
+
+def test_csv_data_can_be_marked_as_not_a_density(dm):
+    manager = _loaded_manager(dm)
+    manager.csv_intensity_is_density = False
+    before = manager.data_matrix.copy()
+    manager.convert_wavelength_to_energy()
+    np.testing.assert_allclose(manager.data_matrix, before[:, ::-1])
+
+
+def test_peak_rows_follow_the_axis_through_a_conversion_and_back(app, x_nm, cfg):
+    application = app(np.array([_two_peaks(x_nm)]), x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 680.0, "height": 30.0, "sigma": 18.0}
+    )
+    row = application.peak_models[0]._widgets
+    row["center_min"].value = "650"
+    application.on_convert_energy(None)
+    assert row["center"].value == pytest.approx(cfg.HC_EV_NM / 680.0)
+    assert row["sigma"].value == pytest.approx(cfg.HC_EV_NM * 18.0 / 680.0**2)
+    assert row["center_min"].value == ""  # a bound typed in nm means nothing in eV
+    application.on_convert_energy(None)
+    assert row["center"].value == pytest.approx(680.0)
+    assert row["sigma"].value == pytest.approx(18.0)
+    assert row["height"].value == pytest.approx(30.0)
+
+
+def test_unit_conversion_scales_the_center_bound_with_the_shared_constant(app, x_nm, cfg):
+    application = app(np.array([_two_peaks(x_nm)]), x_nm)
+    application.widgets["center_bound_input"].value = 20.0
+    application.on_convert_energy(None)
+    mid = (
+        application.data_manager.wavelengths.min() + application.data_manager.wavelengths.max()
+    ) / 2
+    assert application.widgets["center_bound_input"].value == pytest.approx(
+        round(mid**2 * 20.0 / cfg.HC_EV_NM, 4)
+    )
+
+
+# =============================================================================
+# H2: which h5 file the app opens, and CSV next to it
+# =============================================================================
+
+
+def test_stale_stored_h5_path_is_ignored(dm, monkeypatch, tmp_path):
+    monkeypatch.delenv("QUERY_STRING", raising=False)
+    monkeypatch.setattr(dm, "_handed_over_h5_path", lambda: str(tmp_path / "gone.h5"))
+    assert dm.get_h5_path_from_ipython() == (None, False)
+
+
+def test_existing_stored_h5_path_is_used(dm, monkeypatch, tmp_path):
+    path = tmp_path / "run.h5"
+    path.write_bytes(b"x")
+    monkeypatch.setattr(dm, "_handed_over_h5_path", lambda: str(path))
+    assert dm.get_h5_path_from_ipython() == (str(path), True)
+
+
+def test_the_previewer_link_hands_the_h5_path_over_in_the_query_string(dm, monkeypatch, tmp_path):
+    path = tmp_path / "run.h5"
+    path.write_bytes(b"x")
+    monkeypatch.setenv("QUERY_STRING", f"h5={path}&w=1200")
+    assert dm.get_h5_path_from_ipython() == (str(path), True)
+
+
+def test_csv_upload_is_offered_next_to_a_handed_over_h5_file(gl, dm, monkeypatch, tmp_path):
+    path = tmp_path / "run.h5"
+    path.write_bytes(b"x")
+    monkeypatch.setattr(dm, "get_h5_path_from_ipython", lambda: (str(path), True))
+    application = gl.PLAnalysisApp()
+    assert {"mode_dropdown", "file_upload", "csv_density_checkbox"} <= set(application.widgets)
+
+
+def test_data_from_a_csv_upload_is_never_saved_into_an_h5_file(app, x_nm):
+    application = app(np.array([_two_peaks(x_nm)]), x_nm)
+    application.data_manager.data_source = "csv"
+    application.data_manager.h5_path = "/somewhere/old_run.h5"
+    application.fitting_engine.fitting_results = {0: {"index": 0, "success": True}}
+    called = []
+    application.export_utils.export_to_isa_h5 = lambda *a, **k: called.append(a)
+    application.on_save_into_h5(None)
+    assert called == []
+
+
+# =============================================================================
+# H3 and H4
+# =============================================================================
+
+
+def test_a_diverged_fit_leaves_the_start_values_alone(app, x_nm):
+    noise = np.random.default_rng(3).normal(0, 1, x_nm.size)
+    application = app([noise], x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 600.0, "height": 50.0, "sigma": 10.0}
+    )
+    fields = application.peak_models[0]._widgets
+    application.on_fit_current(None)
+    assert application.last_fit_result.rsquared < 0.5
+    assert (fields["center"].value, fields["height"].value, fields["sigma"].value) == (
+        600.0,
+        50.0,
+        10.0,
+    )
+
+
+def test_polynomial_offset_above_one_thousand_is_fitted(fe, x_nm):
+    data = np.array([np.full(x_nm.size, 5000.0)])
+    engine, results = _batch(fe, x_nm, data, [{"type": "Polynomial", "poly_degree": 0}])
+    coefficient = results[0]["parameters"]["p0_c0"]["value"]
+    assert coefficient == pytest.approx(5000.0, rel=1e-3)

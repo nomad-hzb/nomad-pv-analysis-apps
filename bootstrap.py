@@ -117,7 +117,18 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
         no_proxy = "localhost,127.0.0.1"
     os.environ["NO_PROXY"] = no_proxy
 
-    logger.info("Applied local proxy configuration: %s", os.environ["HTTPS_PROXY"])
+    logger.info(
+        "Applied local proxy configuration: %s",
+        os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"),
+    )
+
+
+def _apply_usage_log_dir() -> None:
+    """Send every app's usage logs to one folder, shared/log/ in this checkout (see
+    hysprint_utils.usage_tracking), unless the container or oasis_local_config.py already
+    set HYSPRINT_USAGE_LOG_DIR. Without this, an installed copy of hysprint_utils would
+    log next to itself, wherever pip put it."""
+    os.environ.setdefault("HYSPRINT_USAGE_LOG_DIR", str(REPO_ROOT / "shared" / "log"))
 
 
 def _build_isolation_args() -> list[str]:
@@ -170,8 +181,32 @@ def _pip_install(target: Path | str) -> tuple[int, str]:
 SHARED_RUNTIME_MODULES = ("hysprint_utils", "requests", "pandas", "plotly")
 
 
+def _shared_install_marker(shared: Path) -> Path:
+    """Path of the once-per-container marker for the `shared/` install.
+
+    Keyed on the shared location and the contents of its pyproject.toml and
+    Python sources, so an edited shared package reinstalls while an unchanged
+    one never pays for pip on every launch.
+    """
+    digest = hashlib.sha256(str(shared).encode())
+    for path in sorted([shared / "pyproject.toml", *shared.rglob("*.py")]):
+        if path.is_file():
+            digest.update(path.relative_to(shared).as_posix().encode())
+            digest.update(path.read_bytes())
+    return Path(tempfile.gettempdir()) / f"hysprint-bootstrap-shared-{digest.hexdigest()[:16]}.done"
+
+
 def _install_shared() -> None:
     shared = REPO_ROOT / "shared"
+    marker = _shared_install_marker(shared)
+    if marker.exists():
+        # A fresh kernel still needs shared/ on sys.path (see below), so only pip is skipped.
+        shared_str = str(shared)
+        if shared_str not in sys.path:
+            sys.path.insert(0, shared_str)
+        logger.info("shared package already installed for %s", shared)
+        return
+
     returncode, output = _pip_install(shared)
 
     # A fresh kernel already ran site.py before this install happened, so it
@@ -187,6 +222,11 @@ def _install_shared() -> None:
     if returncode == 0:
         if output:
             logger.info("pip install of %s reported:\n%s", shared, output)
+        try:
+            marker.write_text(f"{shared}\n", encoding="utf-8")
+        except OSError:
+            # A read-only or missing temp dir only costs a repeat install later.
+            logger.info("could not write the install marker %s", marker)
         return
 
     # The sys.path entry above is what this kernel actually imports from, so a
@@ -442,6 +482,7 @@ def _install_tracked_tags() -> None:
 _local_config = _load_local_config()
 _apply_config_env(_local_config)
 _apply_proxy_env(_local_config)
+_apply_usage_log_dir()
 _install_shared()
 _install_app()
 _install_tracked_tags()

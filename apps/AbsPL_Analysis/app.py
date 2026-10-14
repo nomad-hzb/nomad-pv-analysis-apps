@@ -20,7 +20,7 @@ from IPython.display import display as ipydisplay
 from plot_manager import AbsPlPlotManager
 
 from hysprint_utils.auth_manager import AuthenticationManager
-from hysprint_utils.plotting_utils import create_manual
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,6 @@ class AbsPlApp:
         url_base: str,
         api_endpoint: str,
         token: str,
-        manual_file: str | None = None,
     ):
         self._auth = AuthenticationManager(url_base, api_endpoint)
         self._auth.authenticate_with_token(token)
@@ -50,7 +49,6 @@ class AbsPlApp:
         api_url = self._auth.api_client.get_api_url()
         self._data_manager = AbsPlDataManager(api_url, token)
         self._plot_manager = AbsPlPlotManager()
-        self._manual_file = manual_file
 
         self._status_out = widgets.Output()
         self._dynamic_out = widgets.Output()
@@ -74,10 +72,13 @@ class AbsPlApp:
             measurement_type=MEASUREMENT_TYPE,
         )
 
-        sections = []
-        if self._manual_file:
-            sections.append(create_manual(self._manual_file))
-        sections += [self._demo_btn, batch_panel.widget, self._status_out, self._dynamic_out]
+        sections = [
+            manual_panel(__file__),
+            self._demo_btn,
+            batch_panel.widget,
+            self._status_out,
+            self._dynamic_out,
+        ]
 
         ipydisplay(widgets.VBox(sections))
 
@@ -85,15 +86,22 @@ class AbsPlApp:
     # Internal
     # ------------------------------------------------------------------
 
+    def _say(self, text: str) -> None:
+        """Show a message under the load button (logging alone is never rendered in Voila)."""
+        with self._status_out:
+            self._status_out.clear_output()
+            print(text)
+        logger.info(text)
+
     def _on_demo_load(self, _b) -> None:
         logger.info("Loading AbsPL demo data from fixture...")
         self._status_out.clear_output()
         self._dynamic_out.clear_output()
         success = self._data_manager.load_offline(DEMO_FIXTURE_PATH)
         if not success:
-            logger.warning("Demo fixture contained no valid AbsPL measurements.")
+            self._say("The demo fixture contains no valid AbsPL measurements.")
             return
-        logger.info("AbsPL demo data loaded. %s", self._data_manager.filter_summary)
+        self._say(f"Demo data loaded. {self._data_manager.filter_summary}")
         self._build_data_ui()
 
     def _on_load(self, batch_selector):
@@ -101,16 +109,24 @@ class AbsPlApp:
         logger.info("Loading AbsPL data...")
         self._status_out.clear_output()
 
-        success = self._data_manager.load(batch_selector.value)
-
-        self._dynamic_out.clear_output()
-        self._status_out.clear_output()
-
-        if not success:
-            logger.warning("No AbsPL measurements found in the selected batches.")
+        if not batch_selector.value:
+            self._say("Select at least one batch first.")
+            return
+        try:
+            success = self._data_manager.load(batch_selector.value)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Loading AbsPL data failed")
+            self._dynamic_out.clear_output()
+            self._say(f"Could not load the data: {exc}")
             return
 
-        logger.info("Data loaded. %s", self._data_manager.filter_summary)
+        self._dynamic_out.clear_output()
+
+        if not success:
+            self._say("No AbsPL measurements found in the selected batches.")
+            return
+
+        self._say(f"Data loaded. {self._data_manager.filter_summary}")
 
         self._build_data_ui()
 

@@ -21,7 +21,7 @@ Author: HySprint Team
 import io
 import logging
 import operator
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from data_loader import HySprintDataLoader
@@ -43,6 +43,115 @@ _ROW_FILTER_OPS = {
 }
 
 RESULTS_AGGREGATION_METHODS = {"Mean": "mean", "Median": "median", "Max": "max"}
+
+# Every result schema the app loads (keys of data_manager.current_results) and the
+# short label used to group its columns in the Analysis Data tab's Results tree.
+RESULT_TYPE_LABELS = {
+    "jv_measurement": "JV",
+    "eqe_measurement": "EQE",
+    "mpp_tracking": "MPP Tracking",
+    "simple_mpp_tracking": "Simple MPP Tracking",
+    "pl_measurement": "PL",
+    "trpl_measurement": "TRPL",
+    "abspl_measurement": "AbsPL",
+    "pl_imaging": "PL Imaging",
+    "sem": "SEM",
+    "uvvis_measurement": "UV-Vis",
+    "pes": "PES",
+    "cyclic_voltammetry": "Cyclic Voltammetry",
+    "eis": "EIS",
+    "trspv_measurement": "trSPV",
+    "nmr": "NMR",
+    "xrd": "XRD",
+}
+
+
+# Suffix shown in the Plotting tab's parameter lists ("efficiency (JV)"). Differs from
+# result_type_label for the MPP types; kept as the one definition both the lists and
+# DataManager.resolve_result_column use.
+_PLOT_SUFFIXES = {
+    "jv_measurement": "JV",
+    "eqe_measurement": "EQE",
+    "mpp_tracking": "MPP",
+    "simple_mpp_tracking": "Simple MPP",
+    "pl_measurement": "PL",
+    "trpl_measurement": "TRPL",
+    "abspl_measurement": "AbsPL",
+}
+
+
+def plot_suffix(result_type: str) -> str:
+    """Suffix of a result type in the Plotting tab's parameter names, e.g. 'JV'."""
+    return _PLOT_SUFFIXES.get(result_type, result_type.replace("_measurement", "").upper())
+
+
+MPP_RESULT_TYPES = ("mpp_tracking", "simple_mpp_tracking")
+
+
+def _is_scalar(value) -> bool:
+    return isinstance(value, (int, float, str, bool))
+
+
+def mpp_result_rows(measurement_data: dict, top_level_fields: List[str]) -> List[dict]:
+    """The rows one MPP (maximum power point tracking) entry contributes to the results table.
+
+    The figures of merit the MPPT_Analysis app writes back (T80, T95, Ts80, Ts95,
+    initial_stabilization_time, PCE_after_1000_h, lifetime_energy_yield, power densities, fit
+    method and R^2...) live in the entry's `results` list, and the measurement duration in
+    `properties`; only `properties` used to be read, so the table held just `time`. One row per
+    `results` item carries every scalar of it, plus the scalar `properties` and the entry's
+    top-level fields. The `fit_parameters` bag ({name, value, unit, error} items, a different set
+    per fit model) becomes `fit_<name>` / `fit_<name>_error` columns. Arrays (the measured and
+    fitted curves) are not columns. An entry that was never fitted still gives one row, with
+    just its properties."""
+    base = {k: v for k, v in (measurement_data.get("properties") or {}).items() if _is_scalar(v)}
+    for field in top_level_fields:
+        if field in measurement_data and field not in base:
+            base[field] = measurement_data[field]
+    results = measurement_data.get("results")
+    if isinstance(results, dict):
+        results = [results]
+    if not results:
+        return [base]
+    rows = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        row = dict(base)
+        for key, value in result.items():
+            if key == "fit_parameters" and isinstance(value, list):
+                for parameter in value:
+                    if isinstance(parameter, dict) and parameter.get("name"):
+                        name = f"fit_{parameter['name']}"
+                        row[name] = parameter.get("value")
+                        if parameter.get("error") is not None:
+                            row[f"{name}_error"] = parameter["error"]
+            elif _is_scalar(value):
+                row[key] = value
+        rows.append(row)
+    return rows or [base]
+
+
+def result_type_label(result_type: str) -> str:
+    """Display label of a result schema key, e.g. 'mpp_tracking' -> 'MPP Tracking'."""
+    return RESULT_TYPE_LABELS.get(result_type, result_type.replace("_measurement", "").upper())
+
+
+def process_type_label(metadata_type: str) -> str:
+    """Display label of a process metadata key, e.g. 'spin_coating' -> 'Spin Coating'."""
+    words = metadata_type.split("_")
+    return " ".join(w.upper() if w in {"ald", "pl", "uv"} else w.capitalize() for w in words)
+
+
+def merged_result_column_names(
+    left_columns, right_columns, result_type: str, key: str = "sample_id"
+) -> dict:
+    """Names the columns of the right frame get after
+    pd.merge(left, right, on=key, suffixes=("", f"_{result_type}")): a column
+    that also exists on the left gets the suffix, the rest keep their name.
+    Returns {name in right frame: name in merged frame}."""
+    overlap = (set(left_columns) & set(right_columns)) - {key}
+    return {c: (f"{c}_{result_type}" if c in overlap else c) for c in right_columns if c != key}
 
 
 def variation_warning(df: pd.DataFrame, columns: List[str], min_unique: int = 6) -> List[str]:
@@ -99,6 +208,21 @@ def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame
     return filtered.reset_index(drop=True)
 
 
+def filter_plot_data(
+    df: pd.DataFrame, row_filters: List[dict], excluded_sample_ids
+) -> Tuple[pd.DataFrame, List[dict]]:
+    """The Filters tab's row filters and excluded samples applied to the Plotting tab's table.
+
+    Returns (filtered rows, filters that could not be applied). A filter on a column the plot's
+    table does not have (the table holds only the data sources selected on the Plotting tab, and
+    names a process column differently when several sources share it) is skipped and reported,
+    never silently ignored. Sample exclusion works on sample_id, so it always applies."""
+    applicable = [f for f in row_filters if f["column"] in df.columns]
+    skipped = [f for f in row_filters if f["column"] not in df.columns]
+    filtered = apply_row_filters(df, applicable) if applicable else df
+    return exclude_samples(filtered, excluded_sample_ids), skipped
+
+
 def exclude_samples(df: pd.DataFrame, excluded_sample_ids) -> pd.DataFrame:
     """Drop every row belonging to any sample_id in excluded_sample_ids.
 
@@ -147,6 +271,17 @@ def select_layer_row_per_sample(df: pd.DataFrame, layer_type: Optional[str]) -> 
     return df[df["layer_type"] == layer_type]
 
 
+def samples_with_several_rows(df: Optional[pd.DataFrame]) -> List[str]:
+    """sample_ids that have more than one row in a one-row-per-sample table. In the merged
+    process table that means a sample has two entries of the same process (two spin-coating
+    steps of one absorber, repeated annealing, several ALD entries): every result is then
+    joined to each of them and a per-sample figure mixes values that were never one setting."""
+    if df is None or "sample_id" not in df.columns:
+        return []
+    counts = df["sample_id"].value_counts()
+    return sorted(counts[counts > 1].index.astype(str))
+
+
 def get_categorical_columns(df: pd.DataFrame, exclude: Optional[List[str]] = None) -> List[str]:
     """Object-dtype columns of df with more than one but fewer than len(df)
     distinct values - real grouping variables, not identifiers (all-unique)
@@ -191,10 +326,97 @@ def aggregate_results_per_sample(df: pd.DataFrame, method: str = "Mean") -> pd.D
         return df
     agg_func = RESULTS_AGGREGATION_METHODS.get(method, "mean")
     grouped = getattr(df.groupby("sample_id", as_index=False), agg_func)(numeric_only=True)
+    if method == "Max" and "efficiency" in df.columns:
+        # "Max" of each column on its own built a device that was never measured (the highest
+        # Voc of one pixel, the highest FF of another). For a solar cell result the best
+        # device is the pixel with the highest efficiency, and every value comes from it.
+        measured = df[df["efficiency"].notna()]
+        best_rows = measured.loc[measured.groupby("sample_id")["efficiency"].idxmax()]
+        best = best_rows.select_dtypes(include="number").assign(sample_id=best_rows["sample_id"])
+        grouped = pd.concat(
+            [best, grouped[~grouped["sample_id"].isin(best["sample_id"])]], ignore_index=True
+        )[grouped.columns.union(best.columns, sort=False)]
     if "datetime" in df.columns:
         first_datetime = df.groupby("sample_id", as_index=False)["datetime"].first()
         grouped = pd.merge(grouped, first_datetime, on="sample_id", how="left")
     return grouped
+
+
+def average_rows_per_sample(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    """One row per sample_id: the mean of cols over that sample's rows.
+
+    For correlations under "All Points": a sample's pixels share every process
+    parameter, so correlating pixel rows weights each sample by its pixel count
+    and lets pixel-to-pixel scatter dilute the process-to-result relationship.
+    Returns df unchanged when it has no sample_id or no sample_id repeats.
+    """
+    if "sample_id" not in df.columns or not df["sample_id"].duplicated().any():
+        return df
+    return df.groupby("sample_id", as_index=False)[cols].mean(numeric_only=True)
+
+
+def merge_results_per_sample(
+    results: Dict[str, pd.DataFrame],
+    method: str = "Mean",
+    column_groups: Optional[Dict[str, str]] = None,
+    column_names: Optional[Dict[Tuple[str, str], str]] = None,
+) -> Tuple[Optional[pd.DataFrame], List[str]]:
+    """Outer-merge every result type on sample_id, each first aggregated by
+    aggregate_results_per_sample(method).
+
+    With method="All Points", at most one result type can keep its individual
+    rows: merging two types that both have several rows per sample would pair
+    every row of one with every row of the other (4 JV pixels x 3 EQE rows = 12
+    made-up rows per sample, issue #46). The type with the most rows keeps its
+    points; every other type that has repeats is collapsed to its per-sample
+    mean, so each pixel is paired with that sample's mean value of the other
+    measurement.
+
+    If column_names is given, it is filled with {(result type, original column): name in the
+    merged dataframe}, which is how a display name such as "bandgap (EQE)" finds its column.
+
+    If column_groups is given, it is filled with {column in the merged
+    dataframe: result_type_label of the type it came from}, using the names the
+    merge actually produced (a repeated name gets the "_<type>" suffix).
+
+    Returns (merged dataframe or None, names of the result types collapsed to
+    their mean only because of this rule).
+    """
+    usable = {
+        name: df
+        for name, df in results.items()
+        if df is not None and not df.empty and "sample_id" in df.columns
+    }
+    if not usable:
+        return None, []
+
+    keep_points = None
+    collapsed = []
+    if method == "All Points":
+        repeated = [n for n, df in usable.items() if df["sample_id"].duplicated().any()]
+        if repeated:
+            keep_points = max(repeated, key=lambda n: len(usable[n]))
+            collapsed = [n for n in repeated if n != keep_points]
+
+    merged = None
+    for name, df in usable.items():
+        type_method = "Mean" if name in collapsed else method
+        grouped = aggregate_results_per_sample(df, type_method)
+        if merged is None:
+            renamed = {c: c for c in grouped.columns if c != "sample_id"}
+            merged = grouped
+        else:
+            renamed = merged_result_column_names(merged.columns, grouped.columns, name)
+            merged = pd.merge(
+                merged, grouped, on="sample_id", how="outer", suffixes=("", f"_{name}")
+            )
+        if column_groups is not None:
+            for merged_name in renamed.values():
+                column_groups[merged_name] = result_type_label(name)
+        if column_names is not None:
+            for original, merged_name in renamed.items():
+                column_names[(name, original)] = merged_name
+    return merged, collapsed
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +501,16 @@ class DataManager:
         self._color_material_is_all = False
         self._source_material_columns = {}
         self.sample_entry_links = {}  # {lab_id: gui_url}
+        self.sample_batch = {}  # {lab_id: the batch it was selected from}
 
     def get_material_column(self, df: pd.DataFrame) -> Optional[str]:
         """Get the material column name from dataframe."""
         return _get_material_column(df)
+
+    def batch_for_sample(self, sample_id: str) -> str:
+        """The batch the user selected this sample from; when that is not known (data that did
+        not come from a batch selection), the sub-batch read from the sample id."""
+        return self.sample_batch.get(sample_id) or self.extract_subbatch(sample_id)[0]
 
     def extract_subbatch(self, sample_id: str) -> tuple:
         """
@@ -409,9 +637,7 @@ class DataManager:
                 if measurement_type not in self.current_metadata:
                     metadata_df = loader_func(sample_ids, variation)
                     if metadata_df is not None and not metadata_df.empty:
-                        metadata_df["batch"] = metadata_df["sample_id"].apply(
-                            lambda sid: self.extract_subbatch(sid)[0]
-                        )
+                        metadata_df["batch"] = metadata_df["sample_id"].apply(self.batch_for_sample)
                         self.current_metadata[measurement_type] = metadata_df
             except Exception:
                 pass
@@ -487,6 +713,14 @@ class DataManager:
                             for measurement_entry in measurements:
                                 measurement_data = measurement_entry[0]
 
+                                if measurement_key in MPP_RESULT_TYPES:
+                                    for mpp_row in mpp_result_rows(
+                                        measurement_data, top_level_fields
+                                    ):
+                                        mpp_row["sample_id"] = sample_id
+                                        rows.append(mpp_row)
+                                    continue
+
                                 if data_key and data_key in measurement_data:
                                     extracted = measurement_data[data_key]
                                     # extracted may be a list of dicts (e.g. jv_curve) or a dict
@@ -545,7 +779,9 @@ class DataManager:
                                     )
                                     # Merge validated fields back over the raw row
                                     merged_row = raw_row.copy()
-                                    merged_row.update(validated.model_dump(exclude_none=False))
+                                    # only the fields this row carried: model_dump() filled all 12 JV-schema fields
+                                    # (efficiency, bandgap, ...) into EQE, PL, SEM... rows as None
+                                    merged_row.update(validated.model_dump(exclude_unset=True))
                                     validated_rows.append(merged_row)
                                 except ValidationError as exc:
                                     logger.warning(
@@ -860,40 +1096,33 @@ class DataManager:
                     len(merged_data.columns),
                 )
 
-        # Merge results if needed
+        # Merge results if needed. One shared routine with the Analysis Data tab: a column name
+        # that several result types (or a process type) have in common is suffixed, never
+        # dropped (EQE's and PL's `bandgap`, a result's `datetime` next to a process
+        # `datetime` used to vanish), and with several measurement types only one keeps its
+        # individual rows - merging them all on the non-unique sample_id paired every row of
+        # one type with every row of the others (32 rows per sample from 8 x 2 x 2).
+        self._result_column_names = {}
+        self._collapsed_result_types = []
         if self.current_results:
-            logger.debug("Merging results data...")
-            for result_type, result_df in self.current_results.items():
-                if result_df is None or result_df.empty:
-                    continue
-
-                logger.debug("Merging %s: %d rows", result_type, len(result_df))
-
-                cols_to_drop = [
-                    col
-                    for col in result_df.columns
-                    if merged_data is not None and col in merged_data.columns and col != "sample_id"
-                ]
-                result_df_clean = (
-                    result_df.drop(columns=cols_to_drop)
-                    if cols_to_drop and merged_data is not None
-                    else result_df
-                )
-
+            names: Dict[Tuple[str, str], str] = {}
+            results_merged, self._collapsed_result_types = merge_results_per_sample(
+                self.current_results, "All Points", column_names=names
+            )
+            if results_merged is not None:
                 if merged_data is None:
-                    merged_data = result_df_clean.copy()
+                    merged_data = results_merged
                 else:
-                    merged_data = pd.merge(
-                        merged_data,
-                        result_df_clean,
-                        on="sample_id",
-                        how="outer",
-                        suffixes=("", f"_{result_type}"),
-                    )
-
+                    overlap = (set(merged_data.columns) & set(results_merged.columns)) - {
+                        "sample_id"
+                    }
+                    rename = {column: f"{column}_result" for column in overlap}
+                    results_merged = results_merged.rename(columns=rename)
+                    names = {key: rename.get(value, value) for key, value in names.items()}
+                    merged_data = pd.merge(merged_data, results_merged, on="sample_id", how="outer")
+                self._result_column_names = names
                 logger.debug(
-                    "After merging %s: %d rows, %d columns",
-                    result_type,
+                    "After merging results: %d rows, %d columns",
                     len(merged_data),
                     len(merged_data.columns),
                 )
@@ -915,6 +1144,19 @@ class DataManager:
 
         logger.debug("=== rebuild_merged_data END ===\n")
         return invalid_samples
+
+    def resolve_result_column(self, display_name: str) -> Optional[str]:
+        """The column of merged_data a Plotting-tab result parameter such as "bandgap (EQE)"
+        stands for, or None when it is not a result parameter. Needed because a name that
+        several types share is suffixed in the merge ("bandgap_eqe_measurement")."""
+        if "(" not in display_name or not display_name.endswith(")"):
+            return None
+        original = display_name[: display_name.rfind("(")].strip()
+        suffix = display_name[display_name.rfind("(") + 1 : -1].strip()
+        for result_type in self.current_results:
+            if plot_suffix(result_type) == suffix:
+                return getattr(self, "_result_column_names", {}).get((result_type, original))
+        return None
 
     def get_parameter_options(
         self, data_dict: Dict[str, pd.DataFrame], param_type: str, is_results: bool = False
@@ -968,24 +1210,7 @@ class DataManager:
                 )
 
                 for col in result_df.columns:
-                    # Determine measurement type suffix
-                    if result_type == "jv_measurement":
-                        suffix = "JV"
-                    elif result_type == "eqe_measurement":
-                        suffix = "EQE"
-                    elif result_type == "mpp_tracking":
-                        suffix = "MPP"
-                    elif result_type == "simple_mpp_tracking":
-                        suffix = "Simple MPP"
-                    elif result_type == "pl_measurement":
-                        suffix = "PL"
-                    elif result_type == "trpl_measurement":
-                        suffix = "TRPL"
-                    elif result_type == "abspl_measurement":
-                        suffix = "AbsPL"
-                    else:
-                        suffix = result_type.replace("_measurement", "").upper()
-
+                    suffix = plot_suffix(result_type)
                     params.append(f"{col} ({suffix})")
 
             logger.debug(
@@ -1057,7 +1282,7 @@ class DataManager:
             "",
         ]
 
-        # "batch" (added in load_all_data_for_summary via extract_subbatch) is a
+        # "batch" (added in load_all_data_for_summary: the batch the sample was selected from) is a
         # derived subbatch label, not a real process parameter - it's a string
         # column, so it never feeds Correlation/RF/BO anyway (those only look at
         # numeric columns), and listing it here just adds noise when a load

@@ -48,9 +48,18 @@ class XRDPlotManager:
         segments: list[tuple] = []
         if len(peaks) > 0:
             _, _, left_ips, right_ips = peak_widths(y_arr, peaks, rel_height=0.99)
+            lefts = [max(0, int(np.floor(v))) for v in left_ips]
+            rights = [min(len(x_arr) - 1, int(np.ceil(v))) for v in right_ips]
+            # Neighbouring windows used to overlap and each integrated the other's flank (two
+            # partly resolved peaks were counted twice). Where two windows meet, both end at
+            # the lowest point between the peaks, so every point belongs to one peak.
+            for j in range(len(peaks) - 1):
+                if rights[j] > lefts[j + 1]:
+                    between = y_arr[peaks[j] : peaks[j + 1] + 1]
+                    split = int(peaks[j] + np.argmin(between))
+                    rights[j] = lefts[j + 1] = split
             for j in range(len(peaks)):
-                li = max(0, int(np.floor(left_ips[j])))
-                ri = min(len(x_arr) - 1, int(np.ceil(right_ips[j])))
+                li, ri = lefts[j], rights[j]
                 x_seg = x_arr[li : ri + 1]
                 y_seg = y_arr[li : ri + 1]
                 baseline = np.linspace(float(y_arr[li]), float(y_arr[ri]), len(x_seg))
@@ -217,7 +226,7 @@ class XRDPlotManager:
     @staticmethod
     def suggested_stagger_range(entries: dict[str, dict]) -> tuple[float, float, float]:
         """Return (slider_max, default_value, step) based on the loaded data."""
-        max_intensity = 1.0
+        max_intensity = 0.0
         for entry in entries.values():
             y = entry.get("intensity") or []
             if y:
@@ -225,5 +234,6 @@ class XRDPlotManager:
 
         slider_max = 10 ** math.ceil(math.log10(max_intensity)) if max_intensity > 0 else 1.0
         default_val = slider_max * 0.1
-        step = max(1.0, slider_max / 100)
+        # follows the data scale (normalised data has a maximum of 1: a step of 1 was unusable)
+        step = slider_max / 100
         return slider_max, default_val, step

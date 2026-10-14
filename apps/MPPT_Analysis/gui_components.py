@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.6.1"
 
 
 def _html_float_format(value):
@@ -68,7 +68,8 @@ class GUIComponents:
                 curves, sample_ids, entries, properties = result
                 self.app_state.load_curves_data(curves, sample_ids, entries, properties)
                 print(
-                    f"✅ Data loaded successfully! Found {len(sample_ids)} samples with MPPT data"
+                    f"✅ Data loaded successfully! Found {len(sample_ids)} samples "
+                    f"with {len(entries)} MPPT measurements"
                 )
                 if self.app_controller:
                     self.app_controller.enable_sample_tab()
@@ -159,30 +160,37 @@ class GUIComponents:
             with selection_status:
                 selection_status.clear_output()
                 print(
-                    f"⚠️ Selection not confirmed - {len(self.app_state.data['sample_ids'])} samples available"
+                    "⚠️ Selection not confirmed - "
+                    f"{len(self.app_state.data['entries'])} measurements available"
                 )
 
         def confirm_selection(b):
             selected_samples = []
+            selected_curves = []
             custom_names = {}
 
             for sample_id, selector in self.app_state.sample_selectors.items():
-                if selector["checkbox"].value:
+                chosen = [cid for cid, box in selector["curves"].items() if box.value]
+                if chosen:
                     selected_samples.append(sample_id)
+                    selected_curves.extend((sample_id, cid) for cid in chosen)
                     if name_preset.value == "custom" and selector["text"].value.strip():
                         custom_names[sample_id] = selector["text"].value.strip()
 
             if not selected_samples:
                 with selection_status:
                     selection_status.clear_output()
-                    print("⚠️ Please select at least one sample")
+                    print("⚠️ Please select at least one measurement")
                 return
 
-            self.app_state.set_selected_samples(selected_samples, custom_names)
+            self.app_state.set_selected_samples(selected_samples, custom_names, selected_curves)
 
             with selection_status:
                 selection_status.clear_output()
-                print(f"✅ Selection confirmed - {len(selected_samples)} samples selected")
+                print(
+                    f"✅ Selection confirmed - {len(selected_curves)} measurements "
+                    f"from {len(selected_samples)} samples selected"
+                )
                 if custom_names:
                     print("Custom names applied:")
                     for sample_id, name in custom_names.items():
@@ -204,7 +212,10 @@ class GUIComponents:
             [
                 widgets.HTML("<h3>Sample Selection</h3>"),
                 widgets.HTML(
-                    f"<p>Found {len(self.app_state.data['sample_ids'])} samples with MPPT data.</p>"
+                    f"<p>Found {len(self.app_state.data['sample_ids'])} samples with "
+                    f"{len(self.app_state.data['entries'])} MPPT measurements. Tick the "
+                    "measurements (pixels) to analyse; each is previewed, fitted and plotted "
+                    "on its own.</p>"
                 ),
                 name_preset,
                 selectors_container,
@@ -257,7 +268,74 @@ class GUIComponents:
             text_input = widgets.Text(value=default_name, layout=widgets.Layout(display="none"))
             container = widgets.HBox([checkbox, name_label])
 
-        return {"checkbox": checkbox, "text": text_input, "container": container}
+        curves = self.app_state.data["curves"]
+        sample_ids = self.app_state.data["sample_ids"]
+        entries = self.app_state.data["entries"]
+        labels = {
+            cid: self.data_manager.get_curve_label(entries, sample_id, cid)
+            for cid in self.data_manager.get_curve_ids_for_sample(curves, sample_ids, sample_id)
+        }
+        # NOMAD returns the entries in no particular order; list pixels by name.
+        curve_boxes = {
+            cid: widgets.Checkbox(
+                value=True,
+                description=labels[cid],
+                indent=False,
+                layout=widgets.Layout(width="260px"),
+            )
+            for cid in sorted(labels, key=lambda cid: (labels[cid], cid))
+        }
+
+        # The sample checkbox is a select-all/none for its measurements; it reads
+        # as ticked while any of them is. The flag stops the two from ping-ponging.
+        syncing = False
+
+        def on_sample_toggle(change):
+            nonlocal syncing
+            if syncing:
+                return
+            syncing = True
+            for box in curve_boxes.values():
+                box.value = change["new"]
+            syncing = False
+
+        def on_curve_toggle(change):
+            nonlocal syncing
+            if syncing:
+                return
+            syncing = True
+            checkbox.value = any(box.value for box in curve_boxes.values())
+            syncing = False
+
+        checkbox.observe(on_sample_toggle, names="value")
+        for box in curve_boxes.values():
+            box.observe(on_curve_toggle, names="value")
+
+        curves_row = widgets.Box(
+            list(curve_boxes.values()),
+            layout=widgets.Layout(flex_flow="row wrap", margin="0 0 8px 32px"),
+        )
+        container = widgets.VBox([container, curves_row])
+
+        return {
+            "checkbox": checkbox,
+            "text": text_input,
+            "container": container,
+            "curves": curve_boxes,
+        }
+
+    def _selected_curve_keys(self):
+        """[(sample_id, curve_id)] of every measurement to analyse, in sample order."""
+        selected = self.app_state.data.get("selected_curves")
+        if selected is not None:
+            return list(selected)
+        curves = self.app_state.data["curves"]
+        sample_ids = self.app_state.data["sample_ids"]
+        return [
+            (sample_id, cid)
+            for sample_id in self.app_state.data.get("selected_samples", [])
+            for cid in self.data_manager.get_curve_ids_for_sample(curves, sample_ids, sample_id)
+        ]
 
     def _build_full_fit_results_df(self):
         """Every selected sample/curve, fitted or not - unfitted ones get an
@@ -266,15 +344,16 @@ class GUIComponents:
         alongside the model's own parameters, so this is also what the
         Download tab's Fit_Results sheet exports (rule: don't silently drop
         the same "say so" provenance the app itself shows)."""
-        dm = self.data_manager
-        curves = self.app_state.data["curves"]
-        sample_ids = self.app_state.data["sample_ids"]
+        from data_manager import stored_fit_row
+
         selected_samples = self.app_state.data.get("selected_samples", [])
+        selected_keys = self._selected_curve_keys()
 
         fitted_rows = []
+        stored_rows = []
         not_fitted_keys = []
         for sample_id in selected_samples:
-            curve_ids = dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)
+            curve_ids = [cid for sid, cid in selected_keys if sid == sample_id]
             known = [cid for (sid, cid) in self.app_state.fitted_curves_data if sid == sample_id]
             for cid in known:
                 if cid not in curve_ids:
@@ -285,10 +364,28 @@ class GUIComponents:
             for curve_id in curve_ids:
                 fit = self.app_state.fitted_curves_data.get((sample_id, curve_id))
                 if fit is None:
-                    not_fitted_keys.append((sample_id, curve_id))
+                    stored = self.data_manager.get_stored_fit(
+                        self.app_state.data["entries"], sample_id, curve_id
+                    )
+                    if stored:
+                        stored_rows.append(
+                            {
+                                "sample_id": sample_id,
+                                "pixel": self.data_manager.get_curve_label(
+                                    self.app_state.data["entries"], sample_id, curve_id
+                                ),
+                                "curve_id": curve_id,
+                                **stored_fit_row(stored),
+                            }
+                        )
+                    else:
+                        not_fitted_keys.append((sample_id, curve_id))
                     continue
                 row = {
                     "sample_id": sample_id,
+                    "pixel": self.data_manager.get_curve_label(
+                        self.app_state.data["entries"], sample_id, curve_id
+                    ),
                     "curve_id": curve_id,
                     "model": fit["model"].abbreviated_name,
                     "n_frames": len(fit["time"]),
@@ -298,41 +395,62 @@ class GUIComponents:
                     "note": "⚠️ underdetermined fit" if fit.get("warning") else "",
                 }
                 row.update(fit.get("params", {}))
+                stored = self.data_manager.get_stored_fit(
+                    self.app_state.data["entries"], sample_id, curve_id
+                )
+                if stored:
+                    note = f"NOMAD already holds {stored.get('fit_method') or 'fit'} results"
+                    row["note"] = f"{row['note']}; {note}" if row["note"] else note
                 fitted_rows.append(row)
 
         fitted_df = (
             pd.DataFrame(fitted_rows)
             if fitted_rows
-            else pd.DataFrame(columns=["sample_id", "curve_id"])
+            else pd.DataFrame(columns=["sample_id", "pixel", "curve_id"])
         )
         columns = (
             list(fitted_df.columns)
             if not fitted_df.empty
-            else ["sample_id", "curve_id", "model", "n_frames", "max_time_h"]
+            else ["sample_id", "pixel", "curve_id", "model", "n_frames", "max_time_h"]
         )
         not_fitted_rows = []
         for sample_id, curve_id in not_fitted_keys:
             row = dict.fromkeys(columns, "Not fitted")
             row["sample_id"] = sample_id
+            row["pixel"] = self.data_manager.get_curve_label(
+                self.app_state.data["entries"], sample_id, curve_id
+            )
             row["curve_id"] = curve_id
             not_fitted_rows.append(row)
 
+        parts = [fitted_df]
+        if stored_rows:
+            parts.append(pd.DataFrame(stored_rows))
         if not_fitted_rows:
-            return pd.concat([fitted_df, pd.DataFrame(not_fitted_rows)], ignore_index=True)
-        return fitted_df
+            parts.append(pd.DataFrame(not_fitted_rows))
+        if len(parts) == 1:
+            return fitted_df
+        return pd.concat([p for p in parts if not p.empty], ignore_index=True).fillna("")
 
     def create_fitting_tab(self):
         """Create the curve fitting tab: model/range/parameter controls on the
         left, a live raw-data + fit + residuals preview on the right, apply-
         to-all-or-one-sample-at-a-time fitting, and a results table covering
         every selected sample (fitted or not)."""
-        from data_manager import fit_curve
+        from data_manager import (
+            OUTLIER_THRESHOLD,
+            OUTLIER_WINDOW,
+            fit_curve,
+            remove_outliers,
+        )
         from fitting_tools import available_fit_model_list
 
         dm = self.data_manager
         curves = self.app_state.data["curves"]
         sample_ids = self.app_state.data["sample_ids"]
         selected_samples = list(self.app_state.data.get("selected_samples", []))
+        selected_keys = self._selected_curve_keys()
+        entries = self.app_state.data["entries"]
 
         model_options = [
             (f"{model.abbreviated_name}", i) for i, model in enumerate(available_fit_model_list)
@@ -363,13 +481,15 @@ class GUIComponents:
 
         apply_to_all_checkbox = widgets.Checkbox(
             value=True,
-            description="Apply to all selected samples",
+            description="Apply to all selected measurements",
             indent=False,
         )
-        sample_dropdown = widgets.Dropdown(
-            options=selected_samples,
-            value=selected_samples[0] if selected_samples else None,
-            description="Sample:",
+        curve_dropdown = widgets.Dropdown(
+            options=[
+                (f"{sid} | {dm.get_curve_label(entries, sid, cid)}", (sid, cid))
+                for sid, cid in selected_keys
+            ],
+            description="Measurement:",
             layout=widgets.Layout(width="380px", display="none"),
             style={"description_width": "initial"},
         )
@@ -391,6 +511,52 @@ class GUIComponents:
         fit_status = widgets.Output()
         preview_output = widgets.Output()
 
+        outlier_window = widgets.BoundedIntText(
+            value=OUTLIER_WINDOW,
+            min=3,
+            max=1001,
+            step=2,
+            description="Window (points):",
+            tooltip="Points in the rolling median that each point is compared to (odd number). "
+            "Larger tolerates longer noisy stretches.",
+            layout=widgets.Layout(width="230px"),
+            style={"description_width": "110px"},
+        )
+        outlier_threshold = widgets.BoundedFloatText(
+            value=OUTLIER_THRESHOLD,
+            min=1.0,
+            max=50.0,
+            step=0.5,
+            description="Threshold:",
+            tooltip="How far from the rolling median a point must be, in robust standard "
+            "deviations, to count as an outlier. Lower removes more points.",
+            layout=widgets.Layout(width="230px"),
+            style={"description_width": "110px"},
+        )
+        clean_all_button = widgets.Button(
+            description="Clean all plots",
+            button_style="warning",
+            icon="eraser",
+            tooltip="Set outliers to NaN in every selected measurement (raw data is kept). "
+            "Existing fits of those measurements are discarded.",
+            layout=widgets.Layout(width="150px"),
+        )
+        clean_this_button = widgets.Button(
+            description="Clean this plot",
+            button_style="warning",
+            icon="eraser",
+            tooltip="Set outliers to NaN in the measurement shown below (raw data is kept). "
+            "Its existing fit is discarded.",
+            layout=widgets.Layout(width="150px"),
+        )
+        restore_button = widgets.Button(
+            description="Restore raw data",
+            icon="undo",
+            tooltip="Undo cleaning for every measurement",
+            layout=widgets.Layout(width="150px"),
+        )
+        clean_status = widgets.HTML(value="")
+
         results_toggle = widgets.Accordion(
             children=[widgets.Output()], titles=("Show all fitting results",)
         )
@@ -401,18 +567,20 @@ class GUIComponents:
         )
         stats_toggle.selected_index = None
 
-        def _sample_point_count(sample_id):
-            lengths = []
-            for curve_id in dm.get_curve_ids_for_sample(curves, sample_ids, sample_id):
-                t_data, _ = dm.get_raw_curve(curves, sample_ids, sample_id, curve_id)
-                if t_data is not None:
-                    lengths.append(len(t_data))
-            return min(lengths) if lengths else 0
+        def _get_curve(key):
+            """(time, power_density) of one measurement, outlier-cleaned if it was cleaned."""
+            return dm.get_curve(curves, sample_ids, *key, cleaned=self.app_state.cleaned_power)
 
-        def _current_preview_sample():
+        def _curve_point_count(key):
+            t_data, _ = dm.get_raw_curve(curves, sample_ids, *key)
+            return 0 if t_data is None else len(t_data)
+
+        def _current_preview_key():
+            """(sample_id, curve_id) shown in the preview: the first selected
+            measurement when fitting all of them, else the dropdown's."""
             if apply_to_all_checkbox.value:
-                return selected_samples[0] if selected_samples else None
-            return sample_dropdown.value
+                return selected_keys[0] if selected_keys else None
+            return curve_dropdown.value
 
         def _resolve_frame_range():
             """(start, end) from the slider, but end=None ("to the end of
@@ -442,14 +610,17 @@ class GUIComponents:
         def rebuild_param_fields(change=None):
             nonlocal current_param_fields
             model = available_fit_model_list[model_selector.value]
-            sample_id = _current_preview_sample()
+            key = _current_preview_key()
             defaults = {}
-            if sample_id:
-                t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, 0)
+            if key:
+                t_data, y_data = _get_curve(key)
                 if t_data is not None and len(t_data):
                     start, end = _resolve_frame_range()
                     t_sub = t_data[start:] if end is None else t_data[start : end + 1]
                     y_sub = y_data[start:] if end is None else y_data[start : end + 1]
+                    # cleaned curves hold NaN; the guesses (and the fit) need real points
+                    finite = np.isfinite(t_sub) & np.isfinite(y_sub)
+                    t_sub, y_sub = t_sub[finite], y_sub[finite]
                     if len(t_sub) >= 1:
                         try:
                             defaults = model.default_guess(y_sub, t_sub)
@@ -483,12 +654,10 @@ class GUIComponents:
                 # dragging it stays a valid index everywhere - leaving it at this
                 # max (the default) does NOT truncate longer curves; each one is
                 # fit to its own full length unless you deliberately drag inward.
-                n_points = min((_sample_point_count(sid) for sid in selected_samples), default=0)
-                suffix = " (drag to restrict; left at max, each sample fits its own full length)"
+                n_points = min((_curve_point_count(key) for key in selected_keys), default=0)
+                suffix = " (drag to restrict; left at max, each curve fits its own full length)"
             else:
-                n_points = (
-                    _sample_point_count(sample_dropdown.value) if sample_dropdown.value else 0
-                )
+                n_points = _curve_point_count(curve_dropdown.value) if curve_dropdown.value else 0
                 suffix = ""
             new_max = max(n_points - 1, 0)
             frame_range_selector.max = new_max
@@ -496,16 +665,17 @@ class GUIComponents:
             frame_range_info.value = f"<small>0 – {new_max} measurement points{suffix}</small>"
 
         def update_preview(change=None):
-            sample_id = _current_preview_sample()
+            key = _current_preview_key()
             with preview_output:
                 preview_output.clear_output(wait=True)
-                if not sample_id:
-                    print("Select a sample to preview.")
+                if not key:
+                    print("Select a measurement to preview.")
                     return
+                sample_id, curve_id = key
 
-                t_data, y_data = dm.get_raw_curve(curves, sample_ids, sample_id, 0)
+                t_data, y_data = _get_curve(key)
                 if t_data is None or len(y_data) == 0:
-                    print(f"No curve data available for {sample_id}.")
+                    print(f"No curve data available for {sample_id} ({curve_id}).")
                     return
 
                 start, end = _resolve_frame_range()
@@ -523,7 +693,7 @@ class GUIComponents:
                         x=np.arange(len(y_data)),
                         y=y_data,
                         mode="lines",
-                        name="Raw data",
+                        name="Cleaned data" if key in self.app_state.cleaned_power else "Raw data",
                         line=dict(width=2, color="#1f77b4"),
                     ),
                     row=1,
@@ -572,11 +742,7 @@ class GUIComponents:
                     )
                     fig.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
 
-                curve_note = (
-                    ""
-                    if len(dm.get_curve_ids_for_sample(curves, sample_ids, sample_id)) <= 1
-                    else " (curve 0)"
-                )
+                curve_note = f" | {dm.get_curve_label(entries, sample_id, curve_id)}"
                 fig.update_yaxes(title_text="Power Density", row=1, col=1)
                 fig.update_yaxes(title_text="Residual", row=2, col=1)
                 fig.update_xaxes(title_text="Measurement point index", row=2, col=1)
@@ -641,9 +807,9 @@ class GUIComponents:
             update_preview()
 
         def on_mode_toggle(change):
-            sample_dropdown.layout.display = "none" if apply_to_all_checkbox.value else ""
-            if not apply_to_all_checkbox.value and not sample_dropdown.value and selected_samples:
-                sample_dropdown.value = selected_samples[0]
+            curve_dropdown.layout.display = "none" if apply_to_all_checkbox.value else ""
+            if not apply_to_all_checkbox.value and not curve_dropdown.value and selected_keys:
+                curve_dropdown.value = selected_keys[0]
             update_range_bounds()
             rebuild_param_fields()
             update_preview()
@@ -654,10 +820,10 @@ class GUIComponents:
             update_preview()
 
         def perform_fitting(use_manual_values):
-            if not selected_samples:
+            if not selected_keys:
                 with fit_status:
                     fit_status.clear_output()
-                    print("⚠️ No samples selected. Please complete sample selection first.")
+                    print("⚠️ No measurements selected. Please complete sample selection first.")
                 return
 
             model = available_fit_model_list[model_selector.value]
@@ -678,15 +844,17 @@ class GUIComponents:
                                 model,
                                 frame_range=frame_range,
                                 initial_values=initial_values,
+                                curve_ids=[cid for sid, cid in selected_keys if sid == sample_id],
+                                cleaned=self.app_state.cleaned_power,
                             ).items():
                                 fitted[(sample_id, curve_id)] = fit
                         self.app_state.set_fit_results(fitted)
                         new_fits = fitted
                     else:
-                        sample_id = sample_dropdown.value
-                        if not sample_id:
-                            print("⚠️ No sample selected.")
+                        if not curve_dropdown.value:
+                            print("⚠️ No measurement selected.")
                             return
+                        sample_id, curve_id = curve_dropdown.value
                         fits = dm.fit_sample(
                             curves,
                             sample_ids,
@@ -694,9 +862,11 @@ class GUIComponents:
                             model,
                             frame_range=frame_range,
                             initial_values=initial_values,
+                            curve_ids=[curve_id],
+                            cleaned=self.app_state.cleaned_power,
                         )
-                        self.app_state.update_sample_fit_results(sample_id, fits)
                         new_fits = {(sample_id, cid): fit for cid, fit in fits.items()}
+                        self.app_state.update_curve_fit_results(new_fits)
 
                     fit_count = len(new_fits)
                     if fit_count:
@@ -706,16 +876,15 @@ class GUIComponents:
                                 print(f"⚠️ {sid} (curve {cid}): {fit['warning']}")
                         # Show the converged values, not what was typed - same for
                         # both buttons, per the agreed design.
-                        preview_sample = _current_preview_sample()
-                        preview_fit = new_fits.get((preview_sample, 0)) or next(
+                        preview_fit = new_fits.get(_current_preview_key()) or next(
                             iter(new_fits.values()), None
                         )
                         if preview_fit:
                             set_param_fields(preview_fit.get("params", {}))
                         if self.app_controller:
-                            # "Fit This Sample" stays on the Curve Fitting tab so you
-                            # can keep working through samples one at a time; only
-                            # "Fit All Curves" jumps to Visualization.
+                            # Fitting one measurement stays on the Curve Fitting tab so you
+                            # can keep working through them one at a time; only fitting
+                            # all of them jumps to Visualization.
                             self.app_controller.enable_plotting_tab(
                                 navigate=apply_to_all_checkbox.value
                             )
@@ -731,6 +900,48 @@ class GUIComponents:
             refresh_results_panels()
             update_preview()
 
+        def _after_data_change():
+            rebuild_param_fields()
+            refresh_results_panels()
+            update_preview()
+            if self.app_controller and self.app_state.has_fit_results():
+                self.app_controller.enable_plotting_tab(navigate=False)
+
+        def _clean(keys):
+            """Clean the given measurements from their raw data with the current
+            window/threshold, so repeating with new settings replaces the last cleaning."""
+            window = outlier_window.value | 1  # the rolling window is centred, so odd
+            cleaned = {}
+            n_removed = 0
+            for key in keys:
+                _, y_raw = dm.get_raw_curve(curves, sample_ids, *key)
+                if y_raw is None:
+                    continue
+                cleaned[key], removed = remove_outliers(y_raw, window, outlier_threshold.value)
+                n_removed += removed
+            had_fits = any(key in self.app_state.fitted_curves_data for key in cleaned)
+            self.app_state.set_cleaned_power(cleaned)
+            clean_status.value = (
+                f"<small>Removed {n_removed} outlier points from {len(cleaned)} measurement(s)"
+                f" (window {window}, threshold {outlier_threshold.value:g}). Raw data is kept."
+                + (" Their previous fits were discarded: fit again." if had_fits else "")
+                + "</small>"
+            )
+            _after_data_change()
+
+        def on_clean_this(b):
+            key = _current_preview_key()
+            if key:
+                _clean([key])
+
+        def on_clean_all(b):
+            _clean(selected_keys)
+
+        def on_restore(b):
+            self.app_state.clear_cleaned_power()
+            clean_status.value = "<small>Raw data restored for every measurement.</small>"
+            _after_data_change()
+
         update_formula(None)
         update_range_bounds()
         rebuild_param_fields()
@@ -739,9 +950,12 @@ class GUIComponents:
         model_selector.observe(on_model_change, names="value")
         frame_range_selector.observe(update_preview, names="value")
         apply_to_all_checkbox.observe(on_mode_toggle, names="value")
-        sample_dropdown.observe(on_sample_change, names="value")
+        curve_dropdown.observe(on_sample_change, names="value")
         auto_fit_button.on_click(lambda b: perform_fitting(False))
         manual_fit_button.on_click(lambda b: perform_fitting(True))
+        clean_this_button.on_click(on_clean_this)
+        clean_all_button.on_click(on_clean_all)
+        restore_button.on_click(on_restore)
 
         left_column = widgets.VBox(
             [
@@ -751,6 +965,11 @@ class GUIComponents:
                 param_fields_container,
                 frame_range_selector,
                 frame_range_info,
+                widgets.HTML("<b>Outlier cleaning:</b>"),
+                outlier_window,
+                outlier_threshold,
+                widgets.HBox([clean_all_button, restore_button]),
+                clean_status,
                 widgets.HBox([auto_fit_button, manual_fit_button]),
                 fit_status,
             ],
@@ -758,7 +977,8 @@ class GUIComponents:
         )
         right_column = widgets.VBox(
             [
-                widgets.HBox([apply_to_all_checkbox, sample_dropdown]),
+                widgets.HBox([apply_to_all_checkbox, curve_dropdown]),
+                clean_this_button,
                 preview_output,
             ],
             layout=widgets.Layout(width="700px"),
@@ -770,7 +990,8 @@ class GUIComponents:
             [
                 widgets.HTML("<h3>Curve Fitting</h3>"),
                 widgets.HTML(
-                    f"<p>Fit mathematical models to {len(selected_samples)} selected samples.</p>"
+                    f"<p>Fit mathematical models to {len(selected_keys)} selected measurements "
+                    f"from {len(selected_samples)} samples.</p>"
                 ),
                 widgets.HBox([left_column, right_column]),
                 results_toggle,
@@ -1240,11 +1461,14 @@ class GUIComponents:
         all_data = {}
         max_length = 0
 
+        selected_keys = set(self._selected_curve_keys())
         for sample_id in self.app_state.data.get("selected_samples", []):
             try:
                 sample_data = self.app_state.data["curves"].loc[sample_id]
                 if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
                     for curve_idx in sample_data.index.get_level_values(0).unique():
+                        if (sample_id, curve_idx) not in selected_keys:
+                            continue
                         curve_data = sample_data.loc[curve_idx]
                         col_prefix = f"{sample_id}_curve_{curve_idx}"
 
@@ -1340,6 +1564,8 @@ class GUIComponents:
                 self.app_state.data["sample_ids"],
                 self.app_state.data["selected_samples"],
                 "power_density",
+                self.app_state.data.get("selected_curves"),
+                self.app_state.cleaned_power,
             )
 
             if selected_data:

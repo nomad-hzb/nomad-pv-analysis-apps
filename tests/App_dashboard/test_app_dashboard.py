@@ -171,3 +171,147 @@ def test_learning_folder_opens_the_first_notebook_and_it_exists_in_repo():
     assert os.path.isfile(os.path.join(repo_root, LEARNING_FOLDER.path)), (
         f"missing learning notebook: {LEARNING_FOLDER.path}"
     )
+
+
+# --- per-deployment app selection (D1) -----------------------------------------------------
+
+
+def _names(selection):
+    return {
+        category: [e.folder or e.name for e in entries]
+        for category, entries in selection.categories.items()
+    }
+
+
+def test_no_setting_means_no_change():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(CATEGORIES, parse_name_list(None), parse_name_list(""))
+    assert selection.categories == CATEGORIES
+    assert selection.show_learning and selection.show_projects
+
+
+def test_hide_one_app_by_folder_name_ignoring_case_and_spaces():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(
+        CATEGORIES, hide=parse_name_list(" xps-automated , Sem_crystal_counter")
+    )
+    folders = {e.folder for entries in selection.categories.values() for e in entries}
+    assert "XPS-Automated" not in folders
+    assert "LCC_Calculator" in folders  # others untouched
+
+
+def test_hide_every_app_of_a_category_leaves_it_empty():
+    from data_manager import select_dashboard
+
+    category = "Data Management"
+    hide = {e.folder.lower() for e in CATEGORIES[category]}
+    selection = select_dashboard(CATEGORIES, hide=hide)
+    assert selection.categories[category] == []
+    assert selection.categories["Build Your Own"] == CATEGORIES["Build Your Own"]
+
+
+def test_allow_list_shows_only_the_named_apps():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(CATEGORIES, show=parse_name_list("JV-Analysis,File_Uploader"))
+    folders = [e.folder for entries in selection.categories.values() for e in entries]
+    assert sorted(folders) == ["File_Uploader", "JV-Analysis"]
+    assert not selection.show_learning and not selection.show_projects
+
+
+def test_learning_and_projects_can_be_hidden_or_allowed_by_name():
+    from data_manager import select_dashboard
+
+    assert not select_dashboard(CATEGORIES, hide={"learning"}).show_learning
+    assert not select_dashboard(CATEGORIES, hide={"projects"}).show_projects
+    allowed = select_dashboard(CATEGORIES, show={"learning"})
+    assert allowed.show_learning and not allowed.show_projects
+
+
+def test_unknown_name_warns_and_changes_nothing(caplog):
+    from data_manager import select_dashboard
+
+    with caplog.at_level("WARNING"):
+        selection = select_dashboard(CATEGORIES, hide={"jv-analyzis"})
+    assert selection.categories == CATEGORIES
+    assert "jv-analyzis" in caplog.text
+
+
+def test_urls_are_percent_encoded():
+    entry = AppEntry("My App", "a b#c(1).ipynb", "x", "d", "fa-x")
+    url = build_voila_url(entry, "edgar", "uploads/up-1/apps")
+    assert url.endswith("/uploads/up-1/apps/My%20App/a%20b%23c%281%29.ipynb")
+
+
+def test_the_oasis_prefix_comes_from_the_api_endpoint():
+    import data_manager as dm_module
+
+    assert dm_module.OASIS_PREFIX == dm_module.API_ENDPOINT.split("/api/")[0]
+    assert dm_module.VOILA_PATH_TEMPLATE.startswith(dm_module.OASIS_PREFIX + "/north/user/")
+
+
+def test_group_order_puts_named_groups_first_and_keeps_the_rest_in_default_order(caplog):
+    from data_manager import order_categories, parse_name_order
+
+    categories = {"A": [], "B b": [], "C": [], "D": []}
+    order = parse_name_order("c, B B, nope")
+    assert list(order_categories(categories, order)) == ["C", "B b", "A", "D"]
+    assert any("nope" in r.message for r in caplog.records)
+    assert order_categories(categories, None) is categories
+    assert list(order_categories(categories, [])) == ["A", "B b", "C", "D"]
+
+
+def test_select_dashboard_applies_the_group_order_after_hiding():
+    from data_manager import select_dashboard
+
+    selection = select_dashboard(CATEGORIES, order=["utilities&calculators"])
+    assert list(selection.categories)[0] == "Utilities & Calculators"
+
+
+def test_a_group_header_closes_and_opens_its_cards():
+    import gui_components as gc
+    import ipywidgets as widgets
+
+    section = gc.create_category_section("Data Management", [widgets.HTML("x")])
+    header, grid = section.children
+    header.click()
+    assert grid.layout.display == "none"
+    header.click()
+    assert grid.layout.display in (None, "")
+
+
+def test_every_project_card_has_a_full_upload_folder_name_and_unique_names():
+    """A bare 22-character id cannot be opened; the folder is '<slug>-<id>'."""
+    import re
+
+    names = []
+    for project in PROJECTS:
+        for app in project.apps:
+            assert re.fullmatch(r"ml-[a-z0-9-]+-[0-9]*-?[A-Za-z0-9_-]{22}", app.upload_id), app.name
+            names.append(app.name)
+    assert len(names) == len(set(names)) == 8
+
+
+def test_project_cards_open_exactly_the_paths_of_the_ml_uploads():
+    cropper = "ml-img-cropper-11-DuFOohIVQ5aauygNxEOXyg"
+    features = "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg"
+    labeling = "ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA"
+    correlation = "ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA"
+    mask = "ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg"
+    profiles = "ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA"
+    expected = {
+        "1. Image Cropper": (cropper, "image_cropper.ipynb"),
+        "2. Feature Extraction": (features, "feature_extraction_app.ipynb"),
+        "3. PL Defect Analysis": (features, "pl_defect_voila_app.ipynb"),
+        "4. ML Model": (labeling, "nomad_ml_app.ipynb"),
+        "5. Correlation Analysis": (correlation, "correlation_analysis_app.ipynb"),
+        "6. PL ROI → JV Assignment": (mask, "ROI_JV_NOMAD_app.ipynb"),
+        "7. Section 1": (features, "section1_app.ipynb"),
+        "8. Profile Generator": (profiles, "profile_generator_app.ipynb"),
+    }
+    apps = {a.name: a for project in PROJECTS for a in project.apps}
+    for name, (folder, notebook) in expected.items():
+        url = build_voila_url(apps[name], "u", "unused")
+        assert url.endswith(f"/uploads/{folder}/{notebook}"), name

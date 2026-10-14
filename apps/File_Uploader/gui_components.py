@@ -6,29 +6,28 @@ upload orchestration, and the user guide.
 import json
 import logging
 import threading
-import time
 from collections import defaultdict
-from io import BytesIO
-from zipfile import ZipFile
 
 import ipywidgets as widgets
-import requests
 from data_manager import (
     MEASUREMENT_TYPES,
     TOKEN,
     URL_API,
+    ZIP_MIME_TYPE,
+    build_archives,
     categorize_files,
-    create_nomad_filename,
     extract_filenames_from_vuetify,
-    get_file_extension,
     get_normalized_type,
     match_files_to_samples,
     natural_sort_key,
     read_file_from_widget,
     split_json_by_sample,
     state,
+    unavailable_files,
 )
-from IPython.display import HTML, display
+from IPython.display import display
+
+from hysprint_utils.api_calls import get_upload_ids_for_samples, upload_raw_file_and_wait
 
 try:
     from ipyvuetify.extra import FileInput as _FileInput
@@ -44,40 +43,6 @@ MAX_CONCURRENT_READS = 6
 # A read that hasn't settled within this many seconds is treated as stuck so
 # it surfaces as a visible error instead of hanging the queue forever.
 READ_TIMEOUT_S = 30
-
-# ---------------------------------------------------------------------------
-# Guide content
-# ---------------------------------------------------------------------------
-_GUIDE_HTML = """
-<div style="padding: 15px; border: 1px solid #ddd; border-radius: 5px;
-            background-color: #f9f9f9; margin: 10px 0;">
-<h2>Quick Start Guide</h2>
-<h3>1. <strong>Search and Select Batch</strong></h3>
-<ul>
-<li>Use the search field to filter available batches by name.</li>
-<li>Select your target batch from the list.</li>
-<li>Click <strong>Load Data</strong> to retrieve sample IDs for that batch.</li>
-</ul>
-<h3>2. <strong>Upload Files</strong></h3>
-<ul>
-<li>Click <strong>Choose Files</strong> to select your measurement data files.</li>
-<li>The system automatically recognises common file types.</li>
-<li>Unrecognised files are flagged for manual type assignment.</li>
-</ul>
-<h3>3. <strong>Assign Files to Samples</strong></h3>
-<ul>
-<li>Select files from the file list.</li>
-<li>Click a sample ID button to assign the selected files to that sample.</li>
-</ul>
-<h3>4. <strong>Verify and Process</strong></h3>
-<ul>
-<li>Review file assignments and types for each sample.</li>
-<li>Adjust file types using the dropdown menus if needed.</li>
-<li>Click <strong>Upload and process Data</strong> when ready
-    (this action is not reversible).</li>
-</ul>
-</div>
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +143,10 @@ def create_reset_assignments_button():
         ),
         layout=widgets.Layout(width="320px", height="36px"),
     )
+
+
+# A sample button whose panel is open is a darker gray than one that was never opened.
+OPEN_SAMPLE_BUTTON_COLOR = "#b4b4b4"
 
 
 def create_sample_button(sample_id, description):
@@ -331,20 +300,34 @@ def _make_json_read_job(fname, file_index, file_input, file_selector, status_dis
                 json_data = json.loads(content_bytes.decode("utf-8"))
                 samples = split_json_by_sample(json_data)
                 logger.info("%s: %d samples found: %s", fname, len(samples), list(samples.keys()))
+                keys = []
+                renamed = []
                 for sample_id, sample_data in samples.items():
                     output_filename = f"{sample_id}.{sample_id}-{json_base}.jv.json"
-                    state.uploaded_files_data[sample_id] = {
+                    key = sample_id
+                    earlier = state.uploaded_files_data.get(key)
+                    if earlier is not None and earlier.get("source_file") != fname:
+                        # the same sample in a second JSON (another scan round): keep both
+                        key = f"{sample_id}-{json_base}"
+                        renamed.append(sample_id)
+                    state.uploaded_files_data[key] = {
                         "name": output_filename,
                         "is_json": True,
                         "file_content": sample_data["json_content"],
                         "source_file": fname,
                     }
+                    keys.append(key)
                 current = list(file_selector.options)
                 if fname in current:
                     current.remove(fname)
-                current.extend(samples.keys())
+                current.extend(k for k in keys if k not in current)
                 file_selector.options = sorted(current, key=natural_sort_key)
-                finish("done")
+                note = (
+                    f"done ({len(renamed)} sample(s) also in an earlier JSON, both kept)"
+                    if renamed
+                    else "done"
+                )
+                finish(note)
             except Exception as exc:
                 logger.error("Parsing %s: %s", fname, exc)
                 finish(f"error: {exc}")
@@ -391,11 +374,10 @@ def on_file_input_change(
         regular_files = [f for f in filenames if not f.lower().endswith(".json")]
         logger.debug("JSON: %d, regular: %d", len(json_files), len(regular_files))
 
-        # Add to, never wipe, the existing pool: people commonly load files in
-        # several rounds (some jv now, more jv later, then PL). Previously this
-        # reset uploaded_files_data/file_read_status wholesale on every new
-        # selection, silently discarding already-loaded content for files a
-        # prior round had already assigned to a sample.
+        # The list shows what was just selected (a new selection replaces the previous list), but
+        # the content already read stays in uploaded_files_data: files a previous round assigned
+        # to a sample are still uploaded. (Wiping uploaded_files_data/file_read_status wholesale
+        # used to discard the content of assigned files.)
         state.file_input_widget = file_input
         already_assigned = {f for files in state.sample_files_dict.values() for f in files}
 
@@ -461,9 +443,7 @@ def on_file_input_change(
         _run_read_queue(read_jobs)
 
         new_unassigned = [f for f in all_display_files if f not in already_assigned]
-        file_selector.options = sorted(
-            set(file_selector.options) | set(new_unassigned), key=natural_sort_key
-        )
+        file_selector.options = sorted(set(new_unassigned), key=natural_sort_key)
         file_count = len(file_selector.options)
         file_count_display.value = (
             f"<b>{file_count} files waiting to be assigned</b>"
@@ -683,6 +663,8 @@ def on_sample_button_first_click(
                     out_widget.clear_output()
                     print(f"Added files to {sample_id}: {state.sample_files_dict[sample_id]}")
 
+            b.style.button_color = OPEN_SAMPLE_BUTTON_COLOR
+
         except Exception as exc:
             logger.exception("Exception in on_sample_button_first_click for %s", sample_id)
             with out_widget:
@@ -773,54 +755,53 @@ def on_search_field_change(change, batch_ids_list, batch_ids):
 # ---------------------------------------------------------------------------
 # Upload orchestration
 # ---------------------------------------------------------------------------
-def upload_files_for_samples(
-    sample_files_dict, file_type_dict, uploaded_files_data, get_nomad_ids_of_entry, out_widget
-):
-    """Build per-upload ZIP archives and push them to NOMAD."""
-    upload_ids = {}
-
+def upload_files_for_samples(sample_files_dict, file_type_dict, uploaded_files_data, out_widget):
+    """Check the files, build per-upload ZIP archives and push them to NOMAD, reporting each
+    upload's outcome (a failed PUT or a processing failure is no longer "Done!")."""
     with out_widget:
         print("Preparing archives...")
 
-    for sample_id, file_names in sample_files_dict.items():
-        if not file_names:
-            continue
-        entry_id, upload_id = get_nomad_ids_of_entry(URL_API, TOKEN, sample_id)
-        time.sleep(0.2)
-        if upload_id not in upload_ids:
-            upload_ids[upload_id] = BytesIO()
+    # 1. never upload without files that are still reading or failed: they would be left out
+    missing = unavailable_files(sample_files_dict, uploaded_files_data, state.file_read_status)
+    if missing:
+        with out_widget:
+            print(
+                f"Not uploading: {len(missing)} assigned file(s) are not loaded yet. "
+                "Wait for them to finish reading (or unassign them) and click Upload again:"
+            )
+            for sample_id, file_name, reason in missing:
+                print(f"  {file_name} ({sample_id}): {reason}")
+        return
 
-        for file_name in file_names:
-            if file_name not in uploaded_files_data:
-                logger.warning("No data found for file: %s", file_name)
-                continue
-            file_data = uploaded_files_data[file_name]
-            file_content = file_data.get("file_content")
-            if not file_content:
-                logger.warning("No content for file: %s", file_name)
-                continue
-
-            if file_data.get("is_json"):
-                new_file_name = f"{sample_id}.{file_data['name']}"
-            else:
-                measurement_type = file_type_dict.get(sample_id, {}).get(file_name, "hy")
-                file_extension = get_file_extension(file_name)
-                base_name = ".".join(file_name.split(".")[:-1])
-                if measurement_type == "jv" and file_data.get("epoch_time"):
-                    base_name = f"{file_data['epoch_time']}_{base_name}"
-                new_file_name = create_nomad_filename(
-                    sample_id, base_name, measurement_type, file_extension
-                )
-
-            with ZipFile(upload_ids[upload_id], "a") as zf:
-                zf.writestr(new_file_name, file_content)
+    # 2. one query for every sample's upload, one ZIP per upload
+    sample_ids = [sample_id for sample_id, names in sample_files_dict.items() if names]
+    try:
+        upload_id_by_sample = get_upload_ids_for_samples(URL_API, TOKEN, sample_ids)
+    except Exception as exc:
+        logger.exception("Looking up the uploads failed")
+        with out_widget:
+            print(f"Could not look up the samples' uploads: {exc}")
+        return
+    archives, no_upload = build_archives(
+        sample_files_dict, file_type_dict, uploaded_files_data, upload_id_by_sample
+    )
+    if no_upload:
+        with out_widget:
+            print(
+                f"No NOMAD entry found for sample(s) {', '.join(no_upload)}; "
+                "their files are not uploaded."
+            )
+    if not archives:
+        with out_widget:
+            print("Nothing to upload.")
+        return
 
     # Sized to the number of distinct uploads (not sample count -- many
     # samples commonly share one upload_id), so the bar actually reaches 100%.
     progress = widgets.FloatProgress(
         value=0.0,
         min=0.0,
-        max=float(max(len(upload_ids), 1)),
+        max=float(len(archives)),
         description="Uploading:",
         bar_style="info",
         orientation="horizontal",
@@ -829,84 +810,33 @@ def upload_files_for_samples(
     with out_widget:
         display(progress)
 
-    for i, (upload_id, zip_file) in enumerate(upload_ids.items()):
+    failed = []
+    for i, (upload_id, zip_bytes) in enumerate(archives.items()):
         base = float(i)
         progress.value = base + 0.1  # ZIP ready, PUT about to start
 
-        try:
-            response = requests.put(
-                f"{URL_API}/uploads/{upload_id}/raw/",
-                data={"wait_for_processing": False},
-                headers={"Authorization": f"Bearer {TOKEN}"},
-                files={"file": ("data.zip", zip_file.getvalue(), "application/json")},
-            )
-            response.raise_for_status()
-            progress.value = base + 0.4  # PUT acknowledged
-        except Exception as exc:
-            logger.error("Error uploading to %s: %s", upload_id, exc)
-            with out_widget:
-                print(f"Error uploading to {upload_id}: {exc}")
-                print("Check access and restart voila!")
+        def on_poll(waited, max_wait, base=base):
+            # asymptotic: advances at every poll, never reaches the next upload's share
+            progress.value = base + 0.1 + 0.85 * (1 - 0.5 ** (waited / 10))
 
-        time.sleep(1)
-        _process_upload(upload_id, out_widget, progress, base + 0.4, base + 0.7)
-        time.sleep(1)
-        _process_upload(upload_id, out_widget, progress, base + 0.7, base + 1.0)
+        try:
+            upload_raw_file_and_wait(
+                URL_API, TOKEN, upload_id, "data.zip", zip_bytes, ZIP_MIME_TYPE, on_poll=on_poll
+            )
+            with out_widget:
+                print(f"Upload {upload_id}: processed.")
+        except Exception as exc:
+            logger.error("Upload to %s failed: %s", upload_id, exc)
+            failed.append(upload_id)
+            with out_widget:
+                print(f"Upload {upload_id} FAILED: {exc}")
         progress.value = base + 1.0
 
-    progress.bar_style = "success"
-    with out_widget:
-        print("Done!")
-
-
-def _process_upload(upload_id, out_widget, progress_bar=None, current_value=0.0, total_value=1.0):
-    requests.post(
-        f"{URL_API}/uploads/{upload_id}/action/process",
-        headers={"Authorization": f"Bearer {TOKEN}"},
-    )
-    fill = float(current_value)
-    while True:
-        time.sleep(2)
-        resp = requests.get(
-            f"{URL_API}/uploads/{upload_id}",
-            headers={"Authorization": f"Bearer {TOKEN}"},
-        )
-        if not resp.json()["data"]["process_running"]:
-            if progress_bar is not None:
-                progress_bar.value = total_value
-            break
-        if progress_bar is not None:
-            # Asymptotic fill: each poll closes 40 % of remaining distance so
-            # the bar visibly advances every 2 s but never overshoots total_value.
-            fill += (total_value - fill) * 0.4
-            progress_bar.value = fill
-
-
-# ---------------------------------------------------------------------------
-# Guide
-# ---------------------------------------------------------------------------
-def display_guide():
-    """Render a collapsible quick-start guide widget."""
-    guide_button = widgets.Button(
-        description="Show Guide",
-        button_style="info",
-        layout=widgets.Layout(width="150px", height="40px"),
-    )
-    guide_output = widgets.Output()
-    guide_visible = [False]
-
-    def toggle_guide(b):
-        with guide_output:
-            guide_output.clear_output()
-            if not guide_visible[0]:
-                display(HTML(_GUIDE_HTML))
-                guide_button.description = "Hide Guide"
-                guide_button.button_style = "warning"
-                guide_visible[0] = True
-            else:
-                guide_button.description = "Show Guide"
-                guide_button.button_style = "info"
-                guide_visible[0] = False
-
-    guide_button.on_click(toggle_guide)
-    display(widgets.VBox([guide_button, guide_output], layout=widgets.Layout(margin="0 0 20px 0")))
+    if failed:
+        progress.bar_style = "danger"
+        with out_widget:
+            print(f"{len(failed)} of {len(archives)} upload(s) failed. Check access and retry.")
+    else:
+        progress.bar_style = "success"
+        with out_widget:
+            print("Done!")

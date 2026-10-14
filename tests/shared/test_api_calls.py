@@ -76,3 +76,120 @@ def test_get_all_measurements_except_jv_fans_out_and_excludes_jv(monkeypatch):
     assert set(res.keys()) == {"S1", "S2"}
     assert len(res["S1"]) == 1
     assert len(res["S2"]) == 1
+
+
+# --- pagination, status checks and timeouts (S2) -------------------------------------------
+
+
+class _PagedServer:
+    """Fake NOMAD query endpoint: serves `rows` in pages and records every request."""
+
+    def __init__(self, rows, page_size=2):
+        self.rows, self.page_size, self.requests = rows, page_size, []
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.requests.append({"url": url, "json": json, "timeout": timeout})
+        start = int((json["pagination"].get("page_after_value")) or 0)
+        page = self.rows[start : start + self.page_size]
+        nxt = start + self.page_size
+        payload = {"data": page, "pagination": {}}
+        if nxt < len(self.rows):
+            payload["pagination"]["next_page_after_value"] = str(nxt)
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return payload
+
+        return _Resp()
+
+
+def test_query_all_follows_every_page(monkeypatch):
+    from hysprint_utils import api_calls
+
+    server = _PagedServer([{"i": n} for n in range(5)])
+    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    query = {"query": {"x": 1}}
+    data = api_calls._query_all("https://e.test/api", "tok", "entries/query", query)
+    assert [d["i"] for d in data] == [0, 1, 2, 3, 4]
+    assert len(server.requests) == 3
+    assert query == {"query": {"x": 1}}  # caller's query untouched
+
+
+def test_query_all_sets_default_page_size_and_timeout(monkeypatch):
+    from hysprint_utils import api_calls
+
+    server = _PagedServer([{"i": 1}], page_size=10)
+    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    api_calls._query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
+    sent = server.requests[0]
+    assert sent["json"]["pagination"]["page_size"] == api_calls.DEFAULT_PAGE_SIZE
+    assert sent["timeout"] == api_calls.REQUEST_TIMEOUT
+
+
+def test_query_all_stops_on_repeated_cursor(monkeypatch):
+    from hysprint_utils import api_calls
+
+    class _Loop:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"i": 1}], "pagination": {"next_page_after_value": "same"}}
+
+    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Loop())
+    data = api_calls._query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
+    assert len(data) == 2  # first page, then the repeated cursor is served once and stopped
+
+
+def test_get_all_mppt_returns_entries_beyond_the_first_page(monkeypatch):
+    from hysprint_utils import api_calls
+
+    sample_entries = [{"entry_id": f"e{n}"} for n in range(3)]
+    archive = [
+        _linked(f"m{n}", [f"S{n}"], entry_type="HySprint_MPPTrackingMeasurement") for n in range(5)
+    ]
+    responses = {
+        "entries/query": _PagedServer(sample_entries),
+        "entries/archive/query": _PagedServer(archive),
+    }
+
+    def post(url, **kwargs):
+        endpoint = "entries/archive/query" if url.endswith("archive/query") else "entries/query"
+        return responses[endpoint].post(url, **kwargs)
+
+    monkeypatch.setattr(api_calls.requests, "post", post)
+    res = api_calls.get_all_mppt("https://e.test/api", "tok", ["S0"])
+    assert set(res) == {f"S{n}" for n in range(5)}
+
+
+def test_get_all_batches_wth_data_raises_on_http_error(monkeypatch):
+    import pytest
+    import requests
+
+    from hysprint_utils import api_calls
+
+    class _Bad:
+        def raise_for_status(self):
+            raise requests.HTTPError("401")
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Bad())
+    with pytest.raises(requests.HTTPError):
+        api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T")
+
+
+def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
+    from hysprint_utils import api_calls
+
+    batch = {"archive": {"data": {"entities": [{"lab_id": "S1"}]}}}
+    server = _PagedServer([batch], page_size=10)
+    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    with caplog.at_level("WARNING"):
+        ids = api_calls.get_ids_in_batch("https://e.test/api", "tok", ["B1", "B2"])
+    assert ids == ["S1"]
+    assert "asked for 2 batches" in caplog.text

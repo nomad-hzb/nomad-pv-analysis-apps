@@ -6,6 +6,7 @@ All user-configurable settings are defined here.
 
 Configuration Sections:
     - PARAMETER_BLACKLIST: Parameters to exclude from dropdowns
+    - MEASURED_PARAMETERS: Process Metadata that is logged, not set
     - PRESET_PLOTS: Quick-plot buttons shown on the Plotting tab
 
 Author: HySprint Team
@@ -75,6 +76,43 @@ PARAMETER_BLACKLIST = {
 # from), since the actual process types available vary per NOMAD upload and
 # can't be hardcoded here. Add more presets here - no code changes needed
 # elsewhere.
+
+# ============================================================================
+# MEASURED (NOT SETTABLE) PROCESS PARAMETERS
+# ============================================================================
+# Process Metadata columns that record a condition rather than a setting
+# (ambient humidity, logged pressure readings). They stay normal inputs for
+# Correlations and Random Forest, but Bayesian Optimization pre-fixes them at
+# their median instead of suggesting values for them. Matched on the base
+# name, so the process-type suffix added when sources are merged
+# (e.g. "relative_humidity_Inkjet Printing") is covered too.
+# Numeric columns that describe the sample or the run, not a setting someone chose. They stay
+# available in the Analysis Data tab but start UNCHECKED, so Correlations, Random Forest, Bayesian
+# Optimization and PCA do not pick them up as process parameters: position_in_plan follows the
+# run order (drift and batch effects then show up as an "important parameter", and BO
+# suggests a value for it), the others are device geometry. Matched on the base name, so the
+# suffix added when sources are merged is covered too.
+ANALYSIS_UNCHECKED_BY_DEFAULT = (
+    "position_in_plan",
+    "number_of_pixels",
+    "pixel_area",
+    "solar_cell_area",
+)
+
+
+def is_identifier_like(column: str) -> bool:
+    """True for a column in ANALYSIS_UNCHECKED_BY_DEFAULT, or its merge-suffixed copy."""
+    return any(
+        column == base or column.startswith(base + "_") for base in ANALYSIS_UNCHECKED_BY_DEFAULT
+    )
+
+
+MEASURED_PARAMETERS = {
+    "relative_humidity",
+    "pressure_start",
+    "pressure_end",
+}
+
 
 PRESET_PLOTS = [
     {

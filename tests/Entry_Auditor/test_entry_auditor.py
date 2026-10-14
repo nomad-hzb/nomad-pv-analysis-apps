@@ -1,11 +1,13 @@
 """Entry_Auditor: unit tests for the data_manager layer -- never hits the real API."""
 
 import json
+from pathlib import Path
 
 import data_manager as dm
 import gui_components as gc
 import pandas as pd
-from conftest import FIXTURE_PATH
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_batch.json"
 
 # ---------------------------------------------------------------------------
 # modify_file_field -- raw-text regex correction mechanism
@@ -41,13 +43,9 @@ def test_modify_file_field_yaml_replaces_value():
     assert "other: HySpinbox" in modified
 
 
-def test_modify_file_field_uses_column_to_json_key_mapping():
-    file_text = '{"annealing": {"atmosphere": "N2"}}'
-    modified, count = dm.modify_file_field(
-        file_text, "entry.archive.json", "annealing_atmosphere", "N2", "Nitrogen"
-    )
-    assert count == 1
-    assert '"atmosphere": "Nitrogen"' in modified
+def test_modify_file_field_has_no_leaf_name_aliases_any_more():
+    """The old COLUMN_TO_JSON_KEY mapping edited by leaf name; edits are path-exact now."""
+    assert not hasattr(dm, "COLUMN_TO_JSON_KEY")
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +285,7 @@ def test_apply_correction_success_logs_and_counts(monkeypatch, tmp_path):
     log_path = tmp_path / "log.txt"
 
     monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinbox"}')
-    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: True)
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: dm.OUTCOME_VERIFIED)
     monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
 
     result = dm.apply_correction(
@@ -299,6 +297,7 @@ def test_apply_correction_success_logs_and_counts(monkeypatch, tmp_path):
         "HySpinBox",
         "HySprint_Cleaning",
         log_path=log_path,
+        backup_dir=tmp_path / "backups",
     )
 
     assert result.success == 1
@@ -312,7 +311,7 @@ def test_apply_correction_reports_progress_per_entry(monkeypatch, tmp_path):
     log_path = tmp_path / "log.txt"
 
     monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinbox"}')
-    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: True)
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: dm.OUTCOME_VERIFIED)
     monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
 
     events = []
@@ -384,7 +383,7 @@ def test_apply_correction_only_entry_id_targets_single_entry(monkeypatch, tmp_pa
     log_path = tmp_path / "log.txt"
 
     monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinBox"}')
-    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: True)
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: dm.OUTCOME_VERIFIED)
     monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
 
     # location=="HySpinBox" matches entry1 and entry2 - only_entry_id must narrow to entry2.
@@ -398,6 +397,7 @@ def test_apply_correction_only_entry_id_targets_single_entry(monkeypatch, tmp_pa
         "HySprint_Cleaning",
         log_path=log_path,
         only_entry_id="entry2",
+        backup_dir=tmp_path / "backups",
     )
 
     assert result.total == 1
@@ -409,7 +409,7 @@ def test_apply_correction_only_entry_id_no_match_corrects_nothing(monkeypatch, t
     log_path = tmp_path / "log.txt"
 
     monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinBox"}')
-    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: True)
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: dm.OUTCOME_VERIFIED)
     monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
 
     result = dm.apply_correction(
@@ -452,3 +452,450 @@ def test_modify_file_field_does_not_partial_match_substrings():
         file_text, "entry.archive.json", "location", "HySpinbox", "HySpinBox"
     )
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Corrections are enabled, behind a preview + confirm step (issue #56)
+# ---------------------------------------------------------------------------
+
+
+def test_field_audit_panel_offers_preview_then_confirm(fresh_session):
+    assert gc.CORRECTIONS_ENABLED is True
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    panel = gc.FieldAuditPanel(fresh_session, label, url="https://example.org", token="t")
+    assert panel.dropdown is not None
+    assert not hasattr(panel, "correct_button")  # no one-click write any more
+    assert panel.confirm_button.layout.display == "none"  # nothing to confirm yet
+    assert panel.cancel_button.layout.display == "none"
+
+
+def test_sample_dropdown_follows_the_table_column_order(fresh_session):
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    panel = gc.FieldAuditPanel(fresh_session, label, url="https://example.org", token="t")
+    df = panel.entries_df
+    table_order = [str(df.loc[i].get("_entry_id", "")) for i in panel.entry_indices]
+    shown = [value for _label, value in panel.sample_dropdown.options if value is not None]
+    assert shown == [e for e in table_order if e in shown]
+
+
+def test_field_audit_panel_offline_has_no_correction_controls(fresh_session):
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    panel = gc.FieldAuditPanel(fresh_session, label, url=None, token=None)
+    assert panel.dropdown is None
+
+
+# ---------------------------------------------------------------------------
+# 5.1 safe corrections: path-exact edit (C1), escaping (H1/H2), upload folder (C2),
+# verified outcome (C3), backup + preview (H3), HTML escaping (H4), refresh (H5)
+# ---------------------------------------------------------------------------
+
+_MULTI = {
+    "name": "DMF",
+    "solution": [
+        {
+            "solvent": [
+                {"chemical_2": {"name": "DMF"}},
+                {"chemical_2": {"name": "DMSO"}},
+            ],
+            "solute": [{"chemical_2": {"name": "DMF"}}],
+        }
+    ],
+}
+
+
+def _flat(text, mainfile="e.archive.json"):
+    data = dm._parse_archive_text(text, mainfile)
+    out: dict[str, str] = {}
+    dm._flatten(data, "", out)
+    return out
+
+
+def test_correction_changes_only_the_audited_path_not_every_same_leaf_name():
+    """Reproduces C1: three fields share the leaf name 'name' (and two the value DMF)."""
+    text = json.dumps(_MULTI)
+    column = "solution.solvent.1.chemical_2.name"
+    assert _flat(text)[column] == "DMF"
+
+    modified, count = dm.modify_file_field(text, "e.archive.json", column, "DMF", "N,N-DMF")
+
+    assert count == 1
+    flat = _flat(modified)
+    assert flat[column] == "N,N-DMF"
+    assert flat["solution.solvent.2.chemical_2.name"] == "DMSO"
+    assert flat["solution.solute.chemical_2.name"] == "DMF"  # same value, other field
+    assert flat["name"] == "DMF"  # the entry's own name
+
+
+def test_correction_follows_single_item_lists_and_numbered_lists():
+    text = json.dumps(_MULTI)
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "solution.solute.chemical_2.name", "DMF", "X"
+    )
+    assert count == 1 and _flat(modified)["solution.solute.chemical_2.name"] == "X"
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "solution.solvent.2.chemical_2.name", "DMSO", "Y"
+    )
+    assert count == 1 and _flat(modified)["solution.solvent.2.chemical_2.name"] == "Y"
+
+
+def test_correction_refuses_a_path_that_is_missing_or_holds_another_value():
+    text = json.dumps(_MULTI)
+    for column, old in (
+        ("solution.solvent.3.chemical_2.name", "DMF"),  # no third solvent
+        ("solution.solvent.2.chemical_2.name", "DMF"),  # holds DMSO
+        ("name.extra", "DMF"),  # beyond a leaf
+        ("solution.solvent", "DMF"),  # not a leaf
+    ):
+        modified, count = dm.modify_file_field(text, "e.archive.json", column, old, "X")
+        assert count == 0 and modified == text, column
+
+
+def test_correction_survives_quotes_backslashes_newlines_and_unicode_in_the_new_value():
+    text = '{"location": "HySpinbox", "unit": "\\u00b0C"}'
+    for new in ['say "hi"', "back\\1slash", "line1\nline2", "N,N-DMF °C", "a: b # c"]:
+        modified, count = dm.modify_file_field(text, "e.archive.json", "location", "HySpinbox", new)
+        assert count == 1
+        assert json.loads(modified)["location"] == new  # still valid JSON, exact value
+        assert json.loads(modified)["unit"] == "°C"
+
+
+def test_correction_matches_values_stored_json_escaped_or_yaml_quoted():
+    escaped = '{"unit": "\\u00b0C"}'  # the file holds the escape, the audit table the character
+    modified, count = dm.modify_file_field(escaped, "e.archive.json", "unit", "°C", "degC")
+    assert count == 1 and json.loads(modified)["unit"] == "degC"
+    quoted = 'location: "HySpinbox"\nother: "HySpinbox"\n'
+    modified, count = dm.modify_file_field(quoted, "e.archive.yaml", "location", "HySpinbox", "Box")
+    assert count == 1
+    assert dm._parse_archive_text(modified, "e.archive.yaml") == {
+        "location": "Box",
+        "other": "HySpinbox",
+    }
+
+
+def test_correction_refuses_a_file_that_does_not_parse():
+    modified, count = dm.modify_file_field("{not json", "e.archive.json", "a", "x", "y")
+    assert count == 0 and modified == "{not json"
+
+
+def test_correction_keeps_key_order_and_json_indentation():
+    text = '{\n  "b": "1",\n  "a": "2"\n}\n'
+    modified, count = dm.modify_file_field(text, "e.archive.json", "a", "2", "3")
+    assert count == 1
+    assert modified == '{\n  "b": "1",\n  "a": "3"\n}\n'
+
+
+class _Resp:
+    def __init__(self, payload=None, text="", ok=True):
+        self._payload, self.text, self.ok = payload or {}, text, ok
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def _fake_nomad(monkeypatch, status="SUCCESS", stored_text=None, publish_time=None):
+    """Record every request; the upload reports `status`, the raw file reads back stored_text."""
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(("GET", url, kwargs))
+        if "/raw/" in url:
+            return _Resp(text=stored_text if stored_text is not None else "{}")
+        return _Resp({"data": {"process_status": status, "publish_time": publish_time}})
+
+    def put(url, **kwargs):
+        calls.append(("PUT", url, kwargs))
+        return _Resp()
+
+    monkeypatch.setattr(dm.requests, "get", get)
+    monkeypatch.setattr(dm.requests, "put", put)
+    monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
+    return calls
+
+
+def test_corrected_file_goes_back_into_its_own_folder_not_the_upload_root():
+    """C2: PUT to the upload root would create a second entry next to the unchanged one."""
+    import pytest
+
+    stored = json.dumps({"location": "New"})
+    for mainfile, expected in (
+        ("batch_01/sub dir/3_spin.archive.json", "/uploads/u1/raw/batch_01/sub%20dir/"),
+        ("3_spin.archive.json", "/uploads/u1/raw/"),
+    ):
+        with pytest.MonkeyPatch.context() as mp:
+            calls = _fake_nomad(mp, stored_text=stored)
+            outcome = dm.upload_corrected_file(
+                "https://e.test/api/v1",
+                "tok",
+                "u1",
+                mainfile,
+                stored,
+                column="location",
+                new_value="New",
+            )
+        put = next(c for c in calls if c[0] == "PUT")
+        assert put[1].endswith(expected), put[1]
+        assert put[2]["files"]["file"][0] == mainfile.rsplit("/", 1)[-1]
+        assert outcome == dm.OUTCOME_VERIFIED
+
+
+def test_outcome_is_verified_only_when_processing_succeeded_and_the_value_reads_back(monkeypatch):
+    new = json.dumps({"location": "New"})
+    args = ("https://e.test/api/v1", "tok", "u1", "e.archive.json", new)
+    kwargs = {"column": "location", "new_value": "New"}
+
+    _fake_nomad(monkeypatch, status="SUCCESS", stored_text=new)
+    assert dm.upload_corrected_file(*args, **kwargs) == dm.OUTCOME_VERIFIED
+
+    _fake_nomad(monkeypatch, status="FAILURE", stored_text=new)
+    assert dm.upload_corrected_file(*args, **kwargs) == dm.OUTCOME_FAILED
+
+    _fake_nomad(monkeypatch, status="SUCCESS", stored_text=json.dumps({"location": "Old"}))
+    assert dm.upload_corrected_file(*args, **kwargs) == dm.OUTCOME_FAILED  # old value still there
+
+    # "New" is a substring of other content but not at the path: not verified.
+    _fake_nomad(monkeypatch, status="SUCCESS", stored_text=json.dumps({"location": "Newer"}))
+    assert dm.upload_corrected_file(*args, **kwargs) == dm.OUTCOME_FAILED
+
+    monkeypatch.setattr(dm, "wait_for_processing", lambda *a, **k: None)  # timed out
+    _fake_nomad(monkeypatch, status="RUNNING", stored_text=new)
+    monkeypatch.setattr(dm, "wait_for_processing", lambda *a, **k: None)
+    assert dm.upload_corrected_file(*args, **kwargs) == dm.OUTCOME_UNVERIFIED
+
+
+def test_published_upload_is_never_written(monkeypatch):
+    import pytest
+
+    calls = _fake_nomad(monkeypatch, publish_time="2026-01-01")
+    with pytest.raises(dm.UploadPublishedError):
+        dm.upload_corrected_file(
+            "https://e.test/api/v1", "tok", "u1", "e.archive.json", "{}", column="a", new_value="b"
+        )
+    assert not any(c[0] == "PUT" for c in calls)
+
+
+def _apply(monkeypatch, tmp_path, outcome, text='{"location": "HySpinbox"}'):
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: text)
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: outcome)
+    monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
+    log_path = tmp_path / "log.txt"
+    result = dm.apply_correction(
+        "https://e.test/api/v1",
+        "tok",
+        _cleaning_df(),
+        "location",
+        "HySpinbox",
+        "HySpinBox",
+        "HySprint_Cleaning",
+        log_path=log_path,
+        backup_dir=tmp_path / "backups",
+    )
+    return result, log_path
+
+
+def test_only_verified_corrections_count_and_reach_the_log(monkeypatch, tmp_path):
+    """C3: a timeout or failed processing used to be counted as updated and logged."""
+    result, log_path = _apply(monkeypatch, tmp_path, dm.OUTCOME_VERIFIED)
+    assert (result.success, result.unverified, result.failed) == (1, 0, 0)
+    assert log_path.exists() and result.succeeded_entry_ids
+
+    result, log_path = _apply(monkeypatch, tmp_path / "b", dm.OUTCOME_UNVERIFIED)
+    assert (result.success, result.unverified, result.failed) == (0, 1, 0)
+    assert result.unverified_entry_ids and not log_path.exists()
+
+    result, log_path = _apply(monkeypatch, tmp_path / "c", dm.OUTCOME_FAILED)
+    assert (result.success, result.unverified, result.failed) == (0, 0, 1)
+    assert not log_path.exists()
+
+
+def test_the_original_file_is_backed_up_before_it_is_changed(monkeypatch, tmp_path):
+    original = '{"location": "HySpinbox"}'
+    result, _ = _apply(monkeypatch, tmp_path, dm.OUTCOME_VERIFIED, text=original)
+    backups = list((tmp_path / "backups").rglob("*.archive.json.*"))
+    assert len(backups) == result.total
+    assert all(b.read_text(encoding="utf-8") == original for b in backups)
+
+
+def test_nothing_is_written_when_the_backup_cannot_be_saved(monkeypatch, tmp_path):
+    uploaded = []
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinbox"}')
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: uploaded.append(1))
+    monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
+
+    def broken(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(dm, "save_backup", broken)
+    result = dm.apply_correction(
+        "https://e.test/api/v1",
+        "tok",
+        _cleaning_df(),
+        "location",
+        "HySpinbox",
+        "HySpinBox",
+        "HySprint_Cleaning",
+        log_path=tmp_path / "log.txt",
+        backup_dir=tmp_path / "b",
+    )
+    assert uploaded == [] and result.failed == 1 and result.success == 0
+
+
+def test_preview_reports_what_would_change_and_writes_nothing(monkeypatch):
+    writes = []
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "HySpinbox"}')
+    monkeypatch.setattr(dm, "upload_corrected_file", lambda *a, **k: writes.append(1))
+    monkeypatch.setattr(dm, "save_backup", lambda *a, **k: writes.append(1))
+    preview = dm.preview_correction(
+        "https://e.test/api/v1",
+        "tok",
+        _cleaning_df(),
+        "location",
+        "HySpinbox",
+        "HySpinBox",
+        "HySprint_Cleaning",
+    )
+    assert preview and all(item["status"] == "change" for item in preview)
+    assert writes == []
+
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: '{"location": "Other"}')
+    preview = dm.preview_correction(
+        "https://e.test/api/v1",
+        "tok",
+        _cleaning_df(),
+        "location",
+        "HySpinbox",
+        "HySpinBox",
+        "HySprint_Cleaning",
+    )
+    assert all(item["status"] == "no_match" for item in preview)
+
+
+def test_field_values_from_nomad_are_html_escaped_in_the_table(fresh_session):
+    assert fresh_session.load_offline(FIXTURE_PATH)
+    label = next(iter(fresh_session.datasets))
+    df = fresh_session.datasets[label]
+    column = next(c for c in df.columns if not c.startswith("_") and c != "sample_id")
+    df.loc[df.index[0], column] = "<img src=x onerror=alert(1)>"
+    panel = gc.FieldAuditPanel(fresh_session, label, url=None, token=None)
+    cells = [c.value for cells in panel._value_cells.values() for c in cells]
+    assert any("&lt;img src=x onerror=alert(1)&gt;" in v for v in cells)
+    assert not any("<img" in v for v in cells)
+    assert gc._esc("<a title='x'>") == "&lt;a title=&#x27;x&#x27;&gt;"
+
+
+def test_confirm_flow_changes_the_table_after_a_verified_correction(monkeypatch, tmp_path):
+    """H5 plus the preview/confirm gate: nothing is written until Confirm, and afterwards
+    the table shows the new value."""
+    fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    session = dm.EntryAuditSession()
+    assert session.load_offline(FIXTURE_PATH)
+    label = "Cleaning"
+    df = session.datasets[label]
+    column, old = "location", "HySpinbox"
+    assert (df[column] == old).any(), "fixture must contain the value to correct"
+
+    writes = []
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: json.dumps({column: old}))
+    monkeypatch.setattr(
+        dm, "upload_corrected_file", lambda *a, **k: writes.append(a) or dm.OUTCOME_VERIFIED
+    )
+    monkeypatch.setattr(dm, "save_backup", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(dm, "append_correction_to_log", lambda *a, **k: None)
+    monkeypatch.setattr(dm.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(gc, "preview_correction", dm.preview_correction)
+    monkeypatch.setattr(gc, "apply_correction", dm.apply_correction)
+
+    panel = gc.FieldAuditPanel(session, label, url="https://e.test/api/v1", token="t")
+    panel.dropdown.value = column
+    panel.from_dropdown.value = old
+    panel.to_input.value = "HySpinBox"
+
+    panel._on_preview_click(None)
+    assert writes == []  # a preview writes nothing
+    assert panel.confirm_button.layout.display is None  # confirmation is now offered
+    assert "will change" in panel.correct_out.value
+
+    panel._on_confirm_click(None)
+    assert writes, "confirm performs the write"
+    assert "updated and verified" in panel.correct_out.value
+    assert not (session.datasets[label][column] == old).any()  # H5: table data refreshed
+    assert (session.datasets[label][column] == "HySpinBox").any()
+    assert panel.confirm_button.layout.display == "none"
+    del fixture
+
+
+def test_changing_the_selection_after_a_preview_withdraws_the_confirmation(monkeypatch):
+    session = dm.EntryAuditSession()
+    assert session.load_offline(FIXTURE_PATH)
+    monkeypatch.setattr(dm, "download_file", lambda *a, **k: json.dumps({"location": "HySpinbox"}))
+    monkeypatch.setattr(gc, "preview_correction", dm.preview_correction)
+    panel = gc.FieldAuditPanel(session, "Cleaning", url="https://e.test/api/v1", token="t")
+    panel.dropdown.value = "location"
+    panel.from_dropdown.value = "HySpinbox"
+    panel.to_input.value = "Other"
+    panel._on_preview_click(None)
+    assert panel.confirm_button.layout.display is None
+    panel.to_input.value = "Different"
+    assert panel._pending is None and panel.confirm_button.layout.display == "none"
+
+
+def _wrapped_archive():
+    """The shape of a real .archive.json: the entry's fields sit under a top-level "data"."""
+    return {
+        "data": {
+            "m_def": "nomad_hysprint.schema_packages.hysprint_package.HySprint_SpinCoating",
+            "name": "spin coating X",
+            "description": "Process notes",
+            "location": "HZB-HySprintBox",
+            "samples": [{"lab_id": "S1", "reference": "../uploads/u/archive/e#data"}],
+            "solution": [{"solvent": [{"name": "DMF"}, {"name": "DMSO"}]}],
+        }
+    }
+
+
+def test_correction_works_on_a_file_with_the_data_wrapper():
+    """Real archive files wrap the audited fields in "data"; a path-exact edit that started at the
+    file root found nothing ("0 will change") so no correction could ever be confirmed."""
+    text = json.dumps(_wrapped_archive(), indent=2)
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "location", "HZB-HySprintBox", "HySpinBox"
+    )
+    assert count == 1
+    result = json.loads(modified)
+    assert result["data"]["location"] == "HySpinBox"
+    assert result["data"]["name"] == "spin coating X"  # nothing else touched
+    assert set(result) == {"data"}
+
+
+def test_wrapped_file_numbered_lists_and_read_back():
+    text = json.dumps(_wrapped_archive())
+    modified, count = dm.modify_file_field(
+        text, "e.archive.json", "solution.solvent.2.name", "DMSO", "N,N-DMF"
+    )
+    assert count == 1
+    assert (
+        dm.get_value_at_flat_path(modified, "e.archive.json", "solution.solvent.2.name")
+        == "N,N-DMF"
+    )
+    assert dm.get_value_at_flat_path(modified, "e.archive.json", "solution.solvent.1.name") == "DMF"
+    assert dm.get_value_at_flat_path(modified, "e.archive.json", "samples.lab_id") == "S1"
+
+
+def test_wrapped_yaml_file():
+    text = "data:\n  location: Box\n  other: Box\n"
+    modified, count = dm.modify_file_field(text, "e.archive.yaml", "location", "Box", "New")
+    assert count == 1
+    assert dm._parse_archive_text(modified, "e.archive.yaml") == {
+        "data": {"location": "New", "other": "Box"}
+    }
+
+
+def test_a_wrong_path_still_changes_nothing_in_a_wrapped_file():
+    text = json.dumps(_wrapped_archive())
+    modified, count = dm.modify_file_field(text, "e.archive.json", "data.location", "x", "y")
+    assert count == 0 and modified == text

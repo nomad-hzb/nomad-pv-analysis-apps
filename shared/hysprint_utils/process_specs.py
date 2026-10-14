@@ -1,34 +1,11 @@
 """Single source of truth for per-process-type Excel columns and their NOMAD
 archive field mappings.
 
-Before this module existed, the same information was hand-duplicated in two
-different shapes across two apps: apps/Excel_creator/sheet_experiment.py
-(generate_steps_for_process - which Excel columns a process generates, in
-what order, with what test values) and
-apps/smart_databaser/config/field_mappings.json (which archive path each of
-those columns autofills from). Adding or changing a process type meant
-editing both by hand, plus (separately) up to six hand-maintained lists in
-apps/smart_databaser/data_manager.py (AVAILABLE_PROCESSES,
-CONFIGURABLE_PROCESS_TYPES, DEFAULT_CONFIG_BY_PROCESS_TYPE,
-MATERIAL_GATED_PROCESS_TYPES, NUMERIC_CONFIG_FIELDS, BOOLEAN_CONFIG_FIELDS)
-and a further set of separate, easy-to-miss copies in
-apps/Excel_creator/voila_experiment_app.py's own inline config-control code
-(configurable_processes, the solvents/solutes applicable-type lists, and the
-per-process checkbox blocks) - a real gap of exactly this kind (Screen
-Printing's config controls silently not rendering because
-voila_experiment_app.py's own list was never updated) is what prompted this
-module. See nomad-hzb/nomad-pv-analysis-apps#38.
-
-Both apps now read from PROCESSES below instead of hand-duplicating any of
-this. sheet_experiment.py still owns the per-process ASSEMBLY logic (which
-fields appear in what order, and the handful of genuinely special-cased
-branches - Spin Coating's single-vs-multi spin step naming, Experiment
-Info's Ink Recycling variant) since that's real conditional logic, not
-duplicated data; it looks up each field's label/test-value/dropdown from
-here instead of hardcoding them inline. data_manager.py derives all of its
-former hand-maintained lists from PROCESS_META, and loads archive field
-paths directly from PROCESS_FIELDS/PROCESS_INDEXED_FIELDS instead of parsing
-a separate JSON file.
+Excel_creator (sheet columns, order, test values) and smart_databaser (archive path each column
+autofills from, config controls, optional blocks) both read PROCESSES below; add or change a
+process type here first. sheet_experiment.py still owns the per-process assembly logic (the
+few genuinely special-cased branches, such as Spin Coating's single vs multi spin step naming);
+smart_databaser's data_manager.py derives its config lists from PROCESS_META.
 
 Shape of one field entry (a dict): {"test": <test value>, "path": [...]} for
 a single archive path, or {"test": <test value>, "paths": [[...], [...]]}
@@ -53,14 +30,12 @@ since every field in that group loops together off the same counter. Each
 entry's "path" carries a "{i}" placeholder resolved to the 0-based index.
 "test" may be a plain value (repeated for every n) or a callable taking the
 1-based n and returning the value, for tests that vary by index (e.g.
-Solvent volumes). "mapping_range" (default (1, 5)) is how far
-smart_databaser pre-generates archive-path lookups for autofill - this is
-an autofill-coverage limit inherited unchanged from field_mappings.json's
-original ranges, NOT the same as how many columns Excel_creator's own loop
-will generate (that's uncapped, driven purely by the live config count, per
-the GUI's own numeric-control max of 20) - a source archive with more than
-`mapping_range` items simply won't autofill the extras, same pre-existing
-behavior as before this module existed. Exactly one entry per config
+Solvent volumes). "mapping_range" (default (1, N), N being the GUI's own
+max for that group's numeric control, 5 when it has none) is how far
+smart_databaser pre-generates archive-path lookups for autofill. It is NOT the
+same as how many columns Excel_creator's own loop generates (uncapped, driven
+by the live config count); a source archive with more than `mapping_range`
+items won't autofill the extras. Exactly one entry per config
 concept should carry a `config_key` matching its group key (mirrors the old
 field_mappings.json convention where only one indexed_fields entry per
 concept carried the tag) - data_manager.infer_config_from_source_step uses
@@ -184,53 +159,71 @@ _COATING_SOLUTE_INDEXED = {
 }
 
 _GAS_QUENCHING_FIELDS = {
-    "Gas": {"test": "Nitrogen", "path": ["quenching", "gas"]},
+    "Gas": {"quenching_kind": "gas", "test": "Nitrogen", "path": ["quenching", "gas"]},
     "Gas quenching start time [s]": {
+        "quenching_kind": "gas",
         "test": 5,
         "path": ["quenching", "starting_delay"],
         "unit_verified": False,
     },
     "Gas quenching duration [s]": {
+        "quenching_kind": "gas",
         "test": 15,
         "path": ["quenching", "duration"],
         "unit_verified": False,
     },
     "Gas quenching flow rate [ml/s]": {
+        "quenching_kind": "gas",
         "test": 20,
         "path": ["quenching", "flow_rate"],
         "unit_verified": False,
     },
     "Gas quenching pressure [bar]": {
+        "quenching_kind": "gas",
         "test": 1.2,
         "path": ["quenching", "pressure"],
         "unit_verified": False,
     },
     "Gas quenching velocity [m/s]": {
+        "quenching_kind": "gas",
         "test": 2.5,
         "path": ["quenching", "velocity"],
         "unit_verified": False,
     },
     "Gas quenching height [mm]": {
+        "quenching_kind": "gas",
         "test": 10,
         "path": ["quenching", "height"],
         "unit_verified": False,
     },
-    "Nozzle shape": {"test": "Round", "path": ["quenching", "nozzle_shape"]},
-    "Nozzle size [mm²]": {"test": 3, "path": ["quenching", "nozzle_size"], "unit_verified": False},
+    "Nozzle shape": {
+        "quenching_kind": "gas",
+        "test": "Round",
+        "path": ["quenching", "nozzle_shape"],
+    },
+    "Nozzle size [mm²]": {
+        "quenching_kind": "gas",
+        "test": 3,
+        "path": ["quenching", "nozzle_size"],
+        "unit_verified": False,
+    },
 }
 
 _VACUUM_QUENCHING_FIELDS = {
     "Vacuum quenching start time [s]": {
+        "quenching_kind": "vacuum",
         "test": 8,
         "path": ["quenching", "start_time"],
         "unit_verified": False,
     },
     "Vacuum quenching duration [s]": {
+        "quenching_kind": "vacuum",
         "test": 20,
         "path": ["quenching", "duration"],
         "unit_verified": False,
     },
     "Vacuum quenching pressure [bar]": {
+        "quenching_kind": "vacuum",
         "test": 0.01,
         "path": ["quenching", "pressure"],
         "unit_verified": False,
@@ -254,6 +247,9 @@ _ATMOSPHERIC_FIELDS = {
     "GB start temperature [°C]": {"test": 0.1},
     "GB end temperature [°C]": {"test": 0.1},
 }
+
+# Public name for consumers outside this module (e.g. the Excel_creator guide sheet).
+ATMOSPHERIC_FIELDS = _ATMOSPHERIC_FIELDS
 """Not itself a "process" - appended to every real process (not Experiment
 Info) when its "add_atmospheric" config flag is on. Kept here as the same
 kind of field data as everything else, even though it's applied generically
@@ -325,6 +321,7 @@ PROCESSES = {
     },
     "Cleaning O2-Plasma": {
         "meta": {
+            "family": "cleaning",
             "material_gated": False,
             "numeric_config": [("solvents", "Solvents", 0, 20)],
             "boolean_config": [],
@@ -371,6 +368,7 @@ PROCESSES = {
     },
     "Cleaning UV-Ozone": {
         "meta": {
+            "family": "cleaning",
             "material_gated": False,
             "numeric_config": [("solvents", "Solvents", 0, 20)],
             "boolean_config": [],
@@ -407,6 +405,7 @@ PROCESSES = {
     },
     "Spin Coating": {
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [
                 ("solvents", "Solvents", 0, 20),
@@ -520,6 +519,7 @@ PROCESSES = {
         # when this module was first built (they could never have matched a real
         # field_spec, since the columns they'd map from were never generated).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [],
@@ -569,6 +569,7 @@ PROCESSES = {
         # dead by this migration's before/after diff. Not carried over (same for
         # Inkjet Printing's identical phantom entry below).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [],
             "boolean_config": [],
@@ -648,6 +649,7 @@ PROCESSES = {
         # never exposed, not a phantom one, but removed anyway to match Slot Die
         # Coating's treatment.
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [("gasquenching", "Gas Quenching")],
@@ -730,6 +732,7 @@ PROCESSES = {
         # removed (not needed for this process), and Antisolvent was never added
         # (that's Spin-Coating-only).
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [
@@ -833,10 +836,11 @@ PROCESSES = {
     },
     "Inkjet Printing": {
         "meta": {
+            "family": "coating",
             "material_gated": True,
             "numeric_config": [("solvents", "Solvents", 0, 20), ("solutes", "Solutes", 0, 20)],
             "boolean_config": [("gavd", "GAVD")],
-            "config_defaults": {"solvents": 1, "solutes": 1, "annealing": False, "gavd": False},
+            "config_defaults": {"solvents": 1, "solutes": 1, "gavd": False},
         },
         "fields": {
             **_COATING_PREFIX_FIELDS,
@@ -1357,6 +1361,8 @@ PROCESSES = {
             "config_defaults": {"solvents": 1, "solutes": 1, "precursors": 1},
         },
         "fields": {
+            "Datetime": {"test": "09.01.2026 10:19:00"},
+            "Operator": {"test": "MaxMustermann"},
             "Functional liquid name": {"test": "FL"},
             "Functional liquid volume [ml]": {"test": 25},
             "Dissolving temperature [°C]": {"test": 60},
@@ -1369,8 +1375,6 @@ PROCESSES = {
         },
         "indexed": {
             "solvents": [
-                {"excel_key": "Datetime", "test": lambda n: "09.01.2026 10:19:00"},
-                {"excel_key": "Operator", "test": lambda n: "MaxMustermann"},
                 {
                     "excel_key": "Solvent {n} name",
                     "test": lambda n: f"DMF {n}",
@@ -1400,10 +1404,8 @@ PROCESSES = {
         # NOTE: 0/59 covered on the autofill side - Ink Recycling is ingested by an
         # entirely separate mapper (nomad_hysprint.parsers.file_parser
         # .ink_recycling_mappers.map_ink_recycling), never fetched/mapped. No archive
-        # paths exist here yet; unchanged by this migration. "Datetime"/"Operator" are
-        # unusually repeated inside the solvents loop (once per solvent index) - this
-        # mirrors sheet_experiment.py's own (likely accidental, but behavior-preserving)
-        # original structure, not something introduced by this migration.
+        # paths exist here yet. "Datetime"/"Operator" used to sit inside the solvents loop, so the
+        # sheet had one pair per solvent (and none with 0 solvents); they are single columns now.
     },
 }
 
@@ -1492,6 +1494,19 @@ def _resolve_indexed_path(path_template: list, index0: int) -> list:
     return [index0 if segment == "{i}" else segment for segment in path_template]
 
 
+_DEFAULT_MAPPING_END = 5
+
+
+def _group_mapping_end(spec: dict, group_key: str) -> int:
+    """Default last index of an indexed group's autofill mapping: the GUI's own maximum for
+    that group's numeric control (so solvents/solutes autofill all 20 the GUI allows, not
+    just the first 5), or _DEFAULT_MAPPING_END when the group has no such control."""
+    for config_key, _label, _min, max_val in spec.get("meta", {}).get("numeric_config", []):
+        if config_key == group_key:
+            return max_val
+    return _DEFAULT_MAPPING_END
+
+
 def build_field_paths(
     processes: dict | None = None,
 ) -> dict[str, dict[str, tuple[list[list], bool]]]:
@@ -1513,9 +1528,9 @@ def build_field_paths(
                 paths = _field_paths(field_spec)
                 if paths is not None:
                     field_paths[key] = (paths, field_spec.get("unit_verified", True))
-        for group in spec.get("indexed", {}).values():
+        for group_key, group in spec.get("indexed", {}).items():
             for entry in group:
-                start, end = entry.get("mapping_range", (1, 5))
+                start, end = entry.get("mapping_range", (1, _group_mapping_end(spec, group_key)))
                 templates = entry.get("path_templates") or (
                     [entry["path"]] if "path" in entry else None
                 )
@@ -1571,11 +1586,11 @@ def build_field_value_multipliers(processes: dict | None = None) -> dict[str, di
             for key, field_spec in block.items():
                 if "multiply" in field_spec:
                     multipliers[key] = field_spec["multiply"]
-        for group in spec.get("indexed", {}).values():
+        for group_key, group in spec.get("indexed", {}).items():
             for entry in group:
                 if "multiply" not in entry:
                     continue
-                start, end = entry.get("mapping_range", (1, 5))
+                start, end = entry.get("mapping_range", (1, _group_mapping_end(spec, group_key)))
                 for n in range(start, end + 1):
                     multipliers[entry["excel_key"].format(n=n)] = entry["multiply"]
         if multipliers:
@@ -1586,6 +1601,62 @@ def build_field_value_multipliers(processes: dict | None = None) -> dict[str, di
 # ---------------------------------------------------------------------------
 # data_manager.py-facing API: the six former hand-maintained process-type lists
 # ---------------------------------------------------------------------------
+
+
+def build_quenching_field_kinds() -> dict[str, str]:
+    """{excel_field_key: "gas" | "vacuum"} for the quenching fields that only apply to one
+    kind of `quenching` section. Gas and vacuum quenching are one archive section whose class
+    is either a GasQuenching or a VacuumQuenching (nomad-baseclasses), and "duration" and
+    "pressure" exist on both under the same path: without this, a step with both checkboxes
+    on would autofill the same value into both blocks."""
+    kinds = {}
+    for process_spec in PROCESSES.values():
+        for block in process_spec.get("optional", {}).values():
+            for key, field_spec in block.items():
+                if "quenching_kind" in field_spec:
+                    kinds[key] = field_spec["quenching_kind"]
+    return kinds
+
+
+def build_boolean_config_probes(
+    processes: dict | None = None,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """{process_type: {config_key: (excel_field_key, ...)}}: for every optional block, the
+    fields whose archive path belongs to that block alone within the process (not shared with
+    another optional block or a plain field). Data under one of those paths on a source step
+    means the block was actually used, so smart_databaser widens the target's boolean config
+    to True. Per process on purpose: Gas quenching's "duration" is exclusive in a process that
+    has no vacuum block, but shared (hence no probe) in Spin Coating, which has both."""
+
+    def path_key(field_spec):
+        paths = _field_paths(field_spec)
+        return tuple(tuple(p) for p in paths) if paths else None
+
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for process_type, spec in (processes if processes is not None else PROCESSES).items():
+        optional = spec.get("optional", {})
+        probes = {}
+        for config_key, block in optional.items():
+            taken = {path_key(f) for f in spec.get("fields", {}).values()}
+            for other_key, other_block in optional.items():
+                if other_key != config_key:
+                    taken |= {path_key(f) for f in other_block.values()}
+            exclusive = tuple(
+                label
+                for label, f in block.items()
+                if path_key(f) is not None and path_key(f) not in taken
+            )
+            if exclusive:
+                probes[config_key] = exclusive
+        if probes:
+            result[process_type] = probes
+    return result
+
+
+def process_family(process_name: str) -> str | None:
+    """ "coating" or "cleaning" for the process types whose sheet columns share one
+    assembly (prefix, solvents/solutes, process-specific block, suffix); None otherwise."""
+    return PROCESSES.get(process_name, {}).get("meta", {}).get("family")
 
 
 def build_configurable_process_types() -> set[str]:

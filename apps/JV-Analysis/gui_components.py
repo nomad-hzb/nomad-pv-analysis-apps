@@ -69,7 +69,7 @@ class WidgetFactory:
     @staticmethod
     def create_filter_row():
         dropdown1 = widgets.Dropdown(
-            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_MPP(V)", "J_MPP(mA/cm2)"],
+            options=["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)", "V_mpp(V)", "J_mpp(mA/cm2)"],
             layout=widgets.Layout(width="66%"),
         )
         dropdown2 = widgets.Dropdown(
@@ -80,7 +80,7 @@ class WidgetFactory:
 
 
 class AuthenticationUI:
-    """Handles authentication UI — token only (ENV var or secrets.py fallback)."""
+    """Handles authentication UI — token only (environment variable)."""
 
     def __init__(self, auth_manager):
         self.auth_manager = auth_manager
@@ -95,13 +95,13 @@ class AuthenticationUI:
         hysprint_utils import, so the panel can never disagree with the
         endpoint the requests go to.
         """
-        return self.auth_manager.base_url.split("://", 1)[-1].rstrip("/")
+        return self.auth_manager.url_base.split("://", 1)[-1].rstrip("/")
 
     def _create_widgets(self):
         self.auth_button = WidgetFactory.create_button(
             description="Authenticate",
             button_style="info",
-            tooltip="Authenticate via NOMAD_CLIENT_ACCESS_TOKEN env var or secrets.py",
+            tooltip="Authenticate with the NOMAD_CLIENT_ACCESS_TOKEN environment variable",
         )
 
         self.auth_status_label = widgets.Label(
@@ -115,9 +115,8 @@ class AuthenticationUI:
         self.settings_content = widgets.VBox(
             [
                 widgets.HTML(
-                    f"<p><strong>Oasis:</strong> {self.auth_manager.base_url}"
-                    f"{self.auth_manager.api_endpoint}</p>"
-                    "<p><em>Auth: NOMAD_CLIENT_ACCESS_TOKEN env var (secrets.py as fallback)</em></p>"
+                    f"<p><strong>Oasis:</strong> {self.auth_manager.url}</p>"
+                    "<p><em>Auth: NOMAD_CLIENT_ACCESS_TOKEN environment variable</em></p>"
                 ),
                 self.auth_button,
                 self.auth_status_label,
@@ -246,7 +245,7 @@ class FilterUI:
 
         # Store data and selections for sample-based approach
         self.sample_data = None
-        self.selected_samples = set()  # Set of selected "batch_sample" keys
+        self.selected_samples = set()  # Set of selected (batch, sample) pairs
         self.sample_checkboxes = {}  # Dict of sample checkboxes
 
         # Status widgets
@@ -406,8 +405,7 @@ class FilterUI:
                 selected_count = 0
                 for index, info in batch_sample_info.iterrows():
                     batch, sample, condition = index
-                    sample_key = f"{batch}_{sample}"
-                    self.selected_samples.add(sample_key)
+                    self.selected_samples.add((batch, sample))
                     selected_count += 1
 
                 self._update_sample_display()
@@ -434,13 +432,8 @@ class FilterUI:
                     .rename(columns={"cell": "num_cells", "sample": "num_measurements"})
                 )
 
-                # Get display batch name if available
-                display_batch = batch
-                if "display_batch" in batch_df.columns:
-                    display_batch = batch_df["display_batch"].iloc[0]
-
                 # Create batch header
-                batch_header = widgets.HTML(f"<h5>📁 Batch: {display_batch}</h5>")
+                batch_header = widgets.HTML(f"<h5>📁 Batch: {batch}</h5>")
 
                 # Create sample checkboxes for this batch
                 sample_widgets = []
@@ -458,7 +451,7 @@ class FilterUI:
                         layout=widgets.Layout(margin="2px 0 2px 20px", width="auto"),
                     )
 
-                    sample_key = f"{batch}_{sample}"
+                    sample_key = (batch, sample)
 
                     # Handler for sample selection
                     def create_sample_checkbox_handler(sample_key):
@@ -493,8 +486,7 @@ class FilterUI:
             self.selected_samples = set()
             for index, info in batch_sample_info.iterrows():
                 batch, sample, condition = index
-                sample_key = f"{batch}_{sample}"
-                self.selected_samples.add(sample_key)
+                self.selected_samples.add((batch, sample))
             self._update_sample_status()
 
     def _update_sample_display(self):
@@ -517,8 +509,7 @@ class FilterUI:
             total_measurements = 0
             total_cells = 0
 
-            for sample_key in self.selected_samples:
-                batch, sample = sample_key.split("_", 1)
+            for batch, sample in self.selected_samples:
                 sample_df = df[(df["batch"] == batch) & (df["sample"] == sample)]
                 if not sample_df.empty:
                     condition = sample_df["condition"].iloc[0]
@@ -554,11 +545,16 @@ class FilterUI:
 
     def get_selected_items(self):
         """Get list of selected sample_cell combinations from sample selection"""
-        if not hasattr(self, "selected_samples") or not self.selected_samples:
+        # None: no sample selector was built (nothing to filter by). An empty list: the user
+        # cleared every sample, so nothing is selected.
+        if not getattr(self, "sample_checkboxes", None):
             return None
 
         if not self.sample_data or "jvc" not in self.sample_data:
             return None
+
+        if not self.selected_samples:
+            return []
 
         df = self.sample_data["jvc"]
         selected_cell_combinations = []
@@ -571,16 +567,12 @@ class FilterUI:
         )
 
         # Create a mapping from sample_key to (batch, sample)
-        sample_key_mapping = {}
-        for index, info in batch_sample_groups.iterrows():
-            batch, sample, condition = index
-            sample_key = f"{batch}_{sample}"
-            sample_key_mapping[sample_key] = (batch, sample)
+        known = {(batch, sample) for batch, sample, _condition in batch_sample_groups.index}
 
         # Process each selected sample
         for sample_key in self.selected_samples:
-            if sample_key in sample_key_mapping:
-                batch, sample = sample_key_mapping[sample_key]
+            if sample_key in known:
+                batch, sample = sample_key
 
                 # Get all cells for this sample
                 sample_df = df[(df["batch"] == batch) & (df["sample"] == sample)]
@@ -1315,157 +1307,3 @@ class ColorSchemeSelector:
     def get_widget(self):
         """Get the color scheme selector widget"""
         return widgets.VBox([widgets.HTML("<h4>Color Scheme Selection</h4>"), self.widget])
-
-
-class InfoUI:
-    """Manual UI component using HTML files"""
-
-    def __init__(self):
-        self._create_widgets()
-
-    def _create_widgets(self):
-        """Create info widgets"""
-        self.manual_button = widgets.Button(
-            description="📖 Manual",
-            button_style="success",
-            layout=widgets.Layout(width="120px", margin="0 5px 0 0"),
-            tooltip="User manual and guide",
-        )
-
-        self.content_output = widgets.Output(
-            layout=widgets.Layout(
-                display="none",
-                border="1px solid #ddd",
-                border_radius="6px",
-                padding="0px",
-                margin="10px 0",
-                max_height="500px",
-                overflow_y="auto",
-                background_color="white",
-                width="100%",
-            )
-        )
-
-        self.current_content = None  # Track what's currently displayed
-
-        self.manual_button.on_click(self._show_manual)
-
-        self.widget = widgets.VBox([widgets.HBox([self.manual_button]), self.content_output])
-
-    def _load_html_file(self, filename):
-        """Load HTML content from file and make it Voila-friendly"""
-        try:
-            import os
-
-            # Get the directory where this Python file is located
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(current_dir, filename)
-
-            # Fallback to current working directory if file not found
-            if not os.path.exists(file_path):
-                file_path = os.path.join(os.getcwd(), filename)
-
-            with open(file_path, "r", encoding="utf-8") as f:
-                html_content = f.read()
-
-            # Extract only the body content and wrap it safely for Voila
-            import re
-
-            # Extract content between <body> tags
-            body_match = re.search(r"<body[^>]*>(.*?)</body>", html_content, re.DOTALL)
-            if body_match:
-                body_content = body_match.group(1)
-            else:
-                # If no body tags, use the whole content but remove problematic elements
-                body_content = html_content
-
-            # Remove problematic CSS that breaks Voila layout
-            body_content = re.sub(r"<style[^>]*>.*?</style>", "", body_content, flags=re.DOTALL)
-
-            # Wrap in a safe container with Voila-friendly styling
-            voila_safe_html = f"""
-            <div style="
-                max-width: 100%; 
-                overflow-x: auto; 
-                padding: 20px; 
-                background-color: white; 
-                border-radius: 8px;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                line-height: 1.6;
-                color: #333;
-            ">
-                <style scoped>
-                    /* Voila-safe CSS */
-                    h1 {{ color: #2c3e50; font-size: 1.8em; margin-bottom: 10px; }}
-                    h2 {{ color: #34495e; font-size: 1.3em; margin: 25px 0 10px 0; }}
-                    h3 {{ color: #495057; font-size: 1.1em; margin: 15px 0 8px 0; }}
-                    ul {{ margin: 0 0 15px 0; padding-left: 20px; }}
-                    li {{ margin: 6px 0; line-height: 1.4; }}
-                    .emoji {{ font-size: 1.1em; margin-right: 6px; }}
-                    .highlight {{ background-color: #fff3cd; padding: 2px 4px; border-radius: 3px; }}  # noqa: E501
-                    .sub-section {{ 
-                        margin: 15px 0; 
-                        padding: 15px; 
-                        background-color: #f8f9fa; 
-                        border-left: 3px solid #007bff; 
-                        border-radius: 0 4px 4px 0; 
-                    }}
-                    .conclusion {{ 
-                        margin-top: 30px; 
-                        padding: 20px; 
-                        background-color: #f8f9fa; 
-                        border-radius: 6px; 
-                        text-align: center; 
-                        font-style: italic; 
-                    }}
-                    table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                    th {{ background-color: #f8f9fa; }}
-                    strong {{ color: #2c3e50; }}
-                    .version-info {{ text-align: center; margin-bottom: 20px; color: #6c757d; }}
-                    .header {{ text-align: center; margin-bottom: 20px; }}
-                </style>
-                {body_content}
-            </div>
-            """
-
-            return voila_safe_html
-
-        except FileNotFoundError:
-            return f"""
-            <div style="padding: 20px; text-align: center; color: #dc3545; max-width: 100%;">
-                <h3>📄 File Not Found</h3>
-                <p>Could not find <code>{filename}</code> in the current directory.</p>
-            </div>
-            """
-        except Exception as e:
-            return f"""
-            <div style="padding: 20px; text-align: center; color: #dc3545; max-width: 100%;">
-                <h3>❌ Error Loading Content</h3>
-                <p>Error reading <code>{filename}</code>: {str(e)}</p>
-            </div>
-            """
-
-    def _show_manual(self, b):
-        """Show manual content"""
-        if self.current_content == "manual" and self.content_output.layout.display == "block":
-            # Hide if already showing
-            self.content_output.layout.display = "none"
-            self.manual_button.description = "📖 Manual"
-            self.manual_button.button_style = "success"
-            self.current_content = None
-        else:
-            # Show manual
-            self.content_output.layout.display = "block"
-            self.manual_button.description = "🔽 Hide Manual"
-            self.manual_button.button_style = "warning"
-            self.current_content = "manual"
-
-            with self.content_output:
-                clear_output(wait=True)
-                html_content = self._load_html_file("manual.html")
-                display(HTML(html_content))
-
-    def get_widget(self):
-        """Get the info widget"""
-        return self.widget

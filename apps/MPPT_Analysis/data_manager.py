@@ -14,6 +14,7 @@ import requests
 from pydantic import BaseModel, ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
+    REQUEST_TIMEOUT,
     get_all_mppt,
     get_batch_ids,
     get_ids_in_batch,
@@ -59,7 +60,12 @@ def _has_value(value):
     field is also NOMAD's own native way to represent "no value" for a
     scalar quantity - the same convention this app already relies on for
     T80_linear when it's inapplicable (see erfc_params in fitting_tools.py)."""
-    return value is not None and not (isinstance(value, float) and math.isnan(value))
+    if value is None:
+        return False
+    try:
+        return bool(math.isfinite(float(value)))
+    except (TypeError, ValueError):
+        return False
 
 
 # Everything else in a model's columns (its actual free parameters, e.g. A,
@@ -75,25 +81,30 @@ def _has_value(value):
 # this is keyed by model.abbreviated_name, not by parameter name alone.
 _LEFTOVER_PARAM_UNITS = {
     "Stretched Exp": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A": ("mW/cm^2", 1.0),
         "tau": ("s", 3600.0),
         "beta": ("", 1.0),
     },
     "Linear": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "slope": ("mW/cm^2/s", 1.0 / 3600.0),
         "intercept": ("mW/cm^2", 1.0),
     },
     "Exponential": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "amplitude": ("mW/cm^2", 1.0),
         "decay": ("s", 3600.0),
     },
     "Biexponential": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A1": ("mW/cm^2", 1.0),
         "tau1": ("s", 3600.0),
         "A2": ("mW/cm^2", 1.0),
         "tau2": ("s", 3600.0),
     },
     "Logistic+Exp": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "A": ("mW/cm^2", 1.0),
         "tau": ("s", 3600.0),
         "L": ("mW/cm^2", 1.0),
@@ -101,6 +112,7 @@ _LEFTOVER_PARAM_UNITS = {
         "x0": ("s", 3600.0),
     },
     "ERFC+Linear": {
+        "LEY_1000h": ("kWh/m^2", 1.0),
         "PCE0": ("mW/cm^2", 1.0),
         "k": ("mW/cm^2/s", 1.0 / 3600.0),
         "t0": ("s", 3600.0),
@@ -108,6 +120,70 @@ _LEFTOVER_PARAM_UNITS = {
         "T80_linear": ("s", 3600.0),
     },
 }
+
+# fit_method as written to NOMAD (fit_model.name) -> fit_model.abbreviated_name
+_MODEL_ABBREVIATION = {
+    "Stretched Exponential": "Stretched Exp",
+    "Logistic + Exponential": "Logistic+Exp",
+    "ERFC + Linear": "ERFC+Linear",
+}
+
+
+def stored_fit_from_archive(raw_data) -> dict | None:
+    """The fit metrics already saved in an MPPT entry (results[0]), or None.
+
+    An entry counts when results[0] has a fit_method or any figure of merit this app writes
+    (T80, T95, Ts80, Ts95, stabilization time, LEY, R2). The processed archive of the HZB SE
+    Oasis currently returns the metrics but not fit_method or fit_parameters."""
+    if not isinstance(raw_data, dict):
+        return None
+    results = raw_data.get("results")
+    first = results[0] if isinstance(results, list) and results else None
+    if not isinstance(first, dict):
+        return None
+    written = {"fit_method", "fit_r_squared", "lifetime_energy_yield", *_ISOS_METRIC_ALIASES}
+    return first if any(_has_value_or_text(first.get(key)) for key in written) else None
+
+
+def _has_value_or_text(value) -> bool:
+    return bool(value) if isinstance(value, str) else _has_value(value)
+
+
+def stored_fit_row(stored: dict) -> dict:
+    """One results-table row for a fit stored in NOMAD, in the units the app shows (times in
+    hours, like a fit made in this session). The inverse of _build_fit_changes."""
+    method = stored.get("fit_method") or ""
+    abbreviation = _MODEL_ABBREVIATION.get(method, method)
+    row: dict = {"model": abbreviation or "unknown"}
+    for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
+        if _has_value(stored.get(schema_field)):
+            row[aliases[0]] = float(stored[schema_field]) / 3600
+    for column, schema_field in (
+        ("R2", "fit_r_squared"),
+        ("LEY", "lifetime_energy_yield"),
+        ("PCE_after_1000_h", "PCE_after_1000_h"),
+    ):
+        if _has_value(stored.get(schema_field)):
+            row[column] = float(stored[schema_field])
+    units = _LEFTOVER_PARAM_UNITS.get(abbreviation, {})
+    for param in stored.get("fit_parameters") or []:
+        name = param.get("name")
+        if not name or not _has_value(param.get("value")):
+            continue
+        factor = units.get(name, ("", 1.0))[1]
+        row[name] = float(param["value"]) / factor
+        if _has_value(param.get("error")):
+            row[f"{name}_error"] = float(param["error"]) / factor
+    start, end = stored.get("fit_range_start"), stored.get("fit_range_end")
+    if _has_value(start) and _has_value(end):
+        row["max_time_h"] = float(end) / 3600
+    who, when = stored.get("fit_computed_by"), stored.get("fit_computed_at")
+    detail = ", ".join(str(x) for x in (who, str(when)[:16] if when else None) if x)
+    if not method:
+        detail = "metrics only, fit details not available"
+    row["note"] = "Stored in NOMAD" + (f" ({detail})" if detail else "")
+    return row
+
 
 RESAMPLE_POINTS = 200  # fitted_time/fitted_power_density point cap agreed with nomad-baseclasses
 
@@ -124,6 +200,67 @@ class MPPTRow(BaseModel):
         if v is None:
             return float("nan")
         return float(v)
+
+
+OUTLIER_WINDOW = 11  # points in the rolling-median window (odd)
+OUTLIER_THRESHOLD = 6.0  # deviation from the rolling median, in robust standard deviations
+
+
+def find_outliers(y_data, window=OUTLIER_WINDOW, threshold=OUTLIER_THRESHOLD):
+    """Boolean mask of isolated spikes/dips in y_data (Hampel filter).
+
+    A point is an outlier when it deviates from the rolling median of its
+    centred `window` by more than `threshold` robust standard deviations
+    (1.4826 x the median absolute deviation of all such deviations). A slow
+    trend such as burn-in decay follows its own rolling median and survives;
+    only points that break away from their neighbours are flagged.
+
+    The first and last window//2 points are never flagged: their window is
+    one-sided, so the genuine steep start of a decay would look like a spike.
+    Curves shorter than three windows are returned unflagged.
+    """
+    y = np.asarray(y_data, dtype=float)
+    mask = np.zeros(len(y), dtype=bool)
+    half = int(window) // 2
+    if int(window) < 3 or len(y) < 3 * int(window):
+        return mask
+
+    series = pd.Series(y)
+    median = series.rolling(int(window), center=True, min_periods=1).median()
+    deviation = (series - median).abs()
+    sigma = 1.4826 * deviation.median()
+    if not sigma > 0:  # quantised/flat data: fall back to the mean deviation
+        sigma = deviation.mean()
+    if not sigma > 0:
+        return mask
+
+    mask = np.array(deviation > threshold * sigma)
+    mask[:half] = False
+    mask[len(y) - half :] = False
+    return mask
+
+
+def remove_outliers(y_data, window=OUTLIER_WINDOW, threshold=OUTLIER_THRESHOLD):
+    """Copy of y_data with its outliers (see find_outliers) set to NaN, so the
+    array keeps its length and stays aligned with the time axis. Returns
+    (cleaned, n_removed)."""
+    y = np.array(y_data, dtype=float)
+    mask = find_outliers(y, window, threshold)
+    y[mask] = np.nan
+    return y, int(mask.sum())
+
+
+def mask_removed_points(values, raw_power, cleaned_power):
+    """Copy of `values` (e.g. voltage) with NaN at the points the outlier cleaning removed
+    from power_density: NaN in cleaned_power where raw_power was a real number. Points that
+    were already NaN in the raw data are left as they were."""
+    values = np.array(values, dtype=float)
+    removed = np.isnan(np.asarray(cleaned_power, dtype=float)) & ~np.isnan(
+        np.asarray(raw_power, dtype=float)
+    )
+    if len(removed) == len(values):
+        values[removed] = np.nan
+    return values
 
 
 def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
@@ -160,6 +297,9 @@ def fit_curve(t_data, y_data, model, frame_range=None, initial_values=None):
         t_sliced, y_sliced = t_data, y_data
 
     resolved_end = end if end is not None else start + len(t_sliced) - 1
+
+    if initial_values:  # a NaN seed (e.g. a guess made on NaN data) can only abort the fit
+        initial_values = {k: v for k, v in initial_values.items() if np.isfinite(v)}
 
     valid_mask = ~(np.isnan(t_sliced) | np.isnan(y_sliced))
     t_sliced = t_sliced[valid_mask]
@@ -274,78 +414,101 @@ class DataManager:
         }
         return self._build_from_raw(raw, fx["descriptions"])
 
-    def _build_from_raw(self, raw: dict, descriptions: dict) -> bool:
-        mppt_curves_list = []
-        description_list = []
-        existing_sample_ids = []
+    @staticmethod
+    def _entry_frame(raw_data, sample_id) -> pd.DataFrame | None:
+        """One MPPT entry's valid rows as a DataFrame in the app's convention (power and
+        current density positive for a generating cell, time in hours), or None when the
+        entry has no usable row.
 
+        NOMAD stores generated power as negative; the sign is detected per entry (median
+        power below zero) instead of being flipped unconditionally, so an entry or demo
+        file already in the positive convention is not turned upside down."""
+        validated_rows = []
+        for row in DataManager._rows_from_entry(raw_data):
+            try:
+                validated = MPPTRow(
+                    time=row.get("time"),
+                    power_density=row.get("power_density"),
+                    voltage=row.get("voltage"),
+                    current_density=row.get("current_density"),
+                )
+                validated_rows.append(validated.model_dump())
+            except ValidationError as exc:
+                logger.warning("Skipping invalid MPPT row for sample %s: %s", sample_id, exc)
+        if not validated_rows:
+            return None
+        frame = pd.DataFrame(validated_rows)
+        if frame["power_density"].median() < 0:
+            frame["power_density"] *= -1
+            frame["current_density"] *= -1
+        frame["time"] *= 1 / 3600
+        return frame
+
+    def _assemble_curves(self, raw: dict):
+        """{sample_id: [(archive_data, metadata), ...]} -> (curves, sample_ids, entries), or
+        None when nothing has usable rows.
+
+        The single loader behind both the live and the offline path. An entry without usable
+        rows contributes no curve, no name and no entry_id, so curve k always belongs to
+        entry k (previously the labels were appended anyway and every later curve was written
+        back to the previous entry), and a sample with no curve is not in sample_ids (pandas
+        silently truncates concat keys that do not match)."""
+        curves_by_sample = []
+        entries_by_sample = []
+        sample_order = []
         for sample_id, entries in raw.items():
-            entry_names_list = []
-            entry_description_list = []
-            entry_ids_list = []
-            upload_ids_list = []
-            sample_curves_list = []
-
+            frames, names, descriptions, entry_ids, upload_ids = [], [], [], [], []
+            stored_fits = []
             for mppt_entry in entries:
                 raw_data = mppt_entry[0]
                 metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
-                rows_list = self._rows_from_entry(raw_data)
-                validated_rows = []
-                for row in rows_list:
-                    try:
-                        v = MPPTRow(
-                            time=row.get("time"),
-                            power_density=row.get("power_density"),
-                            voltage=row.get("voltage"),
-                            current_density=row.get("current_density"),
-                        )
-                        validated_rows.append(v.model_dump())
-                    except ValidationError as exc:
-                        logger.warning(
-                            "Skipping invalid MPPT row for sample %s: %s", sample_id, exc
-                        )
-                if validated_rows:
-                    sample_curves_list.append(pd.DataFrame(validated_rows))
+                frame = self._entry_frame(raw_data, sample_id)
+                if frame is None:
+                    continue
                 meta = raw_data if isinstance(raw_data, dict) else {}
-                entry_names_list.append(meta.get("name", ""))
-                entry_description_list.append(meta.get("description", ""))
-                entry_ids_list.append(metadata.get("entry_id"))
-                upload_ids_list.append(metadata.get("upload_id"))
-
-            if sample_curves_list:
-                mppt_curves_list.append(
-                    pd.concat(sample_curves_list, keys=np.arange(len(sample_curves_list)))
+                frames.append(frame)
+                names.append(meta.get("name", ""))
+                descriptions.append(meta.get("description", ""))
+                entry_ids.append(metadata.get("entry_id"))
+                upload_ids.append(metadata.get("upload_id"))
+                stored_fits.append(stored_fit_from_archive(raw_data))
+            if not frames:
+                continue
+            curves_by_sample.append(pd.concat(frames, keys=np.arange(len(frames))))
+            entries_by_sample.append(
+                pd.DataFrame(
+                    {
+                        "entry_names": names,
+                        "entry_description": descriptions,
+                        "entry_id": entry_ids,
+                        "upload_id": upload_ids,
+                        "stored_fit": pd.Series(stored_fits, dtype=object),
+                    }
                 )
-                description_list.append(
-                    pd.DataFrame(
-                        {
-                            "entry_names": entry_names_list,
-                            "entry_description": entry_description_list,
-                            "entry_id": entry_ids_list,
-                            "upload_id": upload_ids_list,
-                        }
-                    )
-                )
-                existing_sample_ids.append(sample_id)
+            )
+            sample_order.append(sample_id)
+        if not curves_by_sample:
+            return None
+        sample_ids = pd.Series(sample_order)
+        return (
+            pd.concat(curves_by_sample, keys=sample_ids),
+            sample_ids,
+            pd.concat(entries_by_sample, keys=sample_ids),
+        )
 
-        if not mppt_curves_list:
+    def _build_from_raw(self, raw: dict, descriptions: dict) -> bool:
+        assembled = self._assemble_curves(raw)
+        if assembled is None:
             return False
-
-        sample_ids_series = pd.Series(existing_sample_ids)
-        curves = pd.concat(mppt_curves_list, keys=sample_ids_series)
-        curves.loc[:, "power_density"] *= -1
-        curves.loc[:, "current_density"] *= -1
-        curves.loc[:, "time"] *= 1 / 3600
-        entries_df = pd.concat(description_list, keys=sample_ids_series)
+        curves, sample_ids_series, entries_df = assembled
         properties = pd.DataFrame(
             {
                 "description": pd.Series(
-                    {sid: descriptions.get(sid, "") for sid in existing_sample_ids}
+                    {sid: descriptions.get(sid, "") for sid in sample_ids_series}
                 ),
                 "name": pd.Series(dtype=str),
             }
         )
-
         self.curves = curves
         self.sample_ids = sample_ids_series
         self.entries = entries_df
@@ -379,6 +542,7 @@ class DataManager:
             }
             resp = requests.post(
                 f"{self.url}/entries/query",
+                timeout=REQUEST_TIMEOUT,
                 headers={"Authorization": f"Bearer {self.token}"},
                 json=query,
             )
@@ -398,6 +562,7 @@ class DataManager:
                 }
                 resp2 = requests.post(
                     f"{self.url}/entries/archive/query",
+                    timeout=REQUEST_TIMEOUT,
                     headers={"Authorization": f"Bearer {self.token}"},
                     json=query2,
                 )
@@ -427,6 +592,7 @@ class DataManager:
         }
         resp = requests.post(
             f"{self.url}/entries/archive/query",
+            timeout=REQUEST_TIMEOUT,
             headers={"Authorization": f"Bearer {self.token}"},
             json=query,
         )
@@ -464,69 +630,8 @@ class DataManager:
     def get_mppt_data_working(self, try_sample_ids):
         """Take list of sample ids and return mppt data as data frames"""
         all_mppt = get_all_mppt(self.url, self.token, try_sample_ids)
-        existing_sample_ids = pd.Series(all_mppt.keys())
-
-        if len(existing_sample_ids) == 0:
-            return None, None, None
-
-        mppt_curves_list = []
-        description_list = []
-        for sample_data in all_mppt:
-            entry_names_list = []
-            entry_description_list = []
-            entry_ids_list = []
-            upload_ids_list = []
-            sample_curves_list = []
-            for mppt_entry in all_mppt.get(sample_data):
-                raw_data = mppt_entry[0]
-                metadata = mppt_entry[1] if isinstance(mppt_entry[1], dict) else {}
-                rows_list = self._rows_from_entry(raw_data)
-                validated_rows = []
-                for row in rows_list:
-                    try:
-                        v = MPPTRow(
-                            time=row.get("time"),
-                            power_density=row.get("power_density"),
-                            voltage=row.get("voltage"),
-                            current_density=row.get("current_density"),
-                        )
-                        validated_rows.append(v.model_dump())
-                    except ValidationError as exc:
-                        logger.warning(
-                            "Skipping invalid MPPT row for sample %s: %s", sample_data, exc
-                        )
-                        continue
-                if validated_rows:
-                    sample_curves_list.append(pd.DataFrame(validated_rows))
-                meta = raw_data if isinstance(raw_data, dict) else {}
-                entry_names_list.append(meta.get("name", ""))
-                entry_description_list.append(meta.get("description", ""))
-                entry_ids_list.append(metadata.get("entry_id"))
-                upload_ids_list.append(metadata.get("upload_id"))
-
-            if sample_curves_list:
-                mppt_curves_list.append(
-                    pd.concat(sample_curves_list, keys=np.arange(len(sample_curves_list)))
-                )  # noqa: E501
-                description_list.append(
-                    pd.DataFrame(
-                        {
-                            "entry_names": entry_names_list,
-                            "entry_description": entry_description_list,
-                            "entry_id": entry_ids_list,
-                            "upload_id": upload_ids_list,
-                        }
-                    )
-                )  # noqa: E501
-
-        if mppt_curves_list and description_list:
-            return (
-                pd.concat(mppt_curves_list, keys=existing_sample_ids),
-                existing_sample_ids,
-                pd.concat(description_list, keys=existing_sample_ids),
-            )  # noqa: E501
-        else:
-            return None, None, None
+        assembled = self._assemble_curves(all_mppt) if all_mppt else None
+        return assembled if assembled is not None else (None, None, None)
 
     def load_data_from_batches(self, selected_batches):
         """Load MPPT data from selected batches"""
@@ -538,11 +643,6 @@ class DataManager:
                 return None, "The selected batches don't contain any MPPT measurements"
 
             curves, sample_ids, entries = mppt_result
-
-            # Process the data
-            curves.loc[:, "power_density"] *= -1
-            curves.loc[:, "current_density"] *= -1
-            curves.loc[:, "time"] *= 1 / 3600
 
             # Get sample descriptions
             identifiers = get_sample_description(self.url, self.token, list(sample_ids))
@@ -565,6 +665,31 @@ class DataManager:
             return list(sample_data.index.get_level_values(0).unique())
         return [0]
 
+    def get_stored_fit(self, entries_data, sample_id, curve_id):
+        """The fit already stored in NOMAD for one (sample_id, curve_id), or None."""
+        if entries_data is None or "stored_fit" not in entries_data.columns:
+            return None
+        try:
+            value = entries_data.loc[(sample_id, curve_id), "stored_fit"]
+        except (KeyError, IndexError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def get_curve_label(self, entries_data, sample_id, curve_id):
+        """Human label of one measurement: the NOMAD entry name (the pixel) without
+        the sample id prefix, or "Curve N" when the entry has no name."""
+        name = ""
+        if entries_data is not None:
+            try:
+                value = entries_data.loc[(sample_id, curve_id), "entry_names"]
+                name = value if isinstance(value, str) else ""
+            except (KeyError, IndexError):
+                name = ""
+        name = name.strip()
+        if name.startswith(sample_id):
+            name = name[len(sample_id) :].strip(" _-")
+        return name or f"Curve {curve_id}"
+
     def get_raw_curve(self, curves_data, sample_ids, sample_id, curve_id):
         """Return (time, power_density) numpy arrays for one (sample_id, curve_id)."""
         if sample_id not in list(sample_ids):
@@ -578,6 +703,15 @@ class DataManager:
             return curve_data["time"].values, curve_data["power_density"].values
         except (KeyError, IndexError):
             return None, None
+
+    def get_curve(self, curves_data, sample_ids, sample_id, curve_id, cleaned=None):
+        """Like get_raw_curve, but with power_density taken from `cleaned`
+        ({(sample_id, curve_id): array with NaN at removed points}) when that
+        curve has been cleaned. The raw data itself is never modified."""
+        t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
+        if t_data is not None and cleaned and (sample_id, curve_id) in cleaned:
+            y_data = cleaned[(sample_id, curve_id)]
+        return t_data, y_data
 
     def get_entry_id(self, entries_data, sample_id, curve_id):
         """Look up the NOMAD entry_id backing one (sample_id, curve_id), or None.
@@ -628,9 +762,21 @@ class DataManager:
         )
 
     def fit_sample(
-        self, curves_data, sample_ids, sample_id, model, frame_range=None, initial_values=None
+        self,
+        curves_data,
+        sample_ids,
+        sample_id,
+        model,
+        frame_range=None,
+        initial_values=None,
+        curve_ids=None,
+        cleaned=None,
     ):
-        """Fit every curve belonging to one sample with the given model/point range.
+        """Fit the curves of one sample with the given model/point range.
+
+        curve_ids: restrict the fit to these curves; None fits every curve of the sample.
+
+        cleaned: optional outlier-cleaned power_density, see get_curve.
 
         initial_values: optional {param_name: value}, passed through to every
         curve's fit_curve() call unchanged - each curve still gets its own
@@ -646,8 +792,11 @@ class DataManager:
         )
 
         results = {}
-        for curve_id in self.get_curve_ids_for_sample(curves_data, sample_ids, sample_id):
-            t_data, y_data = self.get_raw_curve(curves_data, sample_ids, sample_id, curve_id)
+        available = self.get_curve_ids_for_sample(curves_data, sample_ids, sample_id)
+        for curve_id in (
+            available if curve_ids is None else [c for c in available if c in curve_ids]
+        ):
+            t_data, y_data = self.get_curve(curves_data, sample_ids, sample_id, curve_id, cleaned)
             if t_data is None:
                 continue
             fit = fit_curve(t_data, y_data, model, frame_range, initial_values)
@@ -655,6 +804,117 @@ class DataManager:
                 fit["model"] = model
                 results[curve_id] = fit
         return results
+
+    def _build_fit_changes(self, fit, computed_by, computed_at):
+        """The edit_entry `changes` list that writes one fit into its NOMAD entry."""
+        model = fit["model"]
+        time_h = fit["time"]
+        params = fit.get("params", {})
+
+        changes = [
+            {"path": "data/results/0/fit_method", "new_value": model.name},
+            {"path": "data/results/0/fit_source", "new_value": "manual"},
+            {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
+            {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
+            {
+                "path": "data/results/0/fit_range_start",
+                "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
+            },
+            {
+                "path": "data/results/0/fit_range_end",
+                "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
+            },
+        ]
+        # Declare the full desired state for every standardized metric this app
+        # can produce - upsert what this model computed, explicitly remove
+        # whatever it didn't. Without the "remove" branch, re-fitting a sample
+        # with a model that produces fewer metrics (e.g. switching from
+        # Biexponential, which writes Ts80, to Linear, which doesn't) would
+        # leave the previous fit's Ts80 stale in NOMAD instead of reflecting
+        # what this fit actually produced.
+        for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
+            value = next((params[a] for a in aliases if a in params), None)
+            if _has_value(value):
+                changes.append(
+                    {
+                        "path": f"data/results/0/{schema_field}",
+                        "new_value": float(value) * 3600,
+                    }
+                )
+            else:
+                changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
+
+        # R2, LEY, and PCE_after_1000_h are computed by every model (unlike
+        # the model-specific parameters below), so they get their own typed
+        # fields rather than living in the generic fit_parameters bag.
+        if _has_value(params.get("R2")):
+            changes.append(
+                {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
+            )
+        else:
+            changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
+        if _has_value(params.get("LEY")):
+            changes.append(
+                {
+                    "path": "data/results/0/lifetime_energy_yield",
+                    "new_value": float(params["LEY"]),
+                }
+            )
+        else:
+            changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
+        if _has_value(params.get("PCE_after_1000_h")):
+            changes.append(
+                {
+                    "path": "data/results/0/PCE_after_1000_h",
+                    "new_value": float(params["PCE_after_1000_h"]),
+                }
+            )
+        else:
+            changes.append({"path": "data/results/0/PCE_after_1000_h", "action": "remove"})
+
+        # Everything else this model actually fit (A, tau, beta, slope,
+        # intercept, ...) - always upsert the full list, even if empty, so a
+        # re-fit with a model that has fewer/different parameters doesn't
+        # leave a previous fit's parameters stale (same reasoning as the
+        # ISOS metrics above).
+        leftover_units = _LEFTOVER_PARAM_UNITS.get(model.abbreviated_name, {})
+        fit_parameters = []
+        for column in model.columns:
+            if column in _DEDICATED_FIELD_COLUMNS or column not in params:
+                continue
+            if not _has_value(params[column]):
+                continue  # NaN/inf (e.g. T80_linear when k is 0) cannot be sent as JSON
+            unit_str, factor = leftover_units.get(column, ("", 1.0))
+            entry = {
+                "name": column,
+                "value": float(params[column]) * factor,
+                "unit": unit_str,
+            }
+            error_raw = params.get(f"{column}_error")
+            if _has_value(error_raw):
+                entry["error"] = float(error_raw) * factor
+            fit_parameters.append(entry)
+        changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
+
+        # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
+        # the fit range in time (not a subsample of the raw data points),
+        # matching the convention agreed with nomad-baseclasses.
+        resample_time_s, resample_power = _resample_fit_curve(fit.get("lmfit_result"), time_h)
+        if resample_time_s is not None:
+            changes.append(
+                {
+                    "path": "data/results/0/fitted_time",
+                    "new_value": resample_time_s.tolist(),
+                }
+            )
+            changes.append(
+                {
+                    "path": "data/results/0/fitted_power_density",
+                    "new_value": resample_power.tolist(),
+                }
+            )
+
+        return changes
 
     def write_fit_results_to_nomad(self, entries_data, fits_by_key, computed_by):
         """Push a set of accepted fits back into their NOMAD entries.
@@ -680,6 +940,7 @@ class DataManager:
 
         computed_at = datetime.utcnow().isoformat()
         outcomes = []
+        written_entry_ids: set[str] = set()
 
         for (sample_id, curve_id), fit in fits_by_key.items():
             entry_id = self.get_entry_id(entries_data, sample_id, curve_id)
@@ -695,114 +956,24 @@ class DataManager:
                     }
                 )
                 continue
+            if entry_id in written_entry_ids:
+                # An entry that references several samples is indexed under each of them;
+                # write it once, the same fit would otherwise overwrite itself.
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": True,
+                        "message": "Same NOMAD entry already written for another sample.",
+                        "nomad_url": None,
+                    }
+                )
+                continue
+            written_entry_ids.add(entry_id)
             upload_id = self.get_upload_id(entries_data, sample_id, curve_id)
 
-            model = fit["model"]
-            time_h = fit["time"]
-            params = fit.get("params", {})
-
-            changes = [
-                {"path": "data/results/0/fit_method", "new_value": model.name},
-                {"path": "data/results/0/fit_source", "new_value": "manual"},
-                {"path": "data/results/0/fit_computed_by", "new_value": computed_by},
-                {"path": "data/results/0/fit_computed_at", "new_value": computed_at},
-                {
-                    "path": "data/results/0/fit_range_start",
-                    "new_value": float(time_h[0]) * 3600 if len(time_h) else None,
-                },
-                {
-                    "path": "data/results/0/fit_range_end",
-                    "new_value": float(time_h[-1]) * 3600 if len(time_h) else None,
-                },
-            ]
-            # Declare the full desired state for every standardized metric this app
-            # can produce - upsert what this model computed, explicitly remove
-            # whatever it didn't. Without the "remove" branch, re-fitting a sample
-            # with a model that produces fewer metrics (e.g. switching from
-            # Biexponential, which writes Ts80, to Linear, which doesn't) would
-            # leave the previous fit's Ts80 stale in NOMAD instead of reflecting
-            # what this fit actually produced.
-            for schema_field, aliases in _ISOS_METRIC_ALIASES.items():
-                value = next((params[a] for a in aliases if a in params), None)
-                if _has_value(value):
-                    changes.append(
-                        {
-                            "path": f"data/results/0/{schema_field}",
-                            "new_value": float(value) * 3600,
-                        }
-                    )
-                else:
-                    changes.append({"path": f"data/results/0/{schema_field}", "action": "remove"})
-
-            # R2, LEY, and PCE_after_1000_h are computed by every model (unlike
-            # the model-specific parameters below), so they get their own typed
-            # fields rather than living in the generic fit_parameters bag.
-            if _has_value(params.get("R2")):
-                changes.append(
-                    {"path": "data/results/0/fit_r_squared", "new_value": float(params["R2"])}
-                )
-            else:
-                changes.append({"path": "data/results/0/fit_r_squared", "action": "remove"})
-            if _has_value(params.get("LEY")):
-                changes.append(
-                    {
-                        "path": "data/results/0/lifetime_energy_yield",
-                        "new_value": float(params["LEY"]),
-                    }
-                )
-            else:
-                changes.append({"path": "data/results/0/lifetime_energy_yield", "action": "remove"})
-            if _has_value(params.get("PCE_after_1000_h")):
-                changes.append(
-                    {
-                        "path": "data/results/0/PCE_after_1000_h",
-                        "new_value": float(params["PCE_after_1000_h"]),
-                    }
-                )
-            else:
-                changes.append({"path": "data/results/0/PCE_after_1000_h", "action": "remove"})
-
-            # Everything else this model actually fit (A, tau, beta, slope,
-            # intercept, ...) - always upsert the full list, even if empty, so a
-            # re-fit with a model that has fewer/different parameters doesn't
-            # leave a previous fit's parameters stale (same reasoning as the
-            # ISOS metrics above).
-            leftover_units = _LEFTOVER_PARAM_UNITS.get(model.abbreviated_name, {})
-            fit_parameters = []
-            for column in model.columns:
-                if column in _DEDICATED_FIELD_COLUMNS or column not in params:
-                    continue
-                unit_str, factor = leftover_units.get(column, ("", 1.0))
-                entry = {
-                    "name": column,
-                    "value": float(params[column]) * factor,
-                    "unit": unit_str,
-                }
-                error_raw = params.get(f"{column}_error")
-                if error_raw is not None:
-                    entry["error"] = float(error_raw) * factor
-                fit_parameters.append(entry)
-            changes.append({"path": "data/results/0/fit_parameters", "new_value": fit_parameters})
-
-            # Persisted fitted curve: RESAMPLE_POINTS points evenly spaced across
-            # the fit range in time (not a subsample of the raw data points),
-            # matching the convention agreed with nomad-baseclasses.
-            resample_time_s, resample_power = _resample_fit_curve(fit.get("lmfit_result"), time_h)
-            if resample_time_s is not None:
-                changes.append(
-                    {
-                        "path": "data/results/0/fitted_time",
-                        "new_value": resample_time_s.tolist(),
-                    }
-                )
-                changes.append(
-                    {
-                        "path": "data/results/0/fitted_power_density",
-                        "new_value": resample_power.tolist(),
-                    }
-                )
-
             try:
+                changes = self._build_fit_changes(fit, computed_by, computed_at)
                 edit_entry(self.url, self.token, entry_id, changes)
                 outcomes.append(
                     {
@@ -830,12 +1001,42 @@ class DataManager:
                         "nomad_url": None,
                     }
                 )
+            except (requests.RequestException, ValueError, TypeError, OverflowError) as exc:
+                # A network error, or a value that cannot be sent: report this entry as
+                # failed and carry on, instead of aborting with earlier entries already
+                # written and no word to the user about the rest.
+                logger.exception("Writing the fit of %s / %s failed", sample_id, curve_id)
+                outcomes.append(
+                    {
+                        "sample_id": sample_id,
+                        "curve_id": curve_id,
+                        "success": False,
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "nomad_url": None,
+                    }
+                )
 
         return outcomes
 
-    def get_selected_curve_data(self, curves_data, sample_ids, selected_samples, variable):
-        """Get curve data for selected samples"""
+    def get_selected_curve_data(
+        self,
+        curves_data,
+        sample_ids,
+        selected_samples,
+        variable,
+        selected_curves=None,
+        cleaned=None,
+    ):
+        """Get curve data for selected samples.
+
+        selected_curves: optional [(sample_id, curve_id)]; when given, only those
+        measurements are returned.
+        cleaned: optional outlier-cleaned power_density, see get_curve; replaces
+        the data of cleaned curves when variable is power_density, and blanks
+        (NaN) the same points in every other variable.
+        """
         selected_data = []
+        wanted = None if selected_curves is None else set(selected_curves)
 
         for sample_id in selected_samples:
             try:
@@ -844,6 +1045,8 @@ class DataManager:
 
                     if hasattr(sample_data.index, "nlevels") and sample_data.index.nlevels > 1:
                         for curve_idx in sample_data.index.get_level_values(0).unique():
+                            if wanted is not None and (sample_id, curve_idx) not in wanted:
+                                continue
                             curve_data = sample_data.loc[curve_idx]
                             if variable in curve_data.columns:
                                 selected_data.append(
@@ -855,6 +1058,8 @@ class DataManager:
                                     }
                                 )
                     else:
+                        if wanted is not None and (sample_id, 0) not in wanted:
+                            continue
                         if variable in sample_data.columns:
                             selected_data.append(
                                 {
@@ -867,4 +1072,16 @@ class DataManager:
             except:  # noqa: E722
                 continue
 
+        if cleaned:
+            for item in selected_data:
+                key = (item["sample_id"], item["curve_id"])
+                if key not in cleaned:
+                    continue
+                if variable == "power_density":
+                    item["data"] = cleaned[key]
+                else:
+                    # Voltage / current density: blank the same points the power
+                    # cleaning removed, so every variable shows the same clean curve.
+                    _, raw_power = self.get_raw_curve(curves_data, sample_ids, *key)
+                    item["data"] = mask_removed_points(item["data"], raw_power, cleaned[key])
         return selected_data

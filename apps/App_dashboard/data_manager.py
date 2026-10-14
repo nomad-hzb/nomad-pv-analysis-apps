@@ -1,28 +1,33 @@
 import logging
 import os
 from dataclasses import dataclass
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 try:
-    from hysprint_utils.config import URL_BASE
+    from hysprint_utils.config import API_ENDPOINT, URL_BASE
 except ImportError:
     URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
+    API_ENDPOINT = "/nomad-oasis/api/v1"
     logging.getLogger(__name__).warning(
         "hysprint_utils.config not found; using hardcoded URL fallback"
     )
 
 try:
-    from hysprint_utils.access_token import log_button_usage
+    from hysprint_utils.usage_tracking import log_button_usage
 except ImportError:
-    logger.warning("hysprint_utils.access_token not found; button usage will not be logged")
+    logger.warning("hysprint_utils.usage_tracking not found; button usage will not be logged")
 
     def log_button_usage(action: str, user: str | None = None) -> None:
         return None
 
 
-VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
-JUPYTER_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/lab/tree"
+# The Oasis path prefix ("/nomad-oasis" on the HZB Oasis) comes from the configured API endpoint,
+# so an Oasis mounted elsewhere gets working links.
+OASIS_PREFIX = API_ENDPOINT.split("/api/")[0]
+VOILA_PATH_TEMPLATE = OASIS_PREFIX + "/north/user/{user}/voila/voila/render"
+JUPYTER_PATH_TEMPLATE = OASIS_PREFIX + "/north/user/{user}/voila/lab/tree"
 """Deliberately the "voila" NORTH tool, not a separate "jupyter2" tool -- the
 latter isn't provisioned on this Oasis (confirmed via a Jupyter-Server-level
 404 on a real upload where the target file genuinely existed); the voila
@@ -299,6 +304,97 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 }
 
 
+HIDE_APPS_ENV = "HYSPRINT_DASHBOARD_HIDE_APPS"
+SHOW_APPS_ENV = "HYSPRINT_DASHBOARD_SHOW_APPS"
+GROUP_ORDER_ENV = "HYSPRINT_DASHBOARD_GROUP_ORDER"
+"""Per-deployment app selection, set like every other per-Oasis override (usually in
+oasis_local_config.py): comma-separated app folder names (or card names) to hide, or, if
+SHOW is set, the only ones to show. "Learning" and "Projects" name those two sections. Names
+ignore case and spaces; an unknown name logs a warning and is otherwise ignored. Hidden apps
+stay in the upload and can still be opened directly."""
+
+
+@dataclass(frozen=True)
+class DashboardSelection:
+    categories: dict[str, list[AppEntry]]
+    """Every category of CATEGORIES, in order, with only the visible entries (may be empty)."""
+    show_learning: bool
+    show_projects: bool
+
+
+def _normalize_name(name: str) -> str:
+    return "".join(name.split()).lower()
+
+
+def parse_name_list(value: str | None) -> set[str]:
+    """Normalized names from a comma-separated environment value ('' or None gives an empty set)."""
+    return {_normalize_name(part) for part in (value or "").split(",") if part.strip()}
+
+
+def _entry_keys(entry: AppEntry) -> set[str]:
+    return {key for key in (_normalize_name(entry.folder), _normalize_name(entry.name)) if key}
+
+
+def parse_name_order(value: str | None) -> list[str]:
+    """The normalized names of a comma-separated list, in the order given (parse_name_list keeps
+    no order)."""
+    return [_normalize_name(part) for part in (value or "").split(",") if part.strip()]
+
+
+def order_categories(
+    categories: dict[str, list[AppEntry]], order: list[str] | None
+) -> dict[str, list[AppEntry]]:
+    """The categories in the order named by `order` (normalized names); categories it does not
+    name follow in their default order. An unknown name logs a warning and is ignored; with no
+    order the categories are returned as they are."""
+    if not order:
+        return categories
+    by_key = {_normalize_name(name): name for name in categories}
+    first = []
+    for key in order:
+        if key not in by_key:
+            logger.warning("Dashboard group order: unknown group %r is ignored", key)
+        elif by_key[key] not in first:
+            first.append(by_key[key])
+    rest = [name for name in categories if name not in first]
+    return {name: categories[name] for name in [*first, *rest]}
+
+
+def select_dashboard(
+    categories: dict[str, list[AppEntry]],
+    hide: set[str] | None = None,
+    show: set[str] | None = None,
+    order: list[str] | None = None,
+) -> DashboardSelection:
+    """Apply a hide list and an optional allow-list (both normalized names) to the cards.
+
+    With neither set the result is exactly `categories`, Learning and Projects shown."""
+    hide, show = hide or set(), show or set()
+    known = {"learning", "projects"}
+    for entries in categories.values():
+        for entry in entries:
+            known |= _entry_keys(entry)
+    for unknown in sorted((hide | show) - known):
+        logger.warning("Dashboard app selection: unknown name %r is ignored", unknown)
+
+    def visible(keys: set[str]) -> bool:
+        if keys & hide:
+            return False
+        return not show or bool(keys & show)
+
+    return DashboardSelection(
+        categories=order_categories(
+            {
+                category: [entry for entry in entries if visible(_entry_keys(entry))]
+                for category, entries in categories.items()
+            },
+            order,
+        ),
+        show_learning=visible({"learning"}),
+        show_projects=visible({"projects"}),
+    )
+
+
 def _project_upload_id(env_var: str, hzb_default: str) -> str | None:
     """Resolve one Projects-section upload_id from env, HZB's value as default.
 
@@ -329,9 +425,9 @@ def _build_projects() -> list[Project]:
                 "2. Feature Extraction",
                 "Extract quantitative features from the cropped PL images.",
                 "fa-vector-square",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                    "HYSPRINT_PROJECT_FEATURE_EXTRACTION_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
                 ),
             ),
             AppEntry(
@@ -340,9 +436,9 @@ def _build_projects() -> list[Project]:
                 "3. PL Defect Analysis",
                 "Detect and visualize defects in photoluminescence images.",
                 "fa-eye",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID", "XnIHIdrkTT6VFyxFD8a6Hg"
+                    "HYSPRINT_PROJECT_PL_DEFECT_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
                 ),
             ),
             AppEntry(
@@ -351,9 +447,8 @@ def _build_projects() -> list[Project]:
                 "4. ML Model",
                 "Train/apply the ML model on the extracted PL features.",
                 "fa-brain",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "sSP9nxKDRhax0cuBzsrvEA"
+                    "HYSPRINT_PROJECT_ML_MODEL_UPLOAD_ID", "ml-labeling-31-sSP9nxKDRhax0cuBzsrvEA"
                 ),
             ),
             AppEntry(
@@ -362,9 +457,9 @@ def _build_projects() -> list[Project]:
                 "5. Correlation Analysis",
                 "Correlate PL/ML features with device performance.",
                 "fa-project-diagram",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID", "Jeb8HXjnSNy9T0-Z5VVbhA"
+                    "HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID",
+                    "ml-correlation-analysis-51-Jeb8HXjnSNy9T0-Z5VVbhA",
                 ),
             ),
             AppEntry(
@@ -374,9 +469,30 @@ def _build_projects() -> list[Project]:
                 "Map PL-imaged ROIs to per-device JV curves and export the joined "
                 "dataset back to NOMAD.",
                 "fa-object-group",
-                # FIXME: needs real '<slug>-<id>' upload folder (see AppEntry.upload_id)
                 upload_id=_project_upload_id(
-                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "YRS7abDQS26o2NplzjBwKg"
+                    "HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID", "ml-mask-overlay-21-YRS7abDQS26o2NplzjBwKg"
+                ),
+            ),
+            AppEntry(
+                "",
+                "section1_app.ipynb",
+                "7. Section 1",
+                "Section 1 app of the feature-extractor upload.",
+                "fa-th-large",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_SECTION1_UPLOAD_ID",
+                    "ml-feature-extractor-41-XnIHIdrkTT6VFyxFD8a6Hg",
+                ),
+            ),
+            AppEntry(
+                "",
+                "profile_generator_app.ipynb",
+                "8. Profile Generator",
+                "Generate the profiles used for labeling.",
+                "fa-chart-line",
+                upload_id=_project_upload_id(
+                    "HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID",
+                    "ml-labeling-profile-generator-7cFcNOQ7TGmUPpoXNKAFjA",
                 ),
             ),
         )
@@ -395,6 +511,13 @@ def _build_projects() -> list[Project]:
 
 
 PROJECTS: list[Project] = _build_projects()
+
+SELECTION = select_dashboard(
+    CATEGORIES,
+    hide=parse_name_list(os.environ.get(HIDE_APPS_ENV)),
+    show=parse_name_list(os.environ.get(SHOW_APPS_ENV)),
+    order=parse_name_order(os.environ.get(GROUP_ORDER_ENV)),
+)
 
 
 LEARNING_FOLDER = LearningEntry(
@@ -493,7 +616,7 @@ def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:
     base_path = VOILA_PATH_TEMPLATE.format(user=user)
     path = f"uploads/{entry.upload_id}" if entry.upload_id else uploads_path
     folder = f"{entry.folder}/" if entry.folder else ""
-    return f"{base_path}/{path}/{folder}{entry.notebook}"
+    return f"{base_path}/{quote(f'{path}/{folder}{entry.notebook}', safe='/')}"
 
 
 def build_jupyter_url(entry: LearningEntry, user: str, upload_id: str) -> str:
@@ -506,7 +629,7 @@ def build_jupyter_url(entry: LearningEntry, user: str, upload_id: str) -> str:
     override the way AppEntry.upload_id provides for apps living in a separate upload.
     """
     base_path = JUPYTER_PATH_TEMPLATE.format(user=user)
-    return f"{base_path}/uploads/{upload_id}/{entry.path}"
+    return f"{base_path}/{quote(f'uploads/{upload_id}/{entry.path}', safe='/')}"
 
 
 def notebook_exists(entry: AppEntry) -> bool:

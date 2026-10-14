@@ -8,11 +8,10 @@ from hysprint_utils.plotting_utils import WidgetFactory
 def create_batch_selection(url, token, load_data_function):
     # Get batch IDs
     batch_ids_list_tmp = list(get_batch_ids(url, token))
-    batch_ids_list = []
-    for b in batch_ids_list_tmp:
-        if "_".join(b.split("_")[:-1]) in batch_ids_list_tmp:
-            continue
-        batch_ids_list.append(b)
+    all_batch_ids = set(batch_ids_list_tmp)
+    batch_ids_list = [
+        b for b in batch_ids_list_tmp if "_".join(b.split("_")[:-1]) not in all_batch_ids
+    ]
 
     batch_ids_list = natsorted(batch_ids_list)
 

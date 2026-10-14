@@ -19,7 +19,8 @@ from gui_components import (
 from IPython.display import display as ipydisplay
 
 from hysprint_utils.auth_manager import AuthenticationManager
-from hysprint_utils.plotting_utils import WidgetFactory, create_manual
+from hysprint_utils.manual import manual_panel
+from hysprint_utils.plotting_utils import WidgetFactory
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +36,12 @@ class XRDApp:
         url_base: str,
         api_endpoint: str,
         token: str,
-        manual_file: str | None = None,
     ) -> None:
         self._auth = AuthenticationManager(url_base, api_endpoint)
         self._auth.authenticate_with_token(token)
 
         api_url = self._auth.api_client.get_api_url()
         self._data_manager = XRDDataManager(url=api_url, token=token)
-        self._manual_file = manual_file
 
         self._demo_btn = widgets.Button(
             description="Load demo data",
@@ -64,11 +63,7 @@ class XRDApp:
     # ------------------------------------------------------------------
 
     def display(self) -> None:
-        if self._manual_file:
-            try:
-                ipydisplay(create_manual(self._manual_file))
-            except Exception:
-                pass
+        ipydisplay(manual_panel(__file__))
 
         # Batch selection panel
         batch_panel = BatchFilterPanel(self._data_manager, self._on_batch_load)

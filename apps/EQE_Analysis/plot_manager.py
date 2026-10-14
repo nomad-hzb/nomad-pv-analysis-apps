@@ -104,28 +104,25 @@ def _add_grouped_traces(
 ) -> None:
     """Interpolate curves onto a common x-grid and add mean/band traces."""
 
-    wavelength_mode = axis_col == "wavelength_array"
+    # np.interp needs ascending x. Wavelength arrays usually descend (high to low nm) and photon
+    # energy ascends, but a curve stored the other way round used to come out all NaN: sort every
+    # curve by x, whatever its stored order.
+    curves = []
+    for c in curve_list:
+        x = pd.to_numeric(c[axis_col], errors="coerce").to_numpy(dtype=float)
+        y = pd.to_numeric(c["eqe_array"], errors="coerce").to_numpy(dtype=float)
+        keep = np.isfinite(x) & np.isfinite(y)
+        order = np.argsort(x[keep], kind="stable")
+        curves.append((x[keep][order], y[keep][order]))
+    curves = [(x, y) for x, y in curves if len(x) > 1]
+    if not curves:
+        return
 
-    if wavelength_mode:
-        # Wavelength arrays are descending (high -> low nm = low -> high eV).
-        # Use iloc[::-1] to get ascending order for np.interp.
-        max_x = max(c[axis_col].iloc[0] for c in curve_list)
-        min_x = min(c[axis_col].iloc[-1] for c in curve_list)
-    else:
-        max_x = max(c[axis_col].iloc[-1] for c in curve_list)
-        min_x = min(c[axis_col].iloc[0] for c in curve_list)
-
+    min_x = min(x[0] for x, _ in curves)
+    max_x = max(x[-1] for x, _ in curves)
     xgrid = np.linspace(min_x, max_x, 500)
 
-    rows = []
-    for c in curve_list:
-        if wavelength_mode:
-            xvals = c[axis_col].iloc[::-1].values
-            yvals = c["eqe_array"].iloc[::-1].values
-        else:
-            xvals = c[axis_col].values
-            yvals = c["eqe_array"].values
-        rows.append(np.interp(xgrid, xvals, yvals, left=np.nan, right=np.nan))
+    rows = [np.interp(xgrid, x, y, left=np.nan, right=np.nan) for x, y in curves]
 
     interp = pd.DataFrame(rows)  # shape (n_curves, 500)
 

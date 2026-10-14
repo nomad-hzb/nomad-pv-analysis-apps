@@ -19,6 +19,8 @@ from gui_components import (
     create_whole_experiment_template_picker,
 )
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 # Widgets created by the previous call to initialize_ui() are explicitly closed before
@@ -105,6 +107,7 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
     main_interface = widgets.VBox(
         [
             widgets.HTML(value="<h2>Smart Databaser</h2>"),
+            manual_panel(__file__),
             widgets.HTML(value="<h4>Sample Setup</h4>"),
             sample_setup,
             # Right after "Apply Sample Setup", per the product ask - copying a template

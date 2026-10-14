@@ -1,6 +1,6 @@
 [project]
 name = "xy-visualizer"
-version = "0.1.0"
+version = "0.1.2"
 description = "XRD / XY data visualization tool for HySPRINT"
 requires-python = ">=3.10"
 dependencies = [

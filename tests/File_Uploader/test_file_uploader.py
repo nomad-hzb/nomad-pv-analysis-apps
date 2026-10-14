@@ -8,6 +8,7 @@ NOMAD filename construction, and AppState mutations.
 import json
 
 from data_manager import (
+    MEASUREMENT_TYPES,
     categorize_files,
     create_nomad_filename,
     detect_type_from_content,
@@ -358,3 +359,83 @@ def test_appstate_reset_clears_upload_state(fresh_state):
     assert fresh_state.sample_files_dict == {}
     assert fresh_state.file_type_dict == {}
     assert fresh_state.uploaded_files_data == {}
+
+
+# ---------------------------------------------------------------------------
+# 6.4: type detection by whole tokens, upload gate, outcome and timeouts
+# ---------------------------------------------------------------------------
+
+
+import pytest  # noqa: E402
+from data_manager import (  # noqa: E402
+    build_archives,
+    type_from_filename,
+    unavailable_files,
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("HySprint_S1_jv.txt", "jv"),  # "hy" in the name used to win over the real type
+        ("S2_hysteresis_jv.csv", "jv"),
+        ("S1_xrd_assembly.xy", "xrd"),  # "sem" inside "assembly"
+        ("S3_JV3.txt", "jv"),
+        ("S4_he-ups_scan.txt", "pes"),
+        ("S5_NUPS.txt", "pes"),
+        ("anhydrous_sample.txt", None),
+        ("recipes_types.txt", None),
+        ("spline_multiplied.dat", None),
+    ],
+)
+def test_type_comes_from_whole_name_tokens(name, expected):
+    assert type_from_filename(name) == expected
+    assert get_normalized_type(name) == (expected or "hy")
+
+
+def test_only_real_type_names_count_as_recognised():
+    recognized, unrecognized, _ = categorize_files(
+        ["S1_jv.txt", "anhydrous.txt", "S2_assembly.dat"], MEASUREMENT_TYPES
+    )
+    assert recognized == ["S1_jv.txt"]
+    assert set(unrecognized) == {"anhydrous.txt", "S2_assembly.dat"}
+
+
+def test_files_that_are_not_loaded_are_listed_with_the_reason():
+    assigned = {"S1": ["a.txt", "b.txt", "c.txt"], "S2": ["d.txt"]}
+    loaded = {
+        "a.txt": {"file_content": b"x"},
+        "b.txt": {"file_content": None},
+        "d.txt": {"file_content": b""},
+    }
+    missing = unavailable_files(assigned, loaded, {"b.txt": "timed out"})
+    assert missing == [
+        ("S1", "b.txt", "timed out"),
+        ("S1", "c.txt", "not loaded"),
+        ("S2", "d.txt", "no content"),
+    ]
+    assert unavailable_files({"S1": ["a.txt"]}, loaded) == []
+
+
+def test_archives_are_built_per_upload_and_samples_without_an_upload_are_reported():
+    import io
+    import zipfile
+
+    files = {"S1_jv.txt": {"file_content": b"jv", "is_json": False, "epoch_time": 5}}
+    archives, no_upload = build_archives(
+        {"S1": ["S1_jv.txt"], "S2": ["S1_jv.txt"], "S3": []},
+        {"S1": {"S1_jv.txt": "jv"}},
+        files,
+        {"S1": "up1"},
+    )
+    assert no_upload == ["S2"] and list(archives) == ["up1"]
+    names = zipfile.ZipFile(io.BytesIO(archives["up1"])).namelist()
+    assert names == ["S1.5_S1_jv.jv.txt"]
+
+
+def test_an_opened_sample_button_is_darker_than_a_closed_one():
+    import gui_components as gc
+
+    closed = gc.create_sample_button("S1", "d")
+    assert closed.style.button_color is None
+    assert gc.OPEN_SAMPLE_BUTTON_COLOR != "#eeeeee"

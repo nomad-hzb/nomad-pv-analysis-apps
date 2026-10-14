@@ -2,10 +2,49 @@
 # methods to access the nomad api
 
 import getpass
+import logging
+import time
 
 import requests
 
 from hysprint_utils.config import ENTRY_TYPES
+
+logger = logging.getLogger(__name__)
+
+# (connect, read) seconds for every request. Archive queries of a few thousand entries are
+# slow, so the read timeout is generous; it only exists so a dead server cannot hang an app.
+REQUEST_TIMEOUT = (10, 300)
+DEFAULT_PAGE_SIZE = 10000
+# Safety stop for the page loop (a server that keeps returning a next page forever).
+MAX_PAGES = 1000
+
+
+def _query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
+    """POST a NOMAD query and return the "data" of every page, in order.
+
+    Follows pagination.next_page_after_value, so a result larger than the page size is
+    returned complete instead of silently cut off. Raises requests.HTTPError on a failed
+    page. The caller's query is not modified. A query without a page size gets
+    DEFAULT_PAGE_SIZE.
+    """
+    query = {**query, "pagination": {"page_size": DEFAULT_PAGE_SIZE, **query.get("pagination", {})}}
+    headers = {"Authorization": f"Bearer {token}"}
+    data = []
+    seen_cursors = set()
+    for _ in range(MAX_PAGES):
+        response = requests.post(f"{url}/{endpoint}", headers=headers, json=query, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+        data.extend(payload["data"])
+        cursor = (payload.get("pagination") or {}).get("next_page_after_value")
+        if not cursor or cursor in seen_cursors:
+            return data
+        seen_cursors.add(cursor)
+        query = {**query, "pagination": {**query["pagination"], "page_after_value": cursor}}
+    logger.warning(
+        "query to %s stopped after %d pages; the result may be incomplete", endpoint, MAX_PAGES
+    )
+    return data
 
 
 def edit_entry(url, token, entry_id, changes):
@@ -23,17 +62,10 @@ def edit_entry(url, token, entry_id, changes):
         f"{url}/entries/{entry_id}/edit",
         headers={"Authorization": f"Bearer {token}"},
         json={"changes": changes},
+        timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
     return response.json()
-
-
-def init_cache():
-    import requests_cache
-
-    requests_cache.install_cache(
-        "my_local_cache", allowable_methods=("GET", "POST"), ignored_parameters=["Authorization"]
-    )
 
 
 # retreive information about all uploads of current user
@@ -42,6 +74,7 @@ def get_all_uploads(url, token, number_of_uploads=20):
         f"{url}/uploads",
         headers={"Authorization": f"Bearer {token}"},
         params=dict(page_size=number_of_uploads, order_by="upload_create_time", order="desc"),
+        timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
     return response.json()["data"]
@@ -55,21 +88,17 @@ def get_all_batches_wth_data(url, token, entry_type):
         "pagination": {"page_size": 10000},
     }
 
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    upload_ids = list(set([u["upload_id"] for u in response.json()["data"]]))
+    data = _query_all(url, token, "entries/archive/query", query)
+    upload_ids = list(set([u["upload_id"] for u in data]))
     query = {
         "required": {"data": "*"},
         "owner": "visible",
         "query": {"entry_type": ENTRY_TYPES["batch"], "upload_id:any": upload_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
+    data = _query_all(url, token, "entries/archive/query", query)
 
-    return list(set([b["archive"]["data"]["lab_id"] for b in response.json()["data"]]))
+    return list(set([b["archive"]["data"]["lab_id"] for b in data]))
 
 
 def get_template(url, token, upload_name, method):
@@ -81,11 +110,8 @@ def get_template(url, token, upload_name, method):
         "query": {"upload_name": upload_name, "entry_type": method},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    return response.json()["data"]
+    data = _query_all(url, token, "entries/archive/query", query)
+    return data
 
 
 def get_token(url, name=None):
@@ -94,7 +120,9 @@ def get_token(url, name=None):
     password = getpass.getpass()
 
     # Get a token from the api, login
-    response = requests.get(f"{url}/auth/token", params=dict(username=user, password=password))
+    response = requests.post(
+        f"{url}/auth/token", data=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
+    )
     response.raise_for_status()
     return response.json()["access_token"]
 
@@ -106,11 +134,7 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
         "query": {"entry_type": batch_type},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = response.json()["data"]
+    data = _query_all(url, token, "entries/archive/query", query)
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
 
 
@@ -125,7 +149,12 @@ def _resolve_user_names(url, token, user_ids):
     names = {}
     for user_id in user_ids:
         try:
-            response = requests.get(f"{url}/users", headers=headers, params={"user_id": user_id})
+            response = requests.get(
+                f"{url}/users",
+                headers=headers,
+                params={"user_id": user_id},
+                timeout=REQUEST_TIMEOUT,
+            )
             response.raise_for_status()
             matches = response.json().get("data") or []
             if matches:
@@ -154,11 +183,7 @@ def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
         "query": {"entry_type": batch_type},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = response.json()["data"]
+    data = _query_all(url, token, "entries/archive/query", query)
 
     records = []
     unresolved_user_ids = set()
@@ -211,12 +236,9 @@ def get_ids_in_batch(url, token, batch_ids, batch_type=ENTRY_TYPES["batch"]):
         "query": {"results.eln.lab_ids:any": batch_ids, "entry_type": batch_type},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = response.json()["data"]
-    assert len(data) == len(batch_ids)
+    data = _query_all(url, token, "entries/archive/query", query)
+    if len(data) != len(batch_ids):
+        logger.warning("asked for %d batches, NOMAD returned %d", len(batch_ids), len(data))
     sample_ids = []
     for d in data:
         dd = d["archive"]["data"]
@@ -237,12 +259,9 @@ def get_entry_data(url, token, entry_id):
         "query": row,
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    assert len(response.json()["data"]) == 1, "Entry not found"
-    return response.json()["data"][0]["archive"]["data"]
+    data = _query_all(url, token, "entries/archive/query", query)
+    assert len(data) == 1, "Entry not found"
+    return data[0]["archive"]["data"]
 
 
 def get_sample_description(url, token, sample_ids):
@@ -252,11 +271,7 @@ def get_sample_description(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    entries = response.json()["data"]
+    entries = _query_all(url, token, "entries/query", query)
     res = {}
     for entry in entries:
         data = entry["data"]
@@ -273,11 +288,7 @@ def get_entryid(url, token, sample_id):  # give it a batch id
         "query": {"results.eln.lab_ids": sample_id},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = response.json()["data"]
+    data = _query_all(url, token, "entries/query", query)
     assert len(data) == 1
     return data[0]["entry_id"]
 
@@ -290,13 +301,84 @@ def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
         "query": {"results.eln.lab_ids": sample_id},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = response.json()["data"]
+    data = _query_all(url, token, "entries/query", query)
     assert len(data) == 1
     return data[0]["entry_id"], data[0]["upload_id"]
+
+
+def get_upload_ids_for_samples(url, token, sample_ids):
+    """{sample lab_id: upload_id} for all samples in one query (paginated, with a timeout).
+
+    Samples without an entry are left out. Use this instead of one get_nomad_ids_of_entry call
+    per sample."""
+    sample_ids = list(sample_ids)
+    if not sample_ids:
+        return {}
+    query = {
+        "required": {"include": ["entry_id", "upload_id", "results.eln.lab_ids"]},
+        "owner": "visible",
+        "query": {"results.eln.lab_ids:any": sample_ids},
+        "pagination": {"page_size": DEFAULT_PAGE_SIZE},
+    }
+    wanted = set(sample_ids)
+    found = {}
+    for entry in _query_all(url, token, "entries/query", query):
+        upload_id = entry.get("upload_id")
+        lab_ids = ((entry.get("results") or {}).get("eln") or {}).get("lab_ids") or []
+        for lab_id in lab_ids:
+            if lab_id in wanted and upload_id:
+                found.setdefault(lab_id, upload_id)
+    return found
+
+
+def upload_raw_file_and_wait(
+    url,
+    token,
+    upload_id,
+    filename,
+    content,
+    mime_type,
+    poll_interval=2.0,
+    max_wait=900.0,
+    on_poll=None,
+):
+    """PUT one file (bytes) into an upload's raw folder and wait until NOMAD has processed it.
+
+    Raises requests.HTTPError when the PUT fails, RuntimeError when NOMAD reports the
+    processing as failed (with its message) and TimeoutError after max_wait seconds. The PUT
+    already starts processing on this NOMAD version; the one explicit process request after it
+    is tolerated to fail, the poll decides the outcome. on_poll(waited, max_wait), if given,
+    is called after each poll (for a progress bar)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    put_response = requests.put(
+        f"{url}/uploads/{upload_id}/raw/",
+        data={"wait_for_processing": False},
+        headers=headers,
+        files={"file": (filename, content, mime_type)},
+        timeout=REQUEST_TIMEOUT,
+    )
+    put_response.raise_for_status()
+    requests.post(
+        f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=REQUEST_TIMEOUT
+    )
+
+    waited = 0.0
+    while waited < max_wait:
+        time.sleep(poll_interval)
+        waited += poll_interval
+        response = requests.get(
+            f"{url}/uploads/{upload_id}", headers=headers, timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        upload = response.json()["data"]
+        if on_poll is not None:
+            on_poll(waited, max_wait)
+        if not upload["process_running"]:
+            if upload.get("process_status") == "FAILURE":
+                detail = upload.get("last_status_message") or "no message from NOMAD"
+                raise RuntimeError(f"NOMAD could not process {filename}: {detail}")
+            return
+    raise TimeoutError(f"processing of {filename} did not finish within {int(max_wait)} s")
 
 
 def get_sample_entry_links(url, token, sample_ids):
@@ -312,13 +394,10 @@ def get_sample_entry_links(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
+    data = _query_all(url, token, "entries/query", query)
 
     result = {}
-    for entry in response.json()["data"]:
+    for entry in data:
         entry_id = entry.get("entry_id")
         upload_id = entry.get("upload_id")
         lab_ids = (entry.get("results") or {}).get("eln", {}).get("lab_ids", [])
@@ -329,7 +408,9 @@ def get_sample_entry_links(url, token, sample_ids):
             if lab_id in sample_ids:
                 result[lab_id] = gui_url
 
-    print(f"[DEBUG] get_sample_entry_links: resolved {len(result)}/{len(sample_ids)} sample links")
+    logger.debug(
+        "get_sample_entry_links: resolved %d/%d sample links", len(result), len(sample_ids)
+    )
     return result
 
 
@@ -344,12 +425,9 @@ def get_entry_meta_data(url, token, entry_id):
         "query": row,
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    assert len(response.json()["data"]) == 1, "Entry not found"
-    return response.json()["data"][0]
+    data = _query_all(url, token, "entries/query", query)
+    assert len(data) == 1, "Entry not found"
+    return data[0]
 
 
 def get_information(url, token, entry_id, path):
@@ -394,11 +472,7 @@ def get_specific_data_of_sample(url, token, sample_id, entry_type, with_meta=Fal
         "query": {"entry_references.target_entry_id": entry_id},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    linked_data = response.json()["data"]
+    linked_data = _query_all(url, token, "entries/archive/query", query)
     res = []
     for ldata in linked_data:
         if (
@@ -443,12 +517,8 @@ def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entries = _query_all(url, token, "entries/query", query)
+    entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
         "required": {
@@ -459,11 +529,7 @@ def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": jv_type},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    linked_data = response.json()["data"]
+    linked_data = _query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -475,12 +541,8 @@ def get_all_measurements_except_JV(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entries = _query_all(url, token, "entries/query", query)
+    entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
         "required": {
@@ -494,11 +556,7 @@ def get_all_measurements_except_JV(url, token, sample_ids):
         },
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    linked_data = response.json()["data"]
+    linked_data = _query_all(url, token, "entries/archive/query", query)
     non_jv = [
         ldata
         for ldata in linked_data
@@ -516,12 +574,8 @@ def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entries = _query_all(url, token, "entries/query", query)
+    entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
         "required": {
@@ -532,11 +586,7 @@ def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": eqe_type},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    linked_data = response.json()["data"]
+    linked_data = _query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -548,11 +598,8 @@ def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entries = _query_all(url, token, "entries/query", query)
+    entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
         "required": {
@@ -563,11 +610,7 @@ def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": mppt_type},
         "pagination": {"page_size": 100},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    linked_data = response.json()["data"]
+    linked_data = _query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -579,12 +622,8 @@ def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-
-    entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    entries = _query_all(url, token, "entries/query", query)
+    entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
         "required": {
@@ -597,11 +636,8 @@ def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_
         },
         "pagination": {"page_size": 10000},
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
-    data = list(map(lambda process: process["archive"]["data"], response.json()["data"]))
+    data = _query_all(url, token, "entries/archive/query", query)
+    data = list(map(lambda process: process["archive"]["data"], data))
     # delete entries for which "position_in_experimental_plan" is not defined, these are likely not proper processing steps
     data = [step for step in data if "positon_in_experimental_plan" in step]
     data.sort(key=lambda process: process["positon_in_experimental_plan"])
@@ -622,10 +658,7 @@ def get_efficiencies(url, token, sample_ids):
         },
         "owner": "visible",
     }
-    response = requests.post(
-        f"{url}/entries/archive/query", headers={"Authorization": f"Bearer {token}"}, json=query
-    )
-    response.raise_for_status()
+    data = _query_all(url, token, "entries/archive/query", query)
     # return dict with entries lab_id:efficiency
     return dict(
         map(
@@ -633,6 +666,6 @@ def get_efficiencies(url, token, sample_ids):
                 x["archive"]["results"]["eln"]["lab_ids"][0],
                 x["archive"]["results"]["properties"]["optoelectronic"]["solar_cell"]["efficiency"],
             ),
-            response.json()["data"],
+            data,
         )
     )

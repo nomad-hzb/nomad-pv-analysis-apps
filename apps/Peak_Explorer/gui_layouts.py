@@ -4,6 +4,7 @@ GUI layouts and main application class
 Assembles widgets into layouts and contains all application logic
 """
 
+import logging
 import os
 import warnings
 
@@ -18,7 +19,11 @@ from IPython.display import display
 from plot_manager import PlotManager
 from utils import debug_output, debug_print
 
+from hysprint_utils.manual import manual_panel
+
 warnings.filterwarnings("ignore", message="Using UFloat objects with std_dev==0")
+
+logger = logging.getLogger(__name__)
 
 # Initialize ipyvuetify FileInput (prevent initialization error)
 try:
@@ -34,9 +39,9 @@ try:
     except Exception:
         pass
     temp_file_input.file_info = []
-    print("✅ ipyvuetify FileInput initialized")
+    logger.info("ipyvuetify FileInput initialized")
 except Exception as e:
-    print(f"⚠️ ipyvuetify initialization warning: {e}")
+    logger.warning("ipyvuetify initialization warning: %s", e)
 
 
 def _slider_step(span, steps=1000):
@@ -74,6 +79,9 @@ class GUILayouts:
                     widgets.HTML("<h3>📁 Data Loading</h3>"),
                     self.widgets["h5_filename_label"],
                     self.widgets["mode_dropdown"],
+                    widgets.HTML("<i>or upload a CSV file instead:</i>"),
+                    self.widgets["file_upload"],
+                    self.widgets["csv_density_checkbox"],
                     widgets.HBox(
                         [self.widgets["convert_energy_btn"], self.widgets["energy_unit_display"]]
                     ),
@@ -84,6 +92,7 @@ class GUILayouts:
                 [
                     widgets.HTML("<h3>📁 Data Loading</h3>"),
                     self.widgets["file_upload"],
+                    self.widgets["csv_density_checkbox"],
                     widgets.HBox(
                         [self.widgets["convert_energy_btn"], self.widgets["energy_unit_display"]]
                     ),
@@ -417,9 +426,8 @@ class PLAnalysisApp:
         # File upload callbacks
         if self.data_manager.is_h5_available():
             self.widgets["mode_dropdown"].observe(self.on_file_upload, names="value")
-        else:
-            # self.widgets['file_upload'].observe(self.on_file_upload, names='value')
-            self.widgets["file_upload"].observe(self.on_file_upload, names="file_info")
+        self.widgets["file_upload"].observe(self.on_file_upload, names="file_info")
+        self.widgets["csv_density_checkbox"].observe(self.on_csv_density_change, names="value")
 
         # Time control callbacks
         self.widgets["time_slider"].observe(self.on_time_change_slider, names="value")
@@ -666,6 +674,11 @@ class PLAnalysisApp:
     # FILE LOADING
     # =========================================================================
 
+    def on_csv_density_change(self, change):
+        """The user says whether the CSV intensities are a PL spectrum (see
+        DataManager.intensity_is_density); it decides how nm <-> eV treats them."""
+        self.data_manager.csv_intensity_is_density = bool(change["new"])
+
     def on_file_upload(self, change):
         """Handle file upload - works with both ipyvuetify and ipywidgets"""
         debug_print("!!! CALLBACK TRIGGERED !!!", "APP")
@@ -677,8 +690,9 @@ class PLAnalysisApp:
             debug_print("=" * 50, "APP")
             debug_print("File upload triggered", "APP")
 
-            # Handle H5 mode
-            if self.data_manager.is_h5_available():
+            # Handle H5 mode (a CSV upload is the other source, see below)
+            from_csv_widget = isinstance(change, dict) and change.get("name") == "file_info"
+            if self.data_manager.is_h5_available() and not from_csv_widget:
                 mode = self.widgets["mode_dropdown"].value
                 with self.widgets["status_output"]:
                     self.widgets["status_output"].clear_output()
@@ -767,6 +781,8 @@ class PLAnalysisApp:
             debug_print("About to call data_manager.load_from_file", "APP")
             self.data_manager.load_from_file(file_content)
             self.wavelength_unit = self.data_manager.unit
+            if "h5_filename_label" in self.widgets:
+                self.widgets["h5_filename_label"].value = f"<b>File:</b> {filename} (CSV upload)"
             debug_print("Data loaded successfully", "APP")
 
             # Update UI controls with loaded data
@@ -814,6 +830,39 @@ class PLAnalysisApp:
             debug_print(f"ERROR: {e}", "APP")
             debug_print(f"Full traceback:\n{traceback.format_exc()}", "APP")
 
+    def _convert_peak_rows(self):
+        """Carry the start values of the peak rows over to the new axis after nm <-> eV, so
+        they stay on the same peaks. Centre c -> hc/c, widths w -> hc*w/c^2 (sigma, and the
+        Lorentzian gamma of the Voigt types), and for a PL spectrum the height h -> h*c^2/hc
+        (the density rescaling of the data). The same formulas serve both directions. Bounds
+        typed in the old unit are cleared, and Linear/Polynomial rows are left alone."""
+        hc = config.HC_EV_NM
+        density = self.data_manager.intensity_is_density
+        for peak_row in self.peak_models:
+            w = peak_row._widgets
+            kind = w["type"].value
+            if kind in ("Linear", "Polynomial"):
+                continue
+            center = w["center"].value
+            if center > 0:
+                w["sigma"].value = hc * w["sigma"].value / center**2
+                if kind in ("Voigt", "Skewed Voigt"):
+                    w["gamma"].value = hc * w["gamma"].value / center**2
+                if density:
+                    w["height"].value = w["height"].value * center**2 / hc
+                w["center"].value = hc / center
+            for key in (
+                "center_min",
+                "center_max",
+                "height_min",
+                "height_max",
+                "sigma_min",
+                "sigma_max",
+                "gamma_min",
+                "gamma_max",
+            ):
+                w[key].value = ""
+
     def _reset_background_state(self):
         """Forget the stored pre-background data. Called on every new data load: the
         stored matrix belongs to the previous file or H5 mode, and applying or removing a
@@ -834,11 +883,20 @@ class PLAnalysisApp:
 
     def _reverse_background_state(self):
         """Keep the stored pre-background data and background in step with the data
-        matrix, whose columns the nm <-> eV conversion reverses."""
+        matrix: the nm <-> eV conversion reverses its columns and, for a PL spectrum,
+        rescales its intensities."""
         if self.original_data_matrix is not None:
             self.original_data_matrix = self.original_data_matrix[:, ::-1]
         if getattr(self, "background_model", None) is not None:
             self.background_model = self.background_model[::-1]
+        if self.data_manager.intensity_is_density:
+            # Same intensity rescaling as the data (I -> I * lambda^2 / hc going to eV and
+            # E^2 / hc coming back), written in terms of the new axis x: hc / x^2 both ways
+            factor = config.HC_EV_NM / self.data_manager.wavelengths**2
+            if self.original_data_matrix is not None:
+                self.original_data_matrix = self.original_data_matrix * factor
+            if getattr(self, "background_model", None) is not None:
+                self.background_model = self.background_model * factor
 
     def update_ui_after_data_load(self):
         """Update UI controls after data is loaded"""
@@ -1229,15 +1287,16 @@ class PLAnalysisApp:
                     self.wavelength_unit = "eV"
                     self._reverse_background_state()
                     self._clear_fit_results()
+                    self._convert_peak_rows()
                     self.widgets["energy_unit_display"].value = "E (eV)"
 
                     wl_min = float(self.data_manager.wavelengths.min())
                     wl_max = float(self.data_manager.wavelengths.max())
                     mid = (wl_min + wl_max) / 2
 
-                    # Scale center bound: Δ(eV) ≈ mid_eV² · Δ(nm) / 1239.8
+                    # Scale center bound: Δ(eV) ≈ mid_eV² · Δ(nm) / hc
                     self.widgets["center_bound_input"].value = round(
-                        mid**2 * self.widgets["center_bound_input"].value / 1239.8, 4
+                        mid**2 * self.widgets["center_bound_input"].value / config.HC_EV_NM, 4
                     )
 
                     # Expand range first, then set new limits
@@ -1262,15 +1321,16 @@ class PLAnalysisApp:
                     self.wavelength_unit = "nm"
                     self._reverse_background_state()
                     self._clear_fit_results()
+                    self._convert_peak_rows()
                     self.widgets["energy_unit_display"].value = "λ (nm)"
 
                     wl_min = float(self.data_manager.wavelengths.min())
                     wl_max = float(self.data_manager.wavelengths.max())
                     mid = (wl_min + wl_max) / 2
 
-                    # Scale center bound: Δ(nm) ≈ mid_nm² · Δ(eV) / 1239.8
+                    # Scale center bound: Δ(nm) ≈ mid_nm² · Δ(eV) / hc
                     self.widgets["center_bound_input"].value = round(
-                        mid**2 * self.widgets["center_bound_input"].value / 1239.8, 4
+                        mid**2 * self.widgets["center_bound_input"].value / config.HC_EV_NM, 4
                     )
 
                     # Expand range first, then set new limits
@@ -1633,10 +1693,8 @@ class PLAnalysisApp:
             # Update R-squared display
             self.widgets["r_squared_display"].value = f"<b>R²:</b> {result.rsquared:.4f}"
 
-            # Automatically update parameters from fit
-            self.on_update_parameters(None)
-
-            # Enable update parameters button (now just for manual re-update if needed)
+            # Enable update parameters button (the start values are only updated below when
+            # the fit is good, otherwise by this button)
             self.widgets["update_params_btn"].disabled = False
 
             # The plotter uses result.fit_x as x-axis for all fit traces, so no
@@ -2118,6 +2176,14 @@ class PLAnalysisApp:
             with self.widgets["status_output"]:
                 self.widgets["status_output"].clear_output()
                 print("❌ No fitting results to export. Please fit spectra first.")
+            return
+
+        if self.data_manager.data_source != "h5":
+            with self.widgets["status_output"]:
+                self.widgets["status_output"].clear_output()
+                print(
+                    "❌ Only data loaded from an h5 file can be saved into it (not a CSV upload)."
+                )
             return
 
         h5_path = self.data_manager.h5_path
@@ -2757,6 +2823,7 @@ class PLAnalysisApp:
         if config.DEBUG_MODE:
             display(debug_output)
         display(header)
+        display(manual_panel(__file__))
         display(main_content)
 
         debug_print("Application displayed", "APP")

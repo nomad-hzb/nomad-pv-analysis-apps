@@ -7,7 +7,9 @@ No widget imports. No global state.
 
 from __future__ import annotations
 
+import csv
 import logging
+from pathlib import Path
 
 import numpy as np
 from pydantic import BaseModel, ValidationError, field_validator
@@ -35,8 +37,9 @@ class Material(BaseModel):
     @classmethod
     def clamp_theta(cls, v):
         v = float(v)
-        if not (0.0 <= v <= 180.0):
-            raise ValueError(f"Contact angle must be in [0, 180], got {v}")
+        # at 180 degrees the envelope is infinite (2 / (1 + cos 180) divides by zero)
+        if not (0.0 <= v <= MAX_THETA):
+            raise ValueError(f"Contact angle must be in [0, {MAX_THETA:g}], got {v}")
         return v
 
 
@@ -55,33 +58,71 @@ class Solvent(BaseModel):
 # Preset library
 # ---------------------------------------------------------------------------
 
-PRESET_MATERIALS: list[dict] = [
-    {"name": "Material 1", "polar": 5.43, "dispersive": 40.00, "theta": 0.0},
-    {"name": "Material 2", "polar": 0.23, "dispersive": 48.43, "theta": 0.0},
-    {"name": "PTFE", "polar": 0.00, "dispersive": 18.00, "theta": 0.0},
-    {"name": "Polypropylene (PP)", "polar": 0.00, "dispersive": 30.10, "theta": 0.0},
-    {"name": "Polyethylene (PE)", "polar": 0.00, "dispersive": 33.20, "theta": 0.0},
-    {"name": "Polystyrene (PS)", "polar": 1.10, "dispersive": 42.00, "theta": 0.0},
-    {"name": "PMMA", "polar": 6.60, "dispersive": 35.90, "theta": 0.0},
-    {"name": "Nylon 6,6", "polar": 11.80, "dispersive": 36.40, "theta": 0.0},
-    {"name": "PET", "polar": 6.20, "dispersive": 35.60, "theta": 0.0},
-    {"name": "Glass (SiO2)", "polar": 62.00, "dispersive": 22.00, "theta": 0.0},
-]
+# The preset libraries are CSV files next to this module (open them on GitHub, edit them in a
+# spreadsheet): solvent_presets.csv (name, polar, dispersive, literature_total, source,
+# reference_url, note) and material_presets.csv (name, polar, dispersive, theta, source,
+# reference_url, note). Polar and dispersive parts of a solvent add up to its surface tension in
+# mN/m; a row whose parts do not match its literature_total is flagged in the app.
+_APP_DIR = Path(__file__).resolve().parent
+SOLVENT_PRESETS_FILE = "solvent_presets.csv"
+MATERIAL_PRESETS_FILE = "material_presets.csv"
+GITHUB_BLOB_URL = (
+    "https://github.com/nomad-hzb/nomad-pv-analysis-apps/blob/main/apps/Wetting_envelope"
+)
 
-PRESET_SOLVENTS: list[dict] = [
-    {"name": "Solvent 1", "polar": 18.00, "dispersive": 29.00},
-    {"name": "Solvent 2", "polar": 2.30, "dispersive": 25.50},
-    {"name": "Water", "polar": 51.00, "dispersive": 21.80},
-    {"name": "Ethanol", "polar": 8.10, "dispersive": 21.40},
-    {"name": "Isopropanol (IPA)", "polar": 8.00, "dispersive": 20.93},
-    {"name": "Acetone", "polar": 10.00, "dispersive": 16.35},
-    {"name": "Diiodomethane", "polar": 0.00, "dispersive": 50.80},
-    {"name": "Formamide", "polar": 18.70, "dispersive": 39.50},
-    {"name": "Ethylene glycol", "polar": 11.00, "dispersive": 29.00},
-    {"name": "Toluene", "polar": 1.40, "dispersive": 28.50},
-    {"name": "Hexane", "polar": 0.00, "dispersive": 18.40},
-    {"name": "Chloroform", "polar": 3.80, "dispersive": 23.70},
-]
+# Contact angles up to this are accepted (180 gives an infinite envelope).
+MAX_THETA = 179.0
+
+
+PRESET_LOAD_ERRORS: list[str] = []
+
+
+def load_presets(filename: str) -> list[dict]:
+    """The rows of a preset CSV as dicts: the numeric columns as floats, empty cells as None.
+
+    A file that is missing or cannot be read gives no presets (the app still starts, the values
+    can be typed in) and the reason is kept in PRESET_LOAD_ERRORS for the app to show."""
+    numeric = {"polar", "dispersive", "theta", "literature_total"}
+    rows = []
+    try:
+        with open(_APP_DIR / filename, encoding="utf-8", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                row = {}
+                for key, value in raw.items():
+                    value = (value or "").strip()
+                    row[key] = (float(value) if key in numeric else value) if value else None
+                rows.append(row)
+    except (OSError, ValueError) as exc:
+        logger.error("Could not read the presets in %s: %s", filename, exc)
+        PRESET_LOAD_ERRORS.append(f"{filename}: {exc}")
+        return []
+    return rows
+
+
+PRESET_MATERIALS: list[dict] = load_presets(MATERIAL_PRESETS_FILE)
+PRESET_SOLVENTS: list[dict] = load_presets(SOLVENT_PRESETS_FILE)
+DATA_FILE_URL = f"{GITHUB_BLOB_URL}/{SOLVENT_PRESETS_FILE}"
+MATERIALS_FILE_URL = f"{GITHUB_BLOB_URL}/{MATERIAL_PRESETS_FILE}"
+
+
+def solvent_preset_note(name: str) -> str:
+    """One line for the app under the solvent preset: where the values come from and whether
+    they add up to the literature total."""
+    preset = get_preset_solvent(name)
+    if preset is None:
+        return ""
+    total = preset["polar"] + preset["dispersive"]
+    source = preset.get("source") or "the split has no recorded source"
+    note = f"Polar + dispersive = {total:.1f} mN/m; {source}."
+    literature = preset.get("literature_total")
+    if literature is not None:
+        note += f" Literature total {literature:g} mN/m."
+        if abs(total - literature) > 1.0:
+            note += " These values do not add up to it: check them before relying on this liquid."
+    if preset.get("note"):
+        note += f" {preset['note']}."
+    return note
+
 
 # Names used by the preset dropdowns as a sentinel for "nothing selected"
 _NO_SELECTION = "-- select preset --"
@@ -115,15 +156,17 @@ class WettingCalculator:
         return (numerator / denominator) ** 2
 
     @staticmethod
-    def envelope_xy(
-        material: Material,
-        correction_exp: float = 2.0,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def envelope_xy(material: Material) -> tuple[np.ndarray, np.ndarray]:
+        """The boundary of the liquids that wet the material with at most its contact angle.
+
+        OWRK: gamma_L (1 + cos theta) = 2 (sqrt(gs_d gl_d) + sqrt(gs_p gl_p)). In polar
+        coordinates (x = dispersive, y = polar part of the liquid) this is
+        R = R_base(phi) * (2 / (1 + cos theta))**2, with the exponent exactly 2 (it used to
+        be an adjustable "correction exponent", which traced another angle than the label)."""
         phi = np.linspace(0, np.pi / 2, WettingCalculator.N_POINTS)
         R = WettingCalculator._r_base(phi, material.polar, material.dispersive)
         theta_rad = np.radians(material.theta)
-        correction = (2.0 / (1.0 + np.cos(theta_rad))) ** correction_exp
-        R = R * correction
+        R = R * (2.0 / (1.0 + np.cos(theta_rad))) ** 2
         return R * np.cos(phi), R * np.sin(phi)
 
 

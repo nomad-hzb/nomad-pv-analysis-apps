@@ -9,6 +9,7 @@ __created__ = "August 2025"
 
 import logging
 import operator
+import re
 from typing import Optional
 
 import pandas as pd
@@ -45,6 +46,22 @@ class JVRow(BaseModel):
         if v is None or (isinstance(v, float) and v != v):  # NaN check
             return None
         return v
+
+
+_CELL_TOKENS = re.compile(r"(forward|reverse|light|dark|for|rev)", re.IGNORECASE)
+
+
+def parse_cell_name(cell_name: str) -> tuple[str, str, str]:
+    """(cell, direction, illumination) from a NOMAD jv_curve cell_name.
+
+    "a_Forward_Light" -> ("a", "Forward", "Light"), "C2For" -> ("C2", "Forward", "Light"). The cell
+    is the name without its direction and light/dark tokens, not its first character, so "C1" and
+    "C2" (or "10" and "11") stay two pixels."""
+    lower = cell_name.lower()
+    illum = "Dark" if "dark" in lower else "Light"
+    direction = "Forward" if "for" in lower else "Reverse"
+    cell = _CELL_TOKENS.sub("", cell_name).strip("_- ")
+    return (cell or cell_name[:1] or "?"), direction, illum
 
 
 def extract_status_from_metadata(data, metadata):
@@ -94,6 +111,7 @@ class DataManager:
         # Store export data
         self.export_jvc_data = None
         self.export_curves_data = None
+        self.load_problems = []
 
     def load_offline(self, fixture_path) -> bool:
         """Load from a local fixture JSON file (offline / demo mode)."""
@@ -166,19 +184,8 @@ class DataManager:
             # Process sample information
             self._process_sample_info(identifiers)
 
-            if output_widget:
-                with output_widget:
-                    if not self.data["jvc"].empty:
-                        best_main = self.data["jvc"].loc[self.data["jvc"]["PCE(%)"].idxmax()]  # noqa: F841
-
             # Export data
             self._export_data(df_jvc, df_cur)
-
-            # DIAGNOSTIC: Check data before and after processing
-            if output_widget:
-                with output_widget:
-                    if not df_jvc.empty:
-                        best_export = df_jvc.loc[df_jvc["PCE(%)"].idxmax()]  # noqa: F841
 
             # Find unique values
             self.unique_vals = self._find_unique_values()
@@ -195,450 +202,61 @@ class DataManager:
             return False
 
     def _process_jv_data_for_analysis(self, sample_ids, output_widget=None, batch_ids=None):
-        """Process JV data for analysis from sample IDs with enhanced error reporting"""
-        columns_jvc = [
-            "Voc(V)",
-            "Jsc(mA/cm2)",
-            "FF(%)",
-            "PCE(%)",
-            "V_mpp(V)",
-            "J_mpp(mA/cm2)",
-            "P_mpp(mW/cm2)",
-            "R_series(Ohmcm2)",
-            "R_shunt(Ohmcm2)",
-            "sample",
-            "batch",
-            "condition",
-            "cell",
-            "direction",
-            "ilum",
-            "status",
-            "sample_id",
-        ]
+        """Fetch the JV measurements of the samples and build the two tables with the same
+        code as demo mode (_build_from_raw). Reports what could not be loaded."""
 
-        columns_cur = [
-            "index",
-            "sample",
-            "batch",
-            "condition",
-            "variable",
-            "cell",
-            "direction",
-            "ilum",
-            "sample_id",
-            "status",
-        ]
-        rows_jvc = []
-        rows_cur = []
-
-        # Track errors for reporting
-        error_summary = {
-            "failed_samples": [],
-            "failed_batches": [],
-            "successful_samples": 0,
-            "total_samples": len(sample_ids),
-        }
-
-        try:
-            url = self.auth_manager.url
-            token = self.auth_manager.current_token
-
-            logger.info("Fetching JV data for %d samples", len(sample_ids))
+        def say(text):
             if output_widget:
                 with output_widget:
-                    print("Fetching JV data...")
-                    print("Total samples to process: %d" % len(sample_ids))
+                    print(text)
 
-            all_jvs = {}
-            successful_batches = []
-            failed_batches = []
+        url = self.auth_manager.url
+        token = self.auth_manager.current_token
+        batch_ids = batch_ids or []
+        sample_batch: dict[str, str] = {}
+        failed_batches = []
+        for batch_id in batch_ids:
+            try:
+                for sid in get_ids_in_batch(url, token, [batch_id]):
+                    sample_batch.setdefault(sid, batch_id)
+                say(
+                    "Batch %s: %d samples"
+                    % (batch_id, sum(1 for b in sample_batch.values() if b == batch_id))
+                )
+            except Exception as exc:  # noqa: BLE001
+                failed_batches.append((batch_id, str(exc)))
+                logger.warning("Skipping batch %s: %s", batch_id, exc)
+                say("Skipping batch %s: %s" % (batch_id, exc))
 
-            for batch_id in batch_ids:
-                try:
-                    logger.debug("Processing batch: %s", batch_id)
-                    if output_widget:
-                        with output_widget:
-                            print("\n📦 Processing batch: %s" % batch_id)
-
-                    batch_sample_ids = get_ids_in_batch(url, token, [batch_id])
-
-                    logger.debug("Found %d samples in batch %s", len(batch_sample_ids), batch_id)
-                    if output_widget:
-                        with output_widget:
-                            print("   Found %d samples in this batch" % len(batch_sample_ids))
-
-                    batch_jvs = get_all_JV(url, token, batch_sample_ids)
-
-                    missing_jv = [s for s in batch_sample_ids if s not in batch_jvs]
-                    if output_widget:
-                        with output_widget:
-                            print(
-                                "   JV data: %d/%d samples found"
-                                % (len(batch_jvs), len(batch_sample_ids))
-                            )
-                            if missing_jv:
-                                print(
-                                    "   ⚠️ No HySprint_JVmeasurement in NOMAD for: %s" % missing_jv
-                                )
-                                print(
-                                    "      → Check that JV files (.jv.txt) were uploaded for these samples"
-                                )
-
-                    all_jvs.update(batch_jvs)
-                    successful_batches.append(batch_id)
-
-                    logger.info("Batch %s loaded successfully", batch_id)
-                    if output_widget:
-                        with output_widget:
-                            print("   ✅ Batch loaded successfully")
-
-                except KeyError as e:
-                    error_msg = "Missing field '%s'" % e.args[0]
-                    failed_batches.append((batch_id, error_msg))
-                    error_summary["failed_batches"].append(
-                        {"batch_id": batch_id, "error": error_msg, "type": "KeyError"}
-                    )
-                    logger.warning("Skipping batch %s: %s", batch_id, error_msg)
-                    if output_widget:
-                        with output_widget:
-                            print("   ⚠️ Skipping batch - %s" % error_msg)
-                    continue
-                except Exception as e:
-                    error_msg = str(e)
-                    failed_batches.append((batch_id, error_msg))
-                    error_summary["failed_batches"].append(
-                        {"batch_id": batch_id, "error": error_msg, "type": type(e).__name__}
-                    )
-                    logger.warning("Skipping batch %s: %s", batch_id, error_msg)
-                    if output_widget:
-                        with output_widget:
-                            print("   ⚠️ Skipping batch - %s" % error_msg)
-                    continue
-
-            logger.info(
-                "Batch summary: %d successful, %d failed",
-                len(successful_batches),
-                len(failed_batches),
+        say("Fetching JV data for %d samples..." % len(sample_ids))
+        all_jvs = get_all_JV(url, token, list(sample_ids))
+        missing = [sid for sid in sample_ids if sid not in all_jvs]
+        if missing:
+            say(
+                "No HySprint_JVmeasurement in NOMAD for: %s (check that their JV files were uploaded)"
+                % missing
             )
-            if output_widget:
-                with output_widget:
-                    print("\n" + "=" * 60)
-                    print("BATCH SUMMARY:")
-                    print("✅ Successfully processed: %d batches" % len(successful_batches))
-                    if failed_batches:
-                        print("⚠️ Failed: %d batches" % len(failed_batches))
-                        for batch_id, error in failed_batches:
-                            print("   - %s: %s" % (batch_id, error))
-                    print("=" * 60 + "\n")
-
-            # Continue with the successfully loaded data
-            if not all_jvs:
-                logger.error("No valid JV data could be loaded from any batch")
-                if output_widget:
-                    with output_widget:
-                        print("❌ No valid JV data could be loaded from any batch")
-                        print("\nERROR DETAILS:")
-                        for batch_error in error_summary["failed_batches"]:
-                            print("  Batch: %s" % batch_error["batch_id"])
-                            print("  Error Type: %s" % batch_error["type"])
-                            print("  Error Message: %s\n" % batch_error["error"])
-                return pd.DataFrame(), pd.DataFrame()
-
-            # First pass: determine maximum number of data points across all curves
-            max_data_points = 0
-
-            # Process each sample with detailed error handling
-            for sample_idx, sid in enumerate(sample_ids, 1):
-                try:
-                    jv_res = all_jvs.get(sid, [])
-
-                    if not jv_res:
-                        logger.debug("No JV data returned for sample %s", sid)
-                        if output_widget:
-                            with output_widget:
-                                print(
-                                    "⚠️ [%d/%d] %s: No JV data returned"
-                                    % (sample_idx, len(sample_ids), sid)
-                                )
-                        error_summary["failed_samples"].append(
-                            {
-                                "sample_id": sid,
-                                "error": "No JV data returned from API",
-                                "type": "EmptyData",
-                            }
-                        )
-                        continue
-
-                    # Process this sample
-                    sample_curves_processed = 0
-
-                    for jv_data, jv_md in jv_res:
-                        try:
-                            # Check if jv_curve exists
-                            if "jv_curve" not in jv_data:
-                                logger.warning(
-                                    "Missing 'jv_curve' field for sample %s, available keys: %s",
-                                    sid,
-                                    list(jv_data.keys()),
-                                )
-                                if output_widget:
-                                    with output_widget:
-                                        print(
-                                            "⚠️ [%d/%d] %s: Missing 'jv_curve' field"
-                                            % (sample_idx, len(sample_ids), sid)
-                                        )
-                                        print("   Available keys: %s" % list(jv_data.keys()))
-                                error_summary["failed_samples"].append(
-                                    {
-                                        "sample_id": sid,
-                                        "error": "Missing 'jv_curve' field. Available: %s"
-                                        % list(jv_data.keys()),
-                                        "type": "MissingField",
-                                    }
-                                )
-                                continue
-
-                            # Check for empty jv_curve list
-                            if not jv_data["jv_curve"]:
-                                data_file = jv_data.get("data_file", "unknown")
-                                if output_widget:
-                                    with output_widget:
-                                        print(
-                                            "⚠️ [%d/%d] %s: Empty JV file (no curves): %s"
-                                            % (sample_idx, len(sample_ids), sid, data_file)
-                                        )
-                                error_summary["failed_samples"].append(
-                                    {
-                                        "sample_id": sid,
-                                        "error": "Empty jv_curve list (file: %s)" % data_file,
-                                        "type": "EmptyJVFile",
-                                    }
-                                )
-                                continue
-
-                            # Count curves for this sample
-                            for c in jv_data["jv_curve"]:
-                                max_data_points = max(
-                                    max_data_points,
-                                    len(c.get("voltage", [])),
-                                    len(c.get("current_density", [])),
-                                )
-                                sample_curves_processed += 1
-
-                        except Exception as e:
-                            logger.warning(
-                                "Error processing jv_data for sample %s: %s: %s",
-                                sid,
-                                type(e).__name__,
-                                e,
-                            )
-                            if output_widget:
-                                with output_widget:
-                                    print(
-                                        "⚠️ [%d/%d] %s: Error in jv_data processing"
-                                        % (sample_idx, len(sample_ids), sid)
-                                    )
-                                    print("   Error: %s: %s" % (type(e).__name__, str(e)))
-                            error_summary["failed_samples"].append(
-                                {
-                                    "sample_id": sid,
-                                    "error": "%s: %s" % (type(e).__name__, str(e)),
-                                    "type": "ProcessingError",
-                                }
-                            )
-                            continue
-
-                    if sample_curves_processed > 0:
-                        error_summary["successful_samples"] += 1
-                        logger.debug("Sample %s: %d curves processed", sid, sample_curves_processed)
-                        if output_widget:
-                            with output_widget:
-                                print(
-                                    "✅ [%d/%d] %s: %d curves processed"
-                                    % (sample_idx, len(sample_ids), sid, sample_curves_processed)
-                                )
-
-                except Exception as e:
-                    logger.error(
-                        "Fatal error processing sample %s: %s: %s", sid, type(e).__name__, e
-                    )
-                    if output_widget:
-                        with output_widget:
-                            print("❌ [%d/%d] %s: Fatal error" % (sample_idx, len(sample_ids), sid))
-                            print("   Error: %s: %s" % (type(e).__name__, str(e)))
-                    error_summary["failed_samples"].append(
-                        {
-                            "sample_id": sid,
-                            "error": "%s: %s" % (type(e).__name__, str(e)),
-                            "type": "FatalError",
-                        }
-                    )
-                    continue
-
-            # Add data point columns to columns_cur
-            for i in range(max_data_points):
-                columns_cur.append(i)
-
-            # Second pass: process the data with correct column structure and detailed error handling  # noqa: E501
-            logger.debug("Processing curves data for %d samples", len(sample_ids))
-            if output_widget:
-                with output_widget:
-                    print("\n" + "=" * 60)
-                    print("PROCESSING CURVES DATA...")
-                    print("=" * 60 + "\n")
-
-            for sample_idx, sid in enumerate(sample_ids, 1):
-                jv_res = all_jvs.get(sid, [])
-                if not jv_res:
-                    continue
-
-                for jv_data, jv_md in jv_res:
-                    try:
-                        if "jv_curve" not in jv_data or not jv_data["jv_curve"]:
-                            continue
-
-                        status = extract_status_from_metadata(jv_data, jv_md)
-
-                        for c in jv_data["jv_curve"]:
-                            file_name = "../%s/%s" % (
-                                jv_md["upload_id"],
-                                jv_data.get("data_file", ""),
-                            )
-                            illum = "Dark" if "dark" in c["cell_name"].lower() else "Light"
-                            cell = c["cell_name"][0]
-                            direction = "Forward" if "for" in c["cell_name"].lower() else "Reverse"
-
-                            # Extract the sample name
-                            sample_clean = file_name.split("/")[-1].split(".")[0]
-
-                            # JV data processing with Pydantic validation
-                            try:
-                                validated_row = JVRow(
-                                    voc=c["open_circuit_voltage"],
-                                    jsc=-c["short_circuit_current_density"],
-                                    ff=100 * c["fill_factor"],
-                                    pce=c["efficiency"],
-                                    v_mpp=c["potential_at_maximum_power_point"],
-                                    j_mpp=-c["current_density_at_maximun_power_point"],
-                                    p_mpp=-c["potential_at_maximum_power_point"]
-                                    * c["current_density_at_maximun_power_point"],
-                                    r_series=c.get("series_resistance"),
-                                    r_shunt=c.get("shunt_resistance"),
-                                    sample=sample_clean,
-                                    batch=file_name.split("/")[1],
-                                    condition="w",
-                                    cell=cell,
-                                    direction=direction,
-                                    ilum=illum,
-                                    status=status,
-                                    sample_id=sid,
-                                )
-                                row = list(validated_row.model_dump().values())
-                            except ValidationError as exc:
-                                logger.warning(
-                                    "Skipping invalid JV row for sample %s: %s", sid, exc
-                                )
-                                continue
-                            rows_jvc.append(row)
-
-                            # Process voltage data with proper padding
-                            row_v = [
-                                "_".join(["Voltage (V)", cell, direction, illum]),
-                                sample_clean,
-                                file_name.split("/")[1],
-                                "w",
-                                "Voltage (V)",
-                                cell,
-                                direction,
-                                illum,
-                                sid,
-                                status,
-                            ]
-                            voltage_data = c["voltage"] + [None] * (
-                                max_data_points - len(c["voltage"])
-                            )
-                            row_v.extend(voltage_data)
-
-                            # Process current density data with proper padding
-                            row_j = [
-                                "_".join(["Current Density(mA/cm2)", cell, direction, illum]),
-                                sample_clean,
-                                file_name.split("/")[1],
-                                "w",
-                                "Current Density(mA/cm2)",
-                                cell,
-                                direction,
-                                illum,
-                                sid,
-                                status,
-                            ]
-                            current_data = c["current_density"] + [None] * (
-                                max_data_points - len(c["current_density"])
-                            )
-                            row_j.extend(current_data)
-
-                            rows_cur.append(row_v)
-                            rows_cur.append(row_j)
-
-                    except Exception:
-                        # Already logged in first pass
-                        continue
-
-            # Create DataFrames
-            df_jvc = pd.DataFrame(rows_jvc, columns=columns_jvc)
-            df_cur = pd.DataFrame(rows_cur, columns=columns_cur)
-
-            # Calculate Voc x FF if both columns exist
-            if "Voc(V)" in df_jvc.columns and "FF(%)" in df_jvc.columns:
-                df_jvc["Voc x FF(V%)"] = df_jvc["Voc(V)"] * df_jvc["FF(%)"]
-
-            # Print final summary
-            logger.info(
-                "Final: %d/%d samples processed, %d JV records, %d curve records",
-                error_summary["successful_samples"],
-                error_summary["total_samples"],
-                len(rows_jvc),
-                len(rows_cur),
-            )
-            if output_widget:
-                with output_widget:
-                    print("\n" + "=" * 60)
-                    print("FINAL SUMMARY:")
-                    print(
-                        "✅ Successfully processed samples: %d/%d"
-                        % (error_summary["successful_samples"], error_summary["total_samples"])
-                    )
-                    print("✅ Total JV records created: %d" % len(rows_jvc))
-                    print("✅ Total curve records created: %d" % len(rows_cur))
-
-                    if error_summary["failed_samples"]:
-                        print("\n⚠️ Failed samples: %d" % len(error_summary["failed_samples"]))
-                        print("\nDETAILED ERROR LIST:")
-                        for idx, error in enumerate(error_summary["failed_samples"], 1):
-                            print("\n  [%d] Sample ID: %s" % (idx, error["sample_id"]))
-                            print("      Error Type: %s" % error["type"])
-                            print("      Error: %s" % error["error"])
-
-                    print("=" * 60)
-
-            return df_jvc, df_cur
-
-        except Exception as e:
-            logger.exception(
-                "Fatal error in _process_jv_data_for_analysis: %s: %s",
-                type(e).__name__,
-                e,
-            )
-            if output_widget:
-                with output_widget:
-                    print("\n❌ FATAL ERROR in _process_jv_data_for_analysis:")
-                    print("   Error Type: %s" % type(e).__name__)
-                    print("   Error Message: %s" % str(e))
-            ErrorHandler.handle_data_loading_error(e, output_widget)
+        if not all_jvs:
+            say("No valid JV data could be loaded from any batch")
+            for batch_id, error in failed_batches:
+                say("  Batch %s: %s" % (batch_id, error))
             return pd.DataFrame(), pd.DataFrame()
 
-    def _build_from_raw(self, all_jvs: dict, sample_ids: list) -> tuple:
-        """Core transformation: all_jvs dict -> (df_jvc, df_cur). No API calls."""
+        df_jvc, df_cur = self._build_from_raw(all_jvs, sample_ids, sample_batch)
+        say("Samples with usable JV data: %d/%d" % (df_jvc["sample_id"].nunique(), len(sample_ids)))
+        say("JV records: %d" % len(df_jvc))
+        for problem in self.load_problems:
+            say("  %s: %s" % (problem["sample_id"], problem["error"]))
+        return df_jvc, df_cur
+
+    def _build_from_raw(self, all_jvs: dict, sample_ids: list, sample_batch=None) -> tuple:
+        """Core transformation: all_jvs dict -> (df_jvc, df_cur). No API calls.
+
+        sample_batch maps a sample's lab_id to the batch the user selected it from; without it the
+        batch column holds the upload id of the measurement. What could not be used is listed in
+        self.load_problems."""
+        sample_batch = sample_batch or {}
+        self.load_problems = []
         columns_jvc = [
             "Voc(V)",
             "Jsc(mA/cm2)",
@@ -684,22 +302,31 @@ class DataManager:
         for i in range(max_data_points):
             columns_cur.append(i)
 
+        def problem(sid, error):
+            logger.warning("Sample %s: %s", sid, error)
+            self.load_problems.append({"sample_id": sid, "error": error})
+
         rows_jvc, rows_cur = [], []
         for sid in sample_ids:
-            for jv_data, jv_md in all_jvs.get(sid, []):
-                if "jv_curve" not in jv_data or not jv_data["jv_curve"]:
+            entries = all_jvs.get(sid, [])
+            if not entries:
+                problem(sid, "no JV data returned")
+                continue
+            for jv_data, jv_md in entries:
+                data_file = jv_data.get("data_file", "")
+                if "jv_curve" not in jv_data:
+                    problem(sid, "missing 'jv_curve' field (file: %s)" % data_file)
+                    continue
+                if not jv_data["jv_curve"]:
+                    problem(sid, "empty JV file, no curves (file: %s)" % data_file)
                     continue
                 status = extract_status_from_metadata(jv_data, jv_md)
+                upload_id = jv_md.get("upload_id", "")
+                batch = sample_batch.get(sid) or upload_id
+                sample_clean = data_file.split("/")[-1].split(".")[0]
                 for c in jv_data["jv_curve"]:
-                    file_name = "../%s/%s" % (
-                        jv_md.get("upload_id", ""),
-                        jv_data.get("data_file", ""),
-                    )
-                    illum = "Dark" if "dark" in c["cell_name"].lower() else "Light"
-                    cell = c["cell_name"][0]
-                    direction = "Forward" if "for" in c["cell_name"].lower() else "Reverse"
-                    sample_clean = file_name.split("/")[-1].split(".")[0]
                     try:
+                        cell, direction, illum = parse_cell_name(c["cell_name"])
                         validated_row = JVRow(
                             voc=c["open_circuit_voltage"],
                             jsc=-c["short_circuit_current_density"],
@@ -712,7 +339,7 @@ class DataManager:
                             r_series=c.get("series_resistance"),
                             r_shunt=c.get("shunt_resistance"),
                             sample=sample_clean,
-                            batch=file_name.split("/")[1] if "/" in file_name else "",
+                            batch=batch,
                             condition="w",
                             cell=cell,
                             direction=direction,
@@ -720,42 +347,31 @@ class DataManager:
                             status=status,
                             sample_id=sid,
                         )
-                        rows_jvc.append(list(validated_row.model_dump().values()))
-                    except ValidationError as exc:
-                        logger.warning("Skipping invalid JV row for sample %s: %s", sid, exc)
+                    except (ValidationError, KeyError, TypeError) as exc:
+                        problem(sid, "skipped an invalid curve (%s)" % exc)
                         continue
+                    rows_jvc.append(list(validated_row.model_dump().values()))
 
-                    row_v = [
-                        "_".join(["Voltage (V)", cell, direction, illum]),
-                        sample_clean,
-                        file_name.split("/")[1] if "/" in file_name else "",
-                        "w",
-                        "Voltage (V)",
-                        cell,
-                        direction,
-                        illum,
-                        sid,
-                        status,
-                    ]
-                    row_v.extend(c["voltage"] + [None] * (max_data_points - len(c["voltage"])))
-                    row_j = [
-                        "_".join(["Current Density(mA/cm2)", cell, direction, illum]),
-                        sample_clean,
-                        file_name.split("/")[1] if "/" in file_name else "",
-                        "w",
-                        "Current Density(mA/cm2)",
-                        cell,
-                        direction,
-                        illum,
-                        sid,
-                        status,
-                    ]
-                    row_j.extend(
-                        c["current_density"]
-                        + [None] * (max_data_points - len(c["current_density"]))
-                    )
-                    rows_cur.append(row_v)
-                    rows_cur.append(row_j)
+                    for variable, values in (
+                        ("Voltage (V)", c["voltage"]),
+                        ("Current Density(mA/cm2)", c["current_density"]),
+                    ):
+                        rows_cur.append(
+                            [
+                                "_".join([variable, cell, direction, illum]),
+                                sample_clean,
+                                batch,
+                                "w",
+                                variable,
+                                cell,
+                                direction,
+                                illum,
+                                sid,
+                                status,
+                            ]
+                            + list(values)
+                            + [None] * (max_data_points - len(values))
+                        )
 
         df_jvc = pd.DataFrame(rows_jvc, columns=columns_jvc)
         df_cur = pd.DataFrame(rows_cur, columns=columns_cur)
@@ -826,30 +442,22 @@ class DataManager:
 
             return result
 
-        # Keep the original batch ID from the file path for actual grouping
-        self.data["jvc"]["batch"] = self.data["jvc"]["sample"].apply(
-            lambda x: x.split("/")[1] if "/" in x else "unknown"
-        )
+        # "batch" stays what the loader set: the batch the user selected the sample from.
 
         # Add display batch name for UI purposes using original paths
         self.data["jvc"]["display_batch"] = self.data["jvc"]["original_sample"].apply(
             extract_display_batch
         )
 
-        self.data["jvc"]["identifier"] = self.data["jvc"]["sample"].apply(
-            lambda x: x.split("/")[-1].split(".")[0]
-        )
-
+        stems = self.data["jvc"]["sample"].apply(lambda x: x.split("/")[-1].split(".")[0])
+        prefixes = stems.apply(lambda x: "_".join(x.split("_")[:-1]))
         if identifiers:
-            self.data["jvc"]["identifier"] = self.data["jvc"]["identifier"].apply(
-                lambda x: (
-                    f"{'_'.join(x.split('_')[:-1])}&{identifiers.get(x, 'No variation specified')}"
-                )
-            )
+            # the variation belongs to the sample (its lab_id), whatever its data file is called
+            variations = self.data["jvc"]["sample_id"].map(identifiers)
+            variations = variations.fillna(stems.map(identifiers)).fillna("No variation specified")
+            self.data["jvc"]["identifier"] = prefixes + "&" + variations.astype(str)
         else:
-            self.data["jvc"]["identifier"] = self.data["jvc"]["sample"].apply(
-                lambda x: "_".join(x.split("/")[-1].split(".")[0].split("_")[:-1])
-            )
+            self.data["jvc"]["identifier"] = prefixes
 
     def _export_data(self, df_jvc, df_cur):
         """Store data for potential export"""
@@ -893,8 +501,8 @@ class DataManager:
         if not self.data or "jvc" not in self.data:
             return None, None, []
 
-        # Default filters if none provided
-        if not filter_list:
+        # Default filters only when none were given; an empty list means no filters
+        if filter_list is None:
             filter_list = [
                 ("PCE(%)", "<", "40"),
                 ("FF(%)", "<", "89"),
@@ -921,8 +529,7 @@ class DataManager:
 
         # Apply sample/cell selection filter if provided
         sample_selection_filtered_count = 0
-        if selected_items:
-            original_count = len(data)  # noqa: F841
+        if selected_items is not None:
 
             def is_selected(row):
                 cell_key = f"{row['sample']}_{row['cell']}"

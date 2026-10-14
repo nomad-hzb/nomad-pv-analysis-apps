@@ -33,12 +33,23 @@ class GUIComponents:
                 style={"description_width": "initial"},
             )
             debug_print("Created H5 mode dropdown", "GUI")
-        else:
-            # REPLACE ipywidgets.FileUpload with ipyvuetify FileInput
-            self.widgets["file_upload"] = FileInput(
-                multiple=False, accept=".csv", label="Click to upload CSV file", v_model=[]
-            )
-            debug_print("Created ipyvuetify file upload widget", "GUI")
+
+        # CSV upload is always offered, also next to a handed-over h5 file
+        self.widgets["file_upload"] = FileInput(
+            multiple=False, accept=".csv", label="Click to upload CSV file", v_model=[]
+        )
+        self.widgets["csv_density_checkbox"] = widgets.Checkbox(
+            value=True,
+            description="CSV intensity is a PL spectrum (rescale it when converting nm <-> eV)",
+            indent=False,
+            tooltip=(
+                "A PL spectrum is a density per wavelength interval, so converting to eV "
+                "multiplies it by lambda^2/hc to keep peak shapes and areas right. Untick for "
+                "transmission or absorbance values, which are not rescaled."
+            ),
+            layout=widgets.Layout(width="auto"),
+        )
+        debug_print("Created ipyvuetify file upload widget", "GUI")
 
         # Status output (keep as is)
         self.widgets["status_output"] = widgets.Output()

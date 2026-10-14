@@ -92,6 +92,7 @@ from gui_components import (
     create_whole_experiment_template_picker,
 )
 
+from hysprint_utils.api_calls import REQUEST_TIMEOUT
 from hysprint_utils.process_specs import (
     build_field_paths,
     build_field_value_multipliers,
@@ -2516,7 +2517,7 @@ def test_initialize_ui_auto_applies_default_sample_setup():
         patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]),
     ):
         main_interface = initialize_ui("url", "token")
-    sample_setup = main_interface.children[2]
+    sample_setup = main_interface.children[3]
     assert len(sample_setup.state.samples) == sample_setup.total_samples_input.value > 0
 
 
@@ -2549,11 +2550,11 @@ def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
         patch("data_manager.get_all_uploads", return_value=[]),
     ):
         main_interface = initialize_ui("url", "token")
-        # app.py's main_interface.children order: h2, h4, sample_setup, template_picker,
-        # quick_fill_all_button, h4, sequence_builder, ... (progress_bar now lives inside
-        # finish_section, not at the top level)
-        template_picker = main_interface.children[3]
-        sequence_builder = main_interface.children[6]
+        # app.py's main_interface.children order: h2, manual panel, h4, sample_setup,
+        # template_picker, quick_fill_all_button, h4, sequence_builder, ... (progress_bar now
+        # lives inside finish_section, not at the top level)
+        template_picker = main_interface.children[4]
+        sequence_builder = main_interface.children[7]
         assert len(sequence_builder.rows_box.children) == 0
 
         batch_picker = template_picker.children[2]
@@ -2574,8 +2575,8 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
     ):
         main_interface = initialize_ui("url", "token")
         # ... h4 Varying Fields, caption, refresh_matrix_button, refresh_matrix_status, matrix
-        refresh_matrix_button = main_interface.children[9]
-        matrix = main_interface.children[11]
+        refresh_matrix_button = main_interface.children[10]
+        matrix = main_interface.children[12]
         assert refresh_matrix_button.description == "Refresh Table"
         assert len(matrix.children) == 1  # placeholder, nothing varies yet
 
@@ -3103,11 +3104,17 @@ def test_workbook_to_bytes_returns_valid_xlsx_signature(fresh_state):
     assert len(data) > 0
 
 
-def test_build_experiment_filename_matches_date_convention():
-    from datetime import datetime
+def test_build_experiment_filename_keeps_the_date_prefix_and_ending():
+    import re
 
-    filename = build_experiment_filename()
-    assert filename == f"{datetime.now().strftime('%Y%m%d')}_experiment_file.xlsx"
+    assert re.fullmatch(r"\d{8}_\d{6}_experiment_file\.xlsx", build_experiment_filename())
+
+
+def test_experiment_filename_names_the_experiment_so_same_day_uploads_do_not_collide(fresh_state):
+    for key, value in (("Project_Name", "FiNa"), ("Batch", "7/1")):
+        fresh_state.experiment_info_fields[key] = ProcessFieldSpec(key=key, value=value)
+    name = build_experiment_filename(fresh_state)
+    assert name.endswith("_FiNa_7-1_experiment_file.xlsx")
 
 
 # ---------------------------------------------------------------------------
@@ -3364,13 +3371,13 @@ def _mock_response(json_data=None, raise_error=False):
 
 def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()) as mock_put,
-        patch("data_manager.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()) as mock_put,
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
@@ -3387,19 +3394,20 @@ def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
 
 def test_upload_experiment_excel_triggers_process_action_after_put():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()) as mock_post,
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()) as mock_post,
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
     mock_post.assert_called_once_with(
         "https://nomad.example/api/v1/uploads/UP1/action/process",
         headers={"Authorization": "Bearer tok"},
+        timeout=REQUEST_TIMEOUT,
     )
 
 
@@ -3410,25 +3418,29 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
         _mock_response({"data": {"process_running": False}}),
     ]
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()),
-        patch("data_manager.requests.get", side_effect=poll_responses) as mock_get,
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get", side_effect=poll_responses) as mock_get,
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
     assert mock_get.call_count == 3
     mock_get.assert_called_with(
-        "https://nomad.example/api/v1/uploads/UP1", headers={"Authorization": "Bearer tok"}
+        "https://nomad.example/api/v1/uploads/UP1",
+        headers={"Authorization": "Bearer tok"},
+        timeout=REQUEST_TIMEOUT,
     )
 
 
 def test_upload_experiment_excel_raises_on_put_failure():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response(raise_error=True)),
-        patch("data_manager.requests.post", return_value=_mock_response()),
-        patch("data_manager.requests.get"),
-        patch("data_manager.time.sleep"),
+        patch(
+            "hysprint_utils.api_calls.requests.put", return_value=_mock_response(raise_error=True)
+        ),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get"),
+        patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(requests.HTTPError),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
@@ -3441,13 +3453,15 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
     NOMAD version. Must not raise here (matches apps/File_Uploader/gui_components.py's
     proven _process_upload pattern) - the polling loop is the real source of truth."""
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response(raise_error=True)),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.post", return_value=_mock_response(raise_error=True)
+        ),
+        patch(
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ) as mock_get,
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
 
@@ -3456,13 +3470,13 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
 
 def test_upload_experiment_excel_raises_timeout_if_never_finishes():
     with (
-        patch("data_manager.requests.put", return_value=_mock_response()),
-        patch("data_manager.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
         patch(
-            "data_manager.requests.get",
+            "hysprint_utils.api_calls.requests.get",
             return_value=_mock_response({"data": {"process_running": True}}),
         ),
-        patch("data_manager.time.sleep"),
+        patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(TimeoutError),
     ):
         upload_experiment_excel(
@@ -4161,3 +4175,188 @@ def test_varying_fields_matrix_rejects_forbidden_character_cell(fresh_state):
 
     assert spec.per_sample_values.get(1) is None
     assert material_cell.layout.border != ""
+
+
+# --- S10: catalogue-derived probes, mapping range, gas/vacuum quenching ------------------
+
+
+def _spin_step_with_quenching(quenching):
+    step = dict(SPIN_COATING_STEP_TWO_SOLVENTS)
+    step["quenching"] = quenching
+    return step
+
+
+def test_infer_config_counts_beyond_five_solvents():
+    """The probe range was a fixed 5; it now follows the catalogue (GUI maximum 20)."""
+    solvents = [{"name": f"S{n}", "chemical_2": {"name": f"Solv{n}"}} for n in range(1, 8)]
+    step = dict(SPIN_COATING_STEP_TWO_SOLVENTS)
+    step["solution"] = [
+        {
+            "solution_volume": 0.1,
+            "solution_details": {"solute": [{"name": "A"}], "solvent": solvents},
+        }
+    ]
+    assert infer_config_from_source_step("Spin Coating", step)["solvents"] == 7
+
+
+def test_gas_quenching_step_does_not_fill_the_vacuum_fields():
+    cache = NomadSessionCache()
+    step = _spin_step_with_quenching(
+        {"m_def": "x.GasQuenchingWithNozzle", "gas": "Nitrogen", "duration": 15.0, "pressure": 1.2}
+    )
+    cache._processing_steps_by_batch["B1"] = [step]
+    values, _ = fetch_process_field_values("url", "token", cache, "B1", "Spin Coating")
+    assert values["Gas quenching duration [s]"] == 15.0
+    assert values["Gas quenching pressure [bar]"] == 1.2
+    assert "Vacuum quenching duration [s]" not in values
+    assert "Vacuum quenching pressure [bar]" not in values
+
+
+def test_vacuum_quenching_step_does_not_fill_the_gas_fields():
+    cache = NomadSessionCache()
+    step = _spin_step_with_quenching(
+        {"m_def": "x.VacuumQuenching", "start_time": 8.0, "duration": 20.0, "pressure": 0.01}
+    )
+    cache._processing_steps_by_batch["B1"] = [step]
+    values, _ = fetch_process_field_values("url", "token", cache, "B1", "Spin Coating")
+    assert values["Vacuum quenching duration [s]"] == 20.0
+    assert values["Vacuum quenching pressure [bar]"] == 0.01
+    assert "Gas quenching duration [s]" not in values
+    assert "Gas quenching pressure [bar]" not in values
+
+
+def test_quenching_kind_falls_back_to_exclusive_fields_without_an_m_def():
+    from data_manager import _step_quenching_kind
+
+    assert _step_quenching_kind({"quenching": {"gas": "N2", "duration": 1}}) == "gas"
+    assert _step_quenching_kind({"quenching": {"start_time": 3, "duration": 1}}) == "vacuum"
+    assert _step_quenching_kind({"quenching": {"duration": 1}}) is None
+    assert _step_quenching_kind({}) is None
+
+
+def test_boolean_probes_are_derived_and_share_no_path_between_gas_and_vacuum():
+    from data_manager import BOOLEAN_CONFIG_PROBES
+
+    spin = BOOLEAN_CONFIG_PROBES["Spin Coating"]
+    assert "Gas quenching duration [s]" not in spin["gasquenching"]
+    assert "Vacuum quenching start time [s]" in spin["vacuumquenching"]
+    assert "Gas" in spin["gasquenching"]
+    # a process with only a gas block can probe on duration as well
+    assert "Gas quenching duration [s]" in BOOLEAN_CONFIG_PROBES["Blade Coating"]["gasquenching"]
+
+
+def test_generic_process_parameter_keys_are_the_atmospheric_fields():
+    from data_manager import _GENERIC_PROCESS_PARAMETER_KEYS
+
+    from hysprint_utils.process_specs import ATMOSPHERIC_FIELDS
+
+    assert _GENERIC_PROCESS_PARAMETER_KEYS == list(ATMOSPHERIC_FIELDS)
+
+
+# ---------------------------------------------------------------------------
+# 6.2: varying fields, rollback, atmospheric inference, upload outcome, HTML escaping
+# ---------------------------------------------------------------------------
+
+
+def test_replicate_does_not_crash_on_an_experiment_info_field_marked_varying(fresh_state):
+    source = {"sample": {"number_of_junctions": 1}, "substrate": {"substrate": "Soda Lime Glass"}}
+    cache = _cache_with("B1", [SPIN_COATING_STEP], experiment_info_source=source)
+    rebuild_field_specs(fresh_state)
+    fresh_state.experiment_info_fields["Substrate material"].varies = True
+
+    apply_whole_experiment_template(fresh_state, "url", "token", cache, "B1")
+
+    spec = fresh_state.experiment_info_fields["Substrate material"]
+    assert spec.per_sample_values == {} and spec.value is None  # left for the user
+    assert fresh_state.whole_experiment_template_batch_id == "B1"
+
+
+def test_adopt_does_not_crash_on_a_process_field_marked_varying(fresh_state):
+    process = fresh_state.add_process("Spin Coating")
+    rebuild_field_specs(fresh_state)
+    process.field_specs["Material name"].varies = True
+    cache = _cache_with("B1", [SPIN_COATING_STEP])
+
+    written = apply_process_override(fresh_state, process, "url", "token", cache, "B1")
+
+    assert process.field_specs["Material name"].per_sample_values == {}
+    assert written > 0  # the other fields were still filled
+
+
+def test_a_failed_replicate_puts_the_previous_experiment_back(fresh_state):
+    fresh_state.add_process("Cleaning UV-Ozone")
+    before = [p.process_type for p in fresh_state.process_sequence]
+    cache = _cache_with("B1", [SPIN_COATING_STEP, EVAPORATION_STEP])
+
+    with (
+        patch("data_manager.autofill_process_from_batch", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError),
+    ):
+        apply_whole_experiment_template(fresh_state, "url", "token", cache, "B1")
+
+    assert [p.process_type for p in fresh_state.process_sequence] == before
+    assert fresh_state.whole_experiment_template_batch_id is None
+
+
+def test_a_failed_adopt_keeps_the_processs_earlier_autofill(fresh_state):
+    process = fresh_state.add_process("Spin Coating")
+    rebuild_field_specs(fresh_state)
+    apply_process_override(
+        fresh_state, process, "url", "token", _cache_with("B1", [SPIN_COATING_STEP]), "B1"
+    )
+    assert process.field_specs["Material name"].value == "Me4PACz"
+
+    with (
+        patch("data_manager.autofill_process_from_batch", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError),
+    ):
+        apply_process_override(
+            fresh_state, process, "url", "token", _cache_with("B2", [SPIN_COATING_STEP]), "B2"
+        )
+
+    assert process.field_specs["Material name"].value == "Me4PACz"
+    assert process.source_override_batch_id == "B1"
+
+
+def test_atmospheric_values_on_a_generic_process_step_switch_the_block_on():
+    step = {"process_parameters": [{"name": "Room temperature [°C]", "value_number": 22.0}]}
+    assert infer_config_from_source_step("Generic Process", step).get("add_atmospheric") is True
+    assert "add_atmospheric" not in infer_config_from_source_step("Generic Process", {})
+
+
+def test_upload_reports_a_failed_processing_instead_of_success():
+    failed = _mock_response(
+        {
+            "data": {
+                "process_running": False,
+                "process_status": "FAILURE",
+                "last_status_message": "bad sheet",
+            }
+        }
+    )
+    with (
+        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch("hysprint_utils.api_calls.requests.get", return_value=failed),
+        patch("hysprint_utils.api_calls.time.sleep"),
+        pytest.raises(RuntimeError, match="bad sheet"),
+    ):
+        upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "t.xlsx", b"x")
+
+
+def test_debug_report_html_escapes_archive_values():
+    from gui_components import _debug_report_to_html
+
+    report = {
+        "mapped": [
+            {
+                "excel_key": "k",
+                "value": "<img src=x onerror=1>",
+                "unit_verified": True,
+                "paths": ["a"],
+            }
+        ],
+        "ignored": [{"path": "<b>p</b>", "value": "<script>x</script>"}],
+    }
+    html_text = _debug_report_to_html(report, "Spin Coating", "1")
+    assert "<img" not in html_text and "<script>" not in html_text and "<b>p</b>" not in html_text

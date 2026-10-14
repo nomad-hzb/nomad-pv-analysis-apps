@@ -30,6 +30,7 @@ from gui_components import (
 from IPython.display import HTML, display
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def initialize_ui(
 
     def on_upload_file(b):
         logger.debug("on_upload_file fired (upload_button id=%s)", id(upload_and_process))
-        _on_upload_file(upload_and_process, out2, get_nomad_ids_of_entry)
+        _on_upload_file(upload_and_process, out2)
 
     def on_file_change(change):
         on_file_input_change(
@@ -146,7 +147,16 @@ def initialize_ui(
     search_field.observe(on_search_change, names="value")
 
     display(
-        widgets.VBox([batch_selection_container, load_button, out, upload_button_container, out2])
+        widgets.VBox(
+            [
+                manual_panel(__file__),
+                batch_selection_container,
+                load_button,
+                out,
+                upload_button_container,
+                out2,
+            ]
+        )
     )
 
     # Record every widget created during this call so the next run can clean them up.
@@ -288,11 +298,10 @@ def _on_load_button_clicked(
             print(f"Unexpected error: {exc}")
 
 
-def _on_upload_file(upload_and_process, out2, get_nomad_ids_of_entry):
+def _on_upload_file(upload_and_process, out2):
     upload_files_for_samples(
         state.sample_files_dict,
         state.file_type_dict,
         state.uploaded_files_data,
-        get_nomad_ids_of_entry,
         out2,
     )

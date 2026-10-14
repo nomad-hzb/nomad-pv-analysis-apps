@@ -87,6 +87,8 @@ def generate_bases(size):
     return bases
 
 
+SUPPORTED_BASE_SIZES = (3, 4)
+
 # Cache for publication bases to avoid regeneration
 _publication_bases_cache = {}
 
@@ -96,8 +98,14 @@ def publication_pattern(shape, black_percentage, base_size=4):
     Combinatorial inkjet printing pattern from publication.
     Uses optimized base matrices that maximize minimum distance between droplets.
 
-    base_size: 3, 4, or 5 (larger sizes are very slow)
+    base_size: 3 or 4. Base 5 is refused: building its bases enumerates every placement of
+    up to 12 droplets in 25 cells (tens to hundreds of GB of RAM), which kills the kernel.
     """
+    if base_size not in SUPPORTED_BASE_SIZES:
+        raise ValueError(
+            f"Publication base {base_size} is not supported (use {SUPPORTED_BASE_SIZES}): "
+            "larger bases need more memory than a kernel has."
+        )
     # Generate or retrieve cached bases
     if base_size not in _publication_bases_cache:
         _publication_bases_cache[base_size] = generate_bases(base_size)
@@ -140,10 +148,8 @@ def create_bayer_matrix(n):
 
 def random_dithering(shape, black_percentage, seed=None):
     """Random distribution of black pixels"""
-    if seed is not None:
-        np.random.seed(seed)
-    threshold = black_percentage / 100.0
-    return np.random.random(shape) < threshold
+    rng = np.random.default_rng(seed)
+    return _lowest_fraction_mask(rng.random(shape), black_percentage)
 
 
 def ordered_dithering(shape, black_percentage):
@@ -162,153 +168,112 @@ def ordered_dithering(shape, black_percentage):
     return tiled < threshold
 
 
-def halftone_pattern(shape, black_percentage, angle=45):
-    """Halftone screen pattern at specified angle"""
-    rows, cols = shape
-    frequency = 10  # dots per unit
-
-    # Create coordinate grid
-    y, x = np.meshgrid(np.arange(rows), np.arange(cols), indexing="ij")
-
-    # Rotate coordinates
-    angle_rad = np.radians(angle)
-    x_rot = x * np.cos(angle_rad) - y * np.sin(angle_rad)
-    y_rot = x * np.sin(angle_rad) + y * np.cos(angle_rad)
-
-    # Create halftone pattern
-    pattern = np.sin(x_rot * 2 * np.pi / frequency) * np.sin(y_rot * 2 * np.pi / frequency)
-
-    # Threshold based on black percentage
-    threshold = np.percentile(pattern, (1 - black_percentage / 100.0) * 100)
-    return pattern <= threshold
+# Above this many points the pure-Python Poisson loop takes minutes (100 mm x 100 mm at 350 dpi
+# is about 1.9 million pixels), so such requests use the blue-noise map instead.
+MAX_POISSON_POINTS = 20_000
 
 
-def grid_pattern(shape, black_percentage):
-    """Grid pattern for mirroring compatibility"""
-    rows, cols = shape
-    grid_size = 4
-
-    # Create base grid
-    base = np.zeros((grid_size, grid_size), dtype=bool)
-    n_black = int((grid_size * grid_size) * black_percentage / 100.0)
-
-    # Fill grid in a pattern that's mirror-compatible
-    positions = []
-    for i in range(grid_size):
-        for j in range(grid_size):
-            positions.append((i, j))
-
-    # Select positions symmetrically
-    positions_sorted = sorted(positions, key=lambda p: p[0] + p[1])
-    for i in range(min(n_black, len(positions_sorted))):
-        pos = positions_sorted[i]
-        base[pos] = True
-
-    # Tile to cover image
-    tiled = np.tile(base, (rows // grid_size + 1, cols // grid_size + 1))
-    return tiled[:rows, :cols]
+def _lowest_fraction_mask(values, black_percentage):
+    """Boolean mask with exactly round(black_percentage % of the pixels) True, at the lowest
+    `values`. Thresholding on a rank instead of on a fixed number gives the requested
+    coverage whatever the distribution of the values is."""
+    values = np.asarray(values)
+    total = values.size
+    n_black = int(round(total * min(max(black_percentage, 0.0), 100.0) / 100.0))
+    mask = np.zeros(total, dtype=bool)
+    if n_black >= total:
+        mask[:] = True
+    elif n_black > 0:
+        mask[np.argpartition(values.ravel(), n_black - 1)[:n_black]] = True
+    return mask.reshape(values.shape)
 
 
-def checkerboard_pattern(shape, black_percentage):
-    """Checkerboard pattern with density control"""
-    rows, cols = shape
-
-    # Base checkerboard
-    row_idx = np.arange(rows)[:, np.newaxis]
-    col_idx = np.arange(cols)[np.newaxis, :]
-    base_checker = ((row_idx + col_idx) % 2).astype(bool)
-
-    # Adjust density
-    if black_percentage < 50:
-        # Remove some black pixels
-        mask = np.random.random(shape) < (black_percentage / 50.0)
-        return base_checker & mask
-    else:
-        # Add black pixels to white areas
-        extra_mask = np.random.random(shape) < ((black_percentage - 50) / 50.0)
-        return base_checker | (~base_checker & extra_mask)
+def _blue_noise_values(shape, rng):
+    """High-pass filtered noise in 0..1: neighbouring pixels avoid being both low."""
+    noise = rng.random(shape)
+    if not SCIPY_AVAILABLE:
+        return noise
+    return np.clip(noise - ndimage.gaussian_filter(noise, sigma=1.0) + 0.5, 0, 1)
 
 
-def poisson_disk_sampling(shape, black_percentage, min_distance=None):
+def poisson_disk_sampling(shape, black_percentage, min_distance=None, seed=None):
     """
     Poisson disk sampling - guarantees minimum distance between points
-    Creates very uniform spatial distribution
+    Creates very uniform spatial distribution.
+
+    The minimum distance follows the requested density (no 2 px floor: that floor capped every
+    request above 16% at 15.8%). The number of black pixels is always exactly the requested
+    share: points the sampler cannot place (a dense request, or two points landing on one
+    pixel) are added at the lowest blue-noise values, and a request with more than
+    MAX_POISSON_POINTS points uses the blue-noise map alone.
     """
+    rng = np.random.default_rng(seed)
     rows, cols = shape
-
-    # Calculate number of black pixels needed
     total_pixels = rows * cols
-    n_black = int(total_pixels * black_percentage / 100.0)
+    n_black = int(round(total_pixels * min(max(black_percentage, 0.0), 100.0) / 100.0))
+    pattern = np.zeros(shape, dtype=bool)
+    if n_black == 0 or total_pixels == 0:
+        return pattern
+    if n_black >= total_pixels:
+        return ~pattern
 
-    # Calculate minimum distance if not provided
-    if min_distance is None:
-        # Estimate based on density
-        area_per_point = total_pixels / n_black if n_black > 0 else total_pixels
-        min_distance = max(2, int(np.sqrt(area_per_point) * 0.7))
+    fill_values = _blue_noise_values(shape, rng)
+    if n_black <= MAX_POISSON_POINTS:
+        if min_distance is None:
+            min_distance = 0.7 * np.sqrt(total_pixels / n_black)
+        for x, y in _bridson_points(rows, cols, min_distance, n_black, rng):
+            pattern[min(int(y), rows - 1), min(int(x), cols - 1)] = True
+    missing = n_black - int(pattern.sum())
+    if missing > 0:
+        candidates = np.where(pattern, np.inf, fill_values)
+        order = np.argpartition(candidates.ravel(), missing - 1)[:missing]
+        pattern.ravel()[order] = True
+    return pattern
 
-    # Initialize grid for fast lookup
+
+def _bridson_points(rows, cols, min_distance, max_points, rng):
+    """Poisson-disk points (x, y) in a cols x rows field, at most max_points of them."""
     cell_size = min_distance / np.sqrt(2)
     grid_w = int(np.ceil(cols / cell_size))
     grid_h = int(np.ceil(rows / cell_size))
-    grid = [[None for _ in range(grid_w)] for _ in range(grid_h)]
+    grid = [[None] * grid_w for _ in range(grid_h)]
 
-    def grid_coords(point):
+    def cell(point):
         return int(point[0] / cell_size), int(point[1] / cell_size)
 
     def is_valid(point):
-        gx, gy = grid_coords(point)
-        # Check nearby cells
+        gx, gy = cell(point)
         for dy in range(-2, 3):
             for dx in range(-2, 3):
                 nx, ny = gx + dx, gy + dy
                 if 0 <= nx < grid_w and 0 <= ny < grid_h and grid[ny][nx] is not None:
                     other = grid[ny][nx]
-                    dist = np.sqrt((point[0] - other[0]) ** 2 + (point[1] - other[1]) ** 2)
-                    if dist < min_distance:
+                    if (point[0] - other[0]) ** 2 + (point[1] - other[1]) ** 2 < min_distance**2:
                         return False
         return True
 
-    # Start with random point
-    points = []
-    active = []
-
-    first_point = (np.random.uniform(0, cols), np.random.uniform(0, rows))
-    points.append(first_point)
-    active.append(first_point)
-    gx, gy = grid_coords(first_point)
-    grid[gy][gx] = first_point
-
-    # Generate points
-    k = 30  # attempts before rejection
-    while active and len(points) < n_black:
-        idx = np.random.randint(len(active))
+    first = (rng.uniform(0, cols), rng.uniform(0, rows))
+    points = [first]
+    active = [first]
+    gx, gy = cell(first)
+    grid[gy][gx] = first
+    attempts = 30
+    while active and len(points) < max_points:
+        idx = int(rng.integers(len(active)))
         point = active[idx]
-        found = False
-
-        for _ in range(k):
-            angle = np.random.uniform(0, 2 * np.pi)
-            radius = np.random.uniform(min_distance, 2 * min_distance)
-            new_point = (point[0] + radius * np.cos(angle), point[1] + radius * np.sin(angle))
-
-            if 0 <= new_point[0] < cols and 0 <= new_point[1] < rows and is_valid(new_point):
-                points.append(new_point)
-                active.append(new_point)
-                gx, gy = grid_coords(new_point)
-                grid[gy][gx] = new_point
-                found = True
+        for _ in range(attempts):
+            angle = rng.uniform(0, 2 * np.pi)
+            radius = rng.uniform(min_distance, 2 * min_distance)
+            candidate = (point[0] + radius * np.cos(angle), point[1] + radius * np.sin(angle))
+            if 0 <= candidate[0] < cols and 0 <= candidate[1] < rows and is_valid(candidate):
+                points.append(candidate)
+                active.append(candidate)
+                gx, gy = cell(candidate)
+                grid[gy][gx] = candidate
                 break
-
-        if not found:
+        else:
             active.pop(idx)
-
-    # Convert points to boolean array
-    pattern = np.zeros(shape, dtype=bool)
-    for x, y in points:
-        ix, iy = int(x), int(y)
-        if 0 <= iy < rows and 0 <= ix < cols:
-            pattern[iy, ix] = True
-
-    return pattern
+    return points
 
 
 def floyd_steinberg_dither(shape, black_percentage):
@@ -391,32 +356,43 @@ def void_and_cluster(shape, black_percentage):
     return pattern
 
 
-def jittered_grid(shape, black_percentage, jitter_amount=0.4):
+def jittered_grid(shape, black_percentage, jitter_amount=0.4, seed=None):
     """
     Jittered grid - regular grid with random offsets
-    Balances structure with randomness
+    Balances structure with randomness.
+
+    Exactly the requested share of pixels is black. The field is divided into about
+    n_black cells (float cell sizes, so any density works; the old integer spacing was 1 above
+    25% and turned every pixel black), one point is dropped at a random offset inside each
+    cell, and points that collide on a pixel are replaced by random free pixels.
     """
+    rng = np.random.default_rng(seed)
     rows, cols = shape
     total_pixels = rows * cols
-    n_black = int(total_pixels * black_percentage / 100.0)
-
-    # Calculate grid spacing
-    spacing = max(1, int(np.sqrt(total_pixels / n_black)))
-
+    n_black = int(round(total_pixels * min(max(black_percentage, 0.0), 100.0) / 100.0))
     pattern = np.zeros(shape, dtype=bool)
+    if n_black == 0 or total_pixels == 0:
+        return pattern
+    if n_black >= total_pixels:
+        return ~pattern
 
-    # Place points on jittered grid
-    for i in range(0, rows, spacing):
-        for j in range(0, cols, spacing):
-            # Add random jitter
-            jitter_x = int(np.random.uniform(-spacing * jitter_amount, spacing * jitter_amount))
-            jitter_y = int(np.random.uniform(-spacing * jitter_amount, spacing * jitter_amount))
-
-            x = np.clip(j + jitter_x, 0, cols - 1)
-            y = np.clip(i + jitter_y, 0, rows - 1)
-
-            pattern[y, x] = True
-
+    cells_x = max(1, int(np.ceil(np.sqrt(n_black * cols / rows))))
+    cells_y = max(1, int(np.ceil(n_black / cells_x)))
+    cells_x = min(cells_x, cols)
+    cells_y = min(cells_y, rows)
+    n_cells = cells_x * cells_y
+    chosen = rng.permutation(n_cells)[: min(n_black, n_cells)]
+    cell_w, cell_h = cols / cells_x, rows / cells_y
+    for index in chosen:
+        cy, cx = divmod(int(index), cells_x)
+        # offset from the cell centre, up to jitter_amount of the cell size either way
+        x = (cx + 0.5 + rng.uniform(-jitter_amount, jitter_amount)) * cell_w
+        y = (cy + 0.5 + rng.uniform(-jitter_amount, jitter_amount)) * cell_h
+        pattern[min(int(y), rows - 1), min(int(x), cols - 1)] = True
+    short = n_black - int(pattern.sum())
+    if short > 0:
+        free = np.flatnonzero(~pattern.ravel())
+        pattern.ravel()[rng.choice(free, size=short, replace=False)] = True
     return pattern
 
 
@@ -467,23 +443,14 @@ def complementary_pattern(shape, black_percentage, pattern_id=0):
         return tiled >= (1 - threshold)
 
 
-def blue_noise_pattern(shape, black_percentage):
-    """Blue noise pattern (high frequency noise)"""
-    rows, cols = shape
-    # Generate random noise
-    noise = np.random.random(shape)
+def blue_noise_pattern(shape, black_percentage, seed=None):
+    """Blue noise pattern (high frequency noise) with exactly the requested black share.
 
-    if SCIPY_AVAILABLE:
-        # Apply high-pass filter to create blue noise characteristics
-        smoothed = ndimage.gaussian_filter(noise, sigma=1.0)
-        blue_noise = noise - smoothed + 0.5
-        blue_noise = np.clip(blue_noise, 0, 1)
-    else:
-        # Fallback to simple high-frequency noise
-        blue_noise = noise
-
-    threshold = 1 - (black_percentage / 100.0)
-    return blue_noise < threshold
+    The old version thresholded at 1 - share, which marked the opposite share black (20%
+    requested gave 86%), and the filtering makes the values non-uniform, so a fixed threshold
+    could not be exact anyway: the lowest `share` of the values are black instead."""
+    rng = np.random.default_rng(seed)
+    return _lowest_fraction_mask(_blue_noise_values(shape, rng), black_percentage)
 
 
 def create_bitmap(
@@ -552,10 +519,30 @@ def create_bitmap(
     return img
 
 
+def to_binary_image(img):
+    """The 1-bit version of a black/white image, so what is saved or shown is exactly the
+    mask. (A lossy format such as JPEG puts grey ringing around every dot, and a printer RIP
+    that thresholds it then changes the drop count.)"""
+    dither = getattr(Image, "Dither", Image).NONE
+    return img.convert("1", dither=dither)
+
+
+def black_coverage(img, margins, dpi):
+    """Percentage of the active area (inside the margins) that is black, as generated."""
+    array = np.asarray(img)
+    top = mm_to_pixels(margins["top"], dpi)
+    bottom = array.shape[0] - mm_to_pixels(margins["bottom"], dpi)
+    left = mm_to_pixels(margins["left"], dpi)
+    right = array.shape[1] - mm_to_pixels(margins["right"], dpi)
+    if bottom <= top or right <= left:
+        return 0.0
+    return float(100.0 * (array[top:bottom, left:right] == 0).mean())
+
+
 def image_to_base64(img, format="PNG"):
     """Convert PIL Image to base64 string for display"""
     buffer = io.BytesIO()
-    img.save(buffer, format=format)
+    to_binary_image(img).save(buffer, format=format)
     buffer.seek(0)
     img_str = base64.b64encode(buffer.read()).decode()
     return f"data:image/{format.lower()};base64,{img_str}"

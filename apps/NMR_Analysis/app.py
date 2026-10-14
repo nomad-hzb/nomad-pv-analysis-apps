@@ -15,6 +15,7 @@ from IPython.display import display as ipydisplay
 
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class NMRPlotterApp:
         ipydisplay(
             widgets.VBox(
                 [
+                    manual_panel(__file__),
                     self._demo_btn,
                     self._batch_panel.widget,
                     self._data_ui_out,
@@ -86,7 +88,7 @@ class NMRPlotterApp:
             return
         with self._status_out:
             ErrorHandler.log_success(
-                "Loaded %d demo NMR spectra." % len(self._dm.sample_ids), self._status_out
+                "Loaded %d demo NMR spectra." % len(self._dm.measurement_ids), self._status_out
             )
         self._build_data_ui()
 
@@ -118,7 +120,7 @@ class NMRPlotterApp:
 
         with self._status_out:
             ErrorHandler.log_success(
-                "Loaded %d NMR spectra." % len(self._dm.sample_ids), self._status_out
+                "Loaded %d NMR spectra." % len(self._dm.measurement_ids), self._status_out
             )
 
         self._build_data_ui()

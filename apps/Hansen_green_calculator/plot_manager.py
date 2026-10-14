@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from data_manager import calculate_enclosing_sphere, create_sphere_mesh
+from data_manager import HANSEN_D_WEIGHT, calculate_enclosing_sphere, create_sphere_mesh
 from plotly.subplots import make_subplots
 
 logger = logging.getLogger(__name__)
@@ -139,12 +139,19 @@ def solvent_3d(
 # ---------------------------------------------------------------------------
 
 
+SELECTED_COLOUR = "#e4572e"
+
+
 def scatter_2d(
     df: pd.DataFrame,
     x_col: str,
     y_col: str,
     color_col: Optional[str] = None,
+    selected: Optional[list] = None,
 ) -> go.Figure:
+    """Scatter of two columns. Trace 0 holds every plotted point (in the order of the rows that
+    have all the plotted columns); trace 1 is the selection, drawn in one colour on top of it
+    (empty when nothing is selected), so the selection can be updated in place."""
     cols = [x_col, y_col] + ([color_col] if color_col else [])
     fdf = df.dropna(subset=cols)
     fig = go.Figure()
@@ -165,6 +172,18 @@ def scatter_2d(
             + f"{x_col}: %{{x}}<br>{y_col}: %{{y}}"
             + ("<br>" + color_col + ": %{marker.color}" if color_col else "")
             + "<extra></extra>",
+        )
+    )
+    chosen = fdf.loc[fdf.index.intersection(selected)] if selected else fdf.iloc[0:0]
+    fig.add_trace(
+        go.Scatter(
+            x=chosen[x_col],
+            y=chosen[y_col],
+            mode="markers",
+            marker=dict(size=13, color=SELECTED_COLOUR, line=dict(color="black", width=1.5)),
+            text=chosen.get("Name", pd.Series([""] * len(chosen), index=chosen.index)),
+            hovertemplate="<b>%{text}</b> (selected)<extra></extra>",
+            name="Selected",
         )
     )
     fig.update_layout(
@@ -264,7 +283,9 @@ def blend_3d(
                 mode="markers",
                 marker=marker,
                 text=selected_df.get("Name", pd.Series([""] * len(selected_df))),
-                hovertemplate="<b>SELECTED: %{text}</b><br>D: %{x}<br>P: %{y}<br>H: %{z}<extra></extra>",
+                hovertemplate=(
+                    "<b>SELECTED: %{text}</b><br>D: %{x}<br>P: %{y}<br>H: %{z}<extra></extra>"
+                ),
                 name="Selected",
             )
         )
@@ -317,33 +338,43 @@ def inks_3d(
     df: pd.DataFrame,
     show_spheres: bool = True,
 ) -> go.Figure:
+    # The x axis is 2*D: the Hansen distance is sqrt(4 dD^2 + dP^2 + dH^2), so only in this
+    # space is a sphere a set of points at one Hansen distance. The hover shows the real dD.
+    plot_df = df.assign(D_scaled=df["D"] * HANSEN_D_WEIGHT)
+    # One colour per solute, fixed here and reused for its envelope (the envelopes used to be
+    # coloured in alphabetical order while the points were coloured in order of appearance).
+    palette = px.colors.qualitative.Plotly
+    solute_colors = {
+        solute: palette[i % len(palette)]
+        for i, solute in enumerate(df["Solutes"].dropna().unique())
+    }
     fig = px.scatter_3d(
-        df,
-        x="D",
+        plot_df,
+        x="D_scaled",
         y="P",
         z="H",
         color="Solutes",
-        custom_data=["formatted_solvents"],
-        labels={"D": "D", "P": "P", "H": "H"},
+        color_discrete_map=solute_colors,
+        custom_data=["formatted_solvents", "D"],
+        labels={"D_scaled": "2·D", "P": "P", "H": "H"},
     )
     fig.update_traces(
         hovertemplate=(
             "<b>%{fullData.name}</b><br>"
-            "D: %{x}<br>P: %{y}<br>H: %{z}<br>"
+            "D: %{customdata[1]}<br>P: %{y}<br>H: %{z}<br>"
             "%{customdata[0]}<extra></extra>"
         )
     )
 
     if show_spheres and "Solutes" in df.columns:
-        colors = px.colors.qualitative.Plotly
-        for i, (solute_name, group) in enumerate(df.groupby("Solutes")):
+        for solute_name, group in df.groupby("Solutes"):
             if len(group) < 2:
                 continue
-            center, radius = calculate_enclosing_sphere(group)
+            center, radius = calculate_enclosing_sphere(group, d_scale=HANSEN_D_WEIGHT)
             xs, ys, zs = create_sphere_mesh(center, radius)
-            col = colors[i % len(colors)]
+            col = solute_colors[solute_name]
             info_lines = [
-                f"<b>{solute_name}</b>",
+                f"<b>{solute_name}</b> (data envelope)",
                 f"{len(group)} data points",
                 f"D: {group['D'].min():.2f} – {group['D'].max():.2f}",
                 f"P: {group['P'].min():.2f} – {group['P'].max():.2f}",
@@ -371,7 +402,7 @@ def inks_3d(
 
     # Equalise grid spacing
     ranges = [
-        df["D"].max() - df["D"].min(),
+        plot_df["D_scaled"].max() - plot_df["D_scaled"].min(),
         df["P"].max() - df["P"].min(),
         df["H"].max() - df["H"].min(),
     ]
@@ -381,7 +412,7 @@ def inks_3d(
         height=680,
         margin=dict(l=0, r=0, b=0, t=30),
         scene=dict(
-            xaxis_title="D",
+            xaxis_title="2·D",
             yaxis_title="P",
             zaxis_title="H",
             aspectmode="cube",

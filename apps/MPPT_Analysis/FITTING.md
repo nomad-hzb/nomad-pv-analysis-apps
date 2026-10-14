@@ -59,16 +59,33 @@ full set, not a hand-picked subset. In fitting order, each `parfunc` returns:
   Biexponential and Logistic+Exponential (which can have a genuine dip-then-
   recover shape), the stabilized reference comes from `find_tS()`'s real
   peak-after-dip detection.
-- `tS` (`initial_stabilization_time` in NOMAD) — when the burn-in transient
+- `tS` (`initial_stabilization_time` in NOMAD) - when the burn-in transient
   is considered over. `0.0` for the monotonic-decay models (see above);
-  for Biexponential it's a closed-form constant from the faster of its two
-  decay constants (`-tau_fast * ln(0.01)`); for Logistic+Exponential it's
-  `find_tS()`'s real detected peak.
-- `PCE_after_1000_h` — the PCE (%) at t=1000h, via `pce_after_1000h()`.
-- `LEY` (`lifetime_energy_yield`) — time-integral of the fitted curve up to
-  T80 (`calculate_ley()`), combining power output and durability into one
-  number. Per the NOMAD schema's own definition, this always integrates up
-  to **T80** (not Ts80), even for Biexponential/Logistic+Exponential.
+  for Biexponential it is the closed-form `-tau_fast * ln(0.01)` **only if it
+  lies inside the measured range**, otherwise `NaN` (it used to report 1350 h
+  for 100 h of data); for Logistic+Exponential it is `find_tS()`'s highest
+  point after the fitted curve's minimum, searched **inside the measured
+  window only** (a monotonic decay has no dip, so `0.0`; the old search ran
+  over a 10x extrapolation and always returned ten times the measurement
+  length). When `tS` is `NaN`, `Ts80`/`Ts95` are `NaN` too.
+- `PCE_after_1000_h` - the PCE (%) at t=1000h, via `pce_after_1000h()`.
+- `LEY` (`lifetime_energy_yield`) - time-integral of the fitted curve up to
+  T80, in **kWh/m^2** for every model. The app works in mW/cm^2 and hours, so
+  the integral is in mWh/cm^2, and 1 mWh/cm^2 = 0.01 kWh/m^2: one constant,
+  `LEY_MWH_CM2_TO_KWH_M2`, used by all six models (previously Stretched Exp
+  and ERFC multiplied by 10 and the others not at all, so stored values were
+  100x to 1000x too large and not comparable across models). Per the NOMAD
+  schema's own definition it always integrates up to **T80** (not Ts80);
+  when T80 is not reached it integrates over the measured range. Existing
+  NOMAD entries written before this fix need re-fitting (or rescaling by
+  model: x0.01 for the models that did not multiply by 10, x0.001 for the two
+  that did).
+- `LEY_1000h` - the same energy accumulated over the first 1000 h
+  (`ley_after_1000h()`), written to `fit_parameters` in kWh/m^2, with the same
+  policy as `PCE_after_1000_h`: integrate the real curve when the measurement
+  reaches 1000 h, else the fitted model (clipped at zero power) when 1000 h
+  lies within the 10x horizon, else empty. A constant 20 mW/cm^2 for 1000 h
+  is 200 kWh/m^2.
 
 ### The real-else-extrapolated-else-NaN policy
 
@@ -77,7 +94,13 @@ Every T80/T95/Ts80/Ts95 value follows the same rule, implemented once in
 `fitting_tools.py`) and reused by every model instead of being duplicated:
 
 1. **If the real measured curve already reaches the threshold**, report
-   that real, non-extrapolated time.
+   that real, non-extrapolated time. "Reaches" means a **sustained**
+   crossing: the curve, smoothed with a rolling median, stays at or below
+   the threshold for at least max(3, n/100) points (or to the end of the
+   data), and for T80/T95 only after the curve's own peak. One dropout point,
+   noise around the threshold, or a start that ramps up from low values is
+   not a crossing (a zero point at 1.25 h used to give T80 = 1.25 h for a
+   curve whose real T80 is 71 h, and a ramp-up start gave T80 = 0).
 2. **Otherwise**, report the time at which the *fitted model* — evaluated
    beyond the real measurement — is predicted to reach it.
 3. **...but only up to `EXTRAPOLATION_HORIZON_FACTOR` (= 10) times the
@@ -118,6 +141,16 @@ to be accepted server-side. An empty field is also NOMAD's own native way to
 represent "no value" for a scalar quantity - already used elsewhere in this
 app for `T80_linear` when it's inapplicable (see `erfc_params`).
 
+## Power sign convention
+
+NOMAD stores generated power (and current density) as negative numbers. The
+loader detects this per entry (median power below zero) and flips power and
+current density together, so inside the app power is positive for a
+generating cell and every figure of merit has one orientation. An entry that
+is already positive is left alone (the demo data used to be positive power
+next to negative current and was flipped into nonsense). Time is converted
+from seconds to hours.
+
 ## Writing results back to NOMAD
 
 `DataManager.write_fit_results_to_nomad()` POSTs one archive-edit request
@@ -137,6 +170,17 @@ things worth knowing if you touch this:
   from `self.url` (already `URL_BASE + API_ENDPOINT`) plus the entry's
   `upload_id`/`entry_id` — rendered as a clickable link by
   `gui_components.py`.
+
+## Fits already stored in NOMAD
+
+When the data is loaded, `results[0]` of every MPPT entry is read
+(`stored_fit_from_archive()`). A curve that has no fit in the current session but whose entry
+already holds a fit or figures of merit (`fit_method`, T80, T95, Ts80, Ts95, stabilization time,
+LEY, R2) is listed in the Detailed Fit Results table with its stored values, times converted
+back to hours, and the note "Stored in NOMAD". A curve fitted in the session shows the new fit
+and a note that NOMAD already holds results, so an overwrite is visible before it is written.
+The processed archive of the HZB SE Oasis currently returns the metrics but not `fit_method` or
+`fit_parameters`; such rows read "metrics only, fit details not available".
 
 ## References
 

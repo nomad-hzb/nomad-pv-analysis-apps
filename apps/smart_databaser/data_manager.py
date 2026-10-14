@@ -2,24 +2,23 @@
 # Zero widget imports. Experiment state model, no-clobber write path, NOMAD live queries +
 # session cache, and (in later implementation steps) Excel build/upload logic.
 
+import copy
 import io
 import json
 import logging
 import re
 import statistics
-import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-import requests
 from alias_config import resolve_progress_units
-from experiment_excel_builder import ExperimentExcelBuilder
+from excel_creator_modules import ExperimentExcelBuilder, add_experiment_sheet
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, Field
-from sheet_experiment import add_experiment_sheet
 
 from hysprint_utils.api_calls import (
     get_all_uploads,
@@ -28,11 +27,14 @@ from hysprint_utils.api_calls import (
     get_entryid,
     get_ids_in_batch,
     get_processing_steps,
+    upload_raw_file_and_wait,
 )
 from hysprint_utils.process_specs import (
     ATMOSPHERIC_CONFIG_KEY,  # noqa: F401 (re-exported for gui_components)
+    ATMOSPHERIC_FIELDS,
     AVAILABLE_PROCESSES,
     build_boolean_config_fields,
+    build_boolean_config_probes,
     build_configurable_process_types,
     build_default_config_by_process_type,
     build_field_paths,
@@ -40,6 +42,7 @@ from hysprint_utils.process_specs import (
     build_indexed_config_keys,
     build_material_gated_process_types,
     build_numeric_config_fields,
+    build_quenching_field_kinds,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,27 +84,14 @@ DATE_FIELD_FORMATS = {"Date": "%d-%m-%Y", "Datetime": "%d.%m.%Y %H:%M:%S"}
 # missing_critical_fields / gui_components.create_finish_section's hard gate.
 CRITICAL_EXPERIMENT_INFO_KEYS = ("Batch", "Project_Name")
 
-# Process catalog - mirrors Excel_creator's voila_experiment_app.py MinimalistExperimentBuilder
-# (available_processes / configurable_processes / _get_default_config), reimplemented here as
-# plain data since Excel_creator does not export these as importable module-level constants
-# (they're literals inside a widget class) and this module must have zero widget imports.
-# The actual field-generation logic (generate_steps_for_process) is NOT duplicated - see
+# Process catalog: everything below (process types, config controls, defaults, archive
+# paths, probes) is derived from hysprint_utils.process_specs, the single source shared with
+# Excel_creator, so this module needs no copy of it and keeps zero widget imports. The actual
+# field-generation logic (generate_steps_for_process) is not duplicated either - see
 # generate_header_workbook() below, which calls Excel_creator's own sheet_experiment.py.
 #
-# AVAILABLE_PROCESSES itself is imported directly above from process_specs (it no longer
-# needs "mirroring" - both this module and voila_experiment_app.py read the same list).
-#
-# "Evaporation"'s old "carbon_paste" boolean config (previously present in
-# DEFAULT_CONFIG_BY_PROCESS_TYPE and BOOLEAN_CONFIG_FIELDS below) was confirmed-dead -
-# "Evaporation" was never in CONFIGURABLE_PROCESS_TYPES, which gui_components.py's
-# control-rendering gates on, and sheet_experiment.py's Evaporation branch never read a
-# "carbon_paste" config key either - and is not carried over by process_specs.py's
-# derivation. See that module's note for the verification. Slot Die Coating's
-# "gasquenching"/"vacuumquenching" declarations ARE carried over even though they're
-# similarly inert on the Excel-generation side (sheet_experiment.py's Slot Die Coating
-# branch never reads them) - unlike carbon_paste, their checkboxes DO render, so
-# dropping them would be a user-visible change; see process_specs.py's Slot Die Coating
-# entry for the full note.
+# Slot Die Coating declares no gas/vacuum quenching blocks (removed with #38/#39: its sheet
+# branch never read them), so none of the quenching controls below apply to it.
 CONFIGURABLE_PROCESS_TYPES: set[str] = build_configurable_process_types()
 
 DEFAULT_CONFIG_BY_PROCESS_TYPE: dict[str, dict] = build_default_config_by_process_type()
@@ -114,30 +104,17 @@ NUMERIC_CONFIG_FIELDS = build_numeric_config_fields()
 # process (not Experiment Info, which never appears in ExperimentState.process_sequence).
 BOOLEAN_CONFIG_FIELDS = build_boolean_config_fields()
 
-# config_key -> Excel field key(s) whose presence on a source archive step implies that
-# optional block was actually used there - probed by infer_config_from_source_step so a
-# boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already
-# are (see INDEXED_CONFIG_KEYS). Without this, a source step with real Anti solvent/Gas
-# quenching/Vacuum quenching/Air Knife quenching/GAVD data was silently dropped on
-# adopt/replicate, since the target process's config stayed at its all-False default and
-# never gained a field_spec
-# slot for autofill_process_from_batch to write into. Not every BOOLEAN_CONFIG_FIELDS key
-# has a probe yet - those simply never get inferred, same as before this change.
-#
-# IMPORTANT: per process_specs.py, Gas quenching and Vacuum quenching share the same
-# archive "quenching" sub-object and even overlap on some field names ("duration" backs
-# both "Gas quenching duration [s]" AND "Vacuum quenching duration [s]"; same for
-# "pressure") - probing those would set BOTH booleans whenever either one has data. Only
-# each block's own EXCLUSIVE field is used here (confirmed against process_specs.py,
-# not guessed): "Gas" (quenching.gas) for gas quenching, "Vacuum quenching start time [s]"
-# (quenching.start_time) for vacuum quenching.
-BOOLEAN_CONFIG_PROBE_FIELDS: dict[str, tuple[str, ...]] = {
-    "antisolvent": ("Anti solvent name", "Anti solvent volume [ml]"),
-    "gasquenching": ("Gas", "Gas quenching flow rate [ml/s]", "Gas quenching velocity [m/s]"),
-    "vacuumquenching": ("Vacuum quenching start time [s]",),
-    "airknifequenching": ("Air knife angle [°]", "Bead volume [mm/s]", "Drying speed [cm/min]"),
-    "gavd": ("GAVD start time [s]", "GAVD vacuum pressure [mbar]"),
-}
+# {process_type: {config_key: Excel field keys}} whose presence on a source archive step implies
+# that optional block was actually used there - probed by infer_config_from_source_step so a
+# boolean config gets widened to True the same way NUMERIC_CONFIG_FIELDS counts already are
+# (see INDEXED_CONFIG_KEYS). Derived from process_specs: for each optional block, the fields
+# whose archive path no other block of that process shares (Gas and Vacuum quenching both
+# read quenching.duration/pressure, so in Spin Coating only their exclusive fields probe).
+BOOLEAN_CONFIG_PROBES = build_boolean_config_probes()
+
+# Quenching fields that only apply to one kind of archive `quenching` section, see
+# _field_applies_to_step.
+QUENCHING_FIELD_KINDS = build_quenching_field_kinds()
 
 # ATMOSPHERIC_CONFIG_KEY itself is imported directly above from process_specs.
 
@@ -617,20 +594,33 @@ def infer_config_from_source_step(process_type: str, step: dict) -> dict:
     inferred: dict[str, int] = {}
     for config_key, excel_key_template in INDEXED_CONFIG_KEYS.get(process_type, {}).items():
         count = 0
-        for n in range(1, 6):
-            path_info = field_paths.get(excel_key_template.format(n=n))
-            if path_info is not None and _get_path_any(step, path_info[0]) is not None:
+        n = 1
+        # As far as the catalogue maps this group (its mapping_range), not a fixed 5.
+        while (path_info := field_paths.get(excel_key_template.format(n=n))) is not None:
+            if _get_path_any(step, path_info[0]) is not None:
                 count = n
+            n += 1
         if count:
             inferred[config_key] = count
     for config_key, _label, applicable_types in BOOLEAN_CONFIG_FIELDS:
         if process_type not in applicable_types:
             continue
-        probes = BOOLEAN_CONFIG_PROBE_FIELDS.get(config_key, ())
+        probes = BOOLEAN_CONFIG_PROBES.get(process_type, {}).get(config_key, ())
         for probe_key in probes:
             path_info = field_paths.get(probe_key)
             if path_info is not None and _get_path_any(step, path_info[0]) is not None:
                 inferred[config_key] = True
+                break
+    # the atmospheric block applies to every real process; used when the step has such values
+    if process_type != "Experiment Info":
+        resolvers = _DERIVED_FIELDS.get(process_type, {})
+        for atmospheric_key in ATMOSPHERIC_FIELDS:
+            resolver = resolvers.get(atmospheric_key)
+            path_info = field_paths.get(atmospheric_key)
+            if (resolver is not None and resolver(step) is not None) or (
+                path_info is not None and _get_path_any(step, path_info[0]) is not None
+            ):
+                inferred[ATMOSPHERIC_CONFIG_KEY] = True
                 break
     return inferred
 
@@ -768,6 +758,8 @@ def autofill_experiment_info_from_batch(
         value = _get_path_any(source, paths)
         if value is None:
             continue
+        if spec.varies:
+            continue  # the user fills a varying field per sample
         value = _apply_multiplier("Experiment Info", field_key, value)
         provenance = FieldProvenance(source="batch_template", source_batch_id=batch_id)
         if set_field_if_empty(spec, value, provenance):
@@ -916,16 +908,7 @@ def _generic_process_parameter_resolver(excel_key: str) -> Callable[[dict], Any]
 
 
 # Generic Process Excel columns with no fixed archive path - see _process_parameter_value.
-_GENERIC_PROCESS_PARAMETER_KEYS = [
-    "Room temperature [°C]",
-    "rel. humidity [%]",
-    "GB start oxygen level [ppm]",
-    "GB end oxygen level [ppm]",
-    "GB start water level [ppm]",
-    "GB end water level [ppm]",
-    "GB start temperature [°C]",
-    "GB end temperature [°C]",
-]
+_GENERIC_PROCESS_PARAMETER_KEYS = list(ATMOSPHERIC_FIELDS)
 
 # Fields with no direct archive attribute of their own - computed from other fields on
 # the same step instead of a process_specs.py path. Keep this small; only add an entry
@@ -946,6 +929,35 @@ def _apply_multiplier(process_type: str, field_key: str, value: Any) -> Any:
     if multiplier is not None and isinstance(value, int | float):
         return value * multiplier
     return value
+
+
+def _step_quenching_kind(step: dict) -> str | None:
+    """ "gas" or "vacuum" for the step's `quenching` section, None when it has none or cannot
+    be told. The section's m_def names its class (GasQuenching..., VacuumQuenching); without
+    one, fields only one kind has (gas, starting_delay / start_time) decide."""
+    quenching = step.get("quenching")
+    if not isinstance(quenching, dict):
+        return None
+    m_def = str(quenching.get("m_def") or "")
+    if "Vacuum" in m_def:
+        return "vacuum"
+    if "Gas" in m_def:
+        return "gas"
+    if "gas" in quenching or "starting_delay" in quenching:
+        return "gas"
+    if "start_time" in quenching:
+        return "vacuum"
+    return None
+
+
+def _field_applies_to_step(field_key: str, step: dict) -> bool:
+    """False for a gas-only/vacuum-only quenching field when the step's quenching section is
+    of the other kind (so a shared path like quenching.duration fills one block, not both)."""
+    kind = QUENCHING_FIELD_KINDS.get(field_key)
+    if kind is None:
+        return True
+    step_kind = _step_quenching_kind(step)
+    return step_kind is None or step_kind == kind
 
 
 def fetch_process_field_values(
@@ -970,6 +982,8 @@ def fetch_process_field_values(
     step = steps[occurrence]
     values = {}
     for field_key, (paths, _unit_verified) in (field_paths or {}).items():
+        if not _field_applies_to_step(field_key, step):
+            continue
         value = _get_path_any(step, paths)
         if value is not None:
             values[field_key] = _apply_multiplier(process_type, field_key, value)
@@ -1031,8 +1045,8 @@ def autofill_process_from_batch(
     written = 0
     for field_key, value in values.items():
         spec = process.field_specs.get(field_key)
-        if spec is None:
-            continue
+        if spec is None or spec.varies:
+            continue  # a field marked "varies" is filled per sample, never by autofill
         provenance = FieldProvenance(
             source=provenance_source, source_batch_id=batch_id, source_sample_id=source_sample_id
         )
@@ -1087,6 +1101,8 @@ def preview_value_for_field(
     matching = distinct_steps_for_process_type(steps, process.process_type)
     occurrence = occurrence_index_for_process(state, process)
     if occurrence >= len(matching):
+        return None
+    if not _field_applies_to_step(field_key, matching[occurrence]):
         return None
     value = _get_path_any(matching[occurrence], path_info[0])
     if value is None:
@@ -1274,6 +1290,28 @@ def clear_autofilled_value(spec: ProcessFieldSpec, sources: set[str]) -> None:
         spec.is_outlier = False
 
 
+@contextmanager
+def _undo_state_on_error(state: ExperimentState, process: "ProcessInstance | None" = None):
+    """If the block raises, put the state back as it was before it started (the process
+    sequence, the Experiment Info fields, the template marker and, when given, the one
+    process being changed), so a failed Replicate/Adopt does not leave a half-replaced
+    experiment behind."""
+    sequence = list(state.process_sequence)
+    info = copy.deepcopy(state.experiment_info_fields)
+    template = state.whole_experiment_template_batch_id
+    process_before = copy.deepcopy(process) if process is not None else None
+    try:
+        yield
+    except BaseException:
+        state.process_sequence = sequence
+        state.experiment_info_fields = info
+        state.whole_experiment_template_batch_id = template
+        if process is not None and process_before is not None:
+            for name in type(process).model_fields:
+                setattr(process, name, getattr(process_before, name))
+        raise
+
+
 def apply_whole_experiment_template(
     state: ExperimentState,
     url: str,
@@ -1303,21 +1341,22 @@ def apply_whole_experiment_template(
 
     Returns {sequence_index: fields_written} for every process that got at least one
     field written."""
-    state.process_sequence = build_process_sequence_from_batch(url, token, cache, batch_id)
-    rebuild_field_specs(state)
-    written_by_process: dict[int, int] = {}
-    total = len(state.process_sequence)
-    for done, process in enumerate(state.process_sequence, start=1):
-        occurrence = occurrence_index_for_process(state, process)
-        written = autofill_process_from_batch(
-            process, url, token, cache, batch_id, occurrence, provenance_source="batch_template"
-        )
-        if written:
-            written_by_process[process.sequence_index] = written
-        if progress_callback is not None:
-            progress_callback(done, total)
-    autofill_experiment_info_from_batch(state, url, token, cache, batch_id)
-    state.whole_experiment_template_batch_id = batch_id
+    with _undo_state_on_error(state):
+        state.process_sequence = build_process_sequence_from_batch(url, token, cache, batch_id)
+        rebuild_field_specs(state)
+        written_by_process: dict[int, int] = {}
+        total = len(state.process_sequence)
+        for done, process in enumerate(state.process_sequence, start=1):
+            occurrence = occurrence_index_for_process(state, process)
+            written = autofill_process_from_batch(
+                process, url, token, cache, batch_id, occurrence, provenance_source="batch_template"
+            )
+            if written:
+                written_by_process[process.sequence_index] = written
+            if progress_callback is not None:
+                progress_callback(done, total)
+        autofill_experiment_info_from_batch(state, url, token, cache, batch_id)
+        state.whole_experiment_template_batch_id = batch_id
     return written_by_process
 
 
@@ -1343,15 +1382,16 @@ def apply_process_override(
     occurrence actually has (see expand_process_config_for_source) - otherwise values
     beyond the target's current config count (e.g. a 2nd solvent) would be silently
     dropped since there'd be no field_spec slot to write them into."""
-    for spec in process.field_specs.values():
-        clear_autofilled_value(spec, {"batch_template", "process_override"})
-    if occurrence is None:
-        occurrence = occurrence_index_for_process(state, process)
-    expand_process_config_for_source(state, process, url, token, cache, batch_id, occurrence)
-    written = autofill_process_from_batch(
-        process, url, token, cache, batch_id, occurrence, provenance_source="process_override"
-    )
-    process.source_override_batch_id = batch_id
+    with _undo_state_on_error(state, process):
+        for spec in process.field_specs.values():
+            clear_autofilled_value(spec, {"batch_template", "process_override"})
+        if occurrence is None:
+            occurrence = occurrence_index_for_process(state, process)
+        expand_process_config_for_source(state, process, url, token, cache, batch_id, occurrence)
+        written = autofill_process_from_batch(
+            process, url, token, cache, batch_id, occurrence, provenance_source="process_override"
+        )
+        process.source_override_batch_id = batch_id
     return written
 
 
@@ -1978,12 +2018,18 @@ def workbook_to_bytes(workbook: Workbook) -> bytes:
     return buffer.getvalue()
 
 
-def build_experiment_filename() -> str:
-    """Reuses ExperimentExcelBuilder.save()'s exact filename convention
-    (YYYYMMDD_experiment_file.xlsx) - not File_Uploader's per-sample renaming scheme,
-    since NOMAD's parser for these files is keyed on structure/content, and the
-    date/time in the name is the de facto creation timestamp."""
-    return f"{datetime.now().strftime('%Y%m%d')}_experiment_file.xlsx"
+def build_experiment_filename(state: "ExperimentState | None" = None) -> str:
+    """YYYYMMDD_HHMMSS[_<Project>_<Batch>]_experiment_file.xlsx. The date prefix and the
+    "experiment_file.xlsx" ending are the convention NOMAD's parser knows; the time (and the
+    project/batch when the state is given) keep two experiments uploaded on the same day into
+    the same NOMAD upload from replacing each other's raw file."""
+    parts = [datetime.now().strftime("%Y%m%d_%H%M%S")]
+    if state is not None:
+        for key in ("Project_Name", "Batch"):
+            spec = state.experiment_info_fields.get(key)
+            if spec is not None and _is_filled(spec.value):
+                parts.append(re.sub(r"[^A-Za-z0-9._-]+", "-", str(spec.value)).strip("-"))
+    return "_".join(p for p in parts if p) + "_experiment_file.xlsx"
 
 
 # ---------------------------------------------------------------------------
@@ -2017,40 +2063,22 @@ def upload_experiment_excel(
     poll_interval_seconds: float = 2.0,
     max_poll_seconds: float = 120.0,
 ) -> None:
-    """PUTs the Excel's raw bytes into upload_id's /raw/ endpoint, triggers processing,
-    then polls until data.process_running is False. Raises requests.HTTPError if the PUT
-    itself fails, or TimeoutError if processing doesn't finish within max_poll_seconds.
+    """PUTs the Excel into upload_id and waits for NOMAD to process it (the shared
+    hysprint_utils.api_calls.upload_raw_file_and_wait). Raises requests.HTTPError if the PUT
+    fails, RuntimeError if NOMAD reports the processing as failed and TimeoutError if it does not
+    finish within max_poll_seconds.
 
-    The POST to /action/process deliberately does NOT raise_for_status(): live-reported
-    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that this call can return 400 even
-    though the upload proceeds and finishes processing normally - most likely because
-    PUTting the file already triggers processing automatically on this NOMAD version,
-    making the explicit trigger redundant/rejected. apps/File_Uploader/gui_components.py's
-    _process_upload (a real, working upload flow, live-verified independently) already
-    established this exact tolerant pattern - fire the POST, ignore its response, and
-    treat the polling loop below as the actual source of truth for success/failure."""
-    put_response = requests.put(
-        f"{url}/uploads/{upload_id}/raw/",
-        data={"wait_for_processing": False},
-        headers={"Authorization": f"Bearer {token}"},
-        files={"file": (filename, excel_bytes, UPLOAD_MIME_TYPE)},
+    The explicit /action/process request after the PUT is tolerated to fail: live-reported
+    (2026-07-31, real upload Ng0kIOldQIiUr_OOvgsf3Q) that it can return 400 although the upload
+    finishes processing normally, because the PUT already starts processing on this NOMAD version.
+    The poll is the source of truth."""
+    upload_raw_file_and_wait(
+        url,
+        token,
+        upload_id,
+        filename,
+        excel_bytes,
+        UPLOAD_MIME_TYPE,
+        poll_interval=poll_interval_seconds,
+        max_wait=max_poll_seconds,
     )
-    put_response.raise_for_status()
-
-    requests.post(
-        f"{url}/uploads/{upload_id}/action/process",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    elapsed = 0.0
-    while elapsed < max_poll_seconds:
-        time.sleep(poll_interval_seconds)
-        elapsed += poll_interval_seconds
-        status_response = requests.get(
-            f"{url}/uploads/{upload_id}", headers={"Authorization": f"Bearer {token}"}
-        )
-        status_response.raise_for_status()
-        if not status_response.json()["data"]["process_running"]:
-            return
-
-    raise TimeoutError(f"Upload {upload_id} processing did not finish within {max_poll_seconds}s")

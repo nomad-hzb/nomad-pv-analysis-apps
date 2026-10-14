@@ -28,6 +28,7 @@ class TRPLPlotManager:
         y_col: str = "counts",
         normalize: bool = False,
         log_y: bool = True,
+        y_title: str | None = None,
     ) -> go.Figure:
         """
         Overlay TRPL traces for every row in *data*.
@@ -41,8 +42,13 @@ class TRPLPlotManager:
         """
         fig = go.Figure()
         for _, row in data.iterrows():
-            t = np.array(row["time"]) * 1e9  # convert s -> ns
-            y = np.array(row[y_col])
+            if "time_s" in row.index:
+                if not isinstance(row["time_s"], (list, tuple, np.ndarray)):
+                    continue  # the analysis could not process this trace (None or NaN)
+                t = np.array(row["time_s"]) * 1e9  # seconds -> ns
+            else:
+                t = np.array(row["time"]) * 1e9  # raw archive time, seconds (see data_manager)
+            y = np.array(row[y_col], dtype=float)
             if normalize and np.nanmax(y) > 0:
                 y = y / np.nanmax(y)
             label = f"{row['sample_id']} – {row.get('data_file', '')}"
@@ -56,7 +62,9 @@ class TRPLPlotManager:
                 )
             )
             # Noise level line when noise column is populated
-            if "noise" in row.index and row["noise"] is not None:
+            # (a noise of 0 is "no background subtracted": a line at 0 on the log axis stretched
+            # the axis down to 1e-21)
+            if "noise" in row.index and row["noise"] is not None and row["noise"] > 0:
                 fig.add_hline(
                     y=row["noise"],
                     line_dash="dash",
@@ -66,7 +74,7 @@ class TRPLPlotManager:
 
         fig.update_layout(
             xaxis_title="Time [ns]",
-            yaxis_title="PL counts [a.u.]" if normalize else "PL counts [#]",
+            yaxis_title=y_title or ("PL counts [a.u.]" if normalize else "PL counts [#]"),
             yaxis_type="log" if log_y else "linear",
             legend_title="Sample",
             template="plotly_white",

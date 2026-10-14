@@ -6,6 +6,8 @@ import gui_components as gui
 import ipywidgets as widgets
 from IPython.display import Javascript, display
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,8 +25,10 @@ def setup_app():
     # dropped by Voila. Routing it through a real Output() widget that's part of
     # the displayed tree is what actually renders (and runs) it.
     js_output = widgets.Output(layout=widgets.Layout(width="0px", height="0px", overflow="hidden"))
+    # Shown under the header when a launch is refused (the js_output above is invisible).
+    notice = widgets.HTML("")
 
-    def open_app(name: str, url: str, _button=None):
+    def open_app(name: str, url: str, _button=None, needs_user: bool = True):
         """Log the launch, then open the app in a new tab.
 
         App-launch cards are Buttons (not real <a> links) specifically so this
@@ -32,6 +36,13 @@ def setup_app():
         tab itself still needs a one-line injected script, since only the
         browser can open tabs and only this kernel can write the log file.
         """
+        if needs_user and not user:
+            notice.value = (
+                "<p style='color:#b36b00'>Cannot open this app: your NOMAD username was not "
+                "detected, so the link would lead nowhere.</p>"
+            )
+            return
+        notice.value = ""
         dm.log_navigation(name)
         with js_output:
             js_output.clear_output(wait=True)
@@ -46,8 +57,13 @@ def setup_app():
                     "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
                 )
             full_url = f"{dm.URL_BASE}{dm.build_voila_url(entry, user, uploads_path)}"
+        needs_user = not entry.external_url
         return gui.create_app_card_overlay(
-            entry, full_url, lambda _b, name=entry.name, url=full_url: open_app(name, url)
+            entry,
+            full_url,
+            lambda _b, name=entry.name, url=full_url, nu=needs_user: open_app(
+                name, url, needs_user=nu
+            ),
         )
 
     def render_learning_card():
@@ -58,7 +74,7 @@ def setup_app():
         )
 
     def open_whats_new(_button=None):
-        open_app("whats_new", gui.WHATS_NEW_URL)
+        open_app("whats_new", gui.WHATS_NEW_URL, needs_user=False)
 
     def show_main(_button=None):
         project_cards = [
@@ -67,19 +83,22 @@ def setup_app():
         ]
 
         sections = []
-        for category, entries in dm.CATEGORIES.items():
+        for category, entries in dm.SELECTION.categories.items():
             cards = [render_app_card(e) for e in entries]
             if category == "Build Your Own":
                 # Omit the section entirely on a deployment with no configured
-                # projects, rather than showing an empty "Projects" header.
-                if project_cards:
+                # projects (or one that hides them), rather than showing an empty header.
+                if project_cards and dm.SELECTION.show_projects:
                     sections.append(gui.create_category_section("Projects", project_cards))
-                cards.insert(0, render_learning_card())
-            sections.append(gui.create_category_section(category, cards))
+                if dm.SELECTION.show_learning:
+                    cards.insert(0, render_learning_card())
+            if cards:  # a category with every app hidden disappears
+                sections.append(gui.create_category_section(category, cards))
 
         root.children = [
             gui.create_style(),
             gui.create_header(user, open_whats_new),
+            notice,
             *sections,
             gui.create_footer(),
         ]
@@ -90,6 +109,7 @@ def setup_app():
         root.children = [
             gui.create_style(),
             gui.create_header(user, open_whats_new),
+            notice,
             gui.create_back_button(go_back),
             gui.create_category_section(project.name, cards),
             gui.create_footer(),
@@ -100,4 +120,4 @@ def setup_app():
         show_main()
 
     show_main()
-    return widgets.VBox([root, js_output])
+    return widgets.VBox([manual_panel(__file__), root, js_output])

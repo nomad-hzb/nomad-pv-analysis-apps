@@ -1,6 +1,6 @@
 [project]
 name = "nmr-plotter"
-version = "0.1.0"
+version = "0.2.1"
 description = "NMR spectrum viewer and analyzer for HySPRINT NOMAD data"
 requires-python = ">=3.10"
 dependencies = [
