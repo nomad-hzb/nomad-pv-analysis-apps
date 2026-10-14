@@ -261,6 +261,8 @@ class DataVisualizerPanel:
         fig = pm.scatter_2d(self._dm.data, x, y, c, selected=self._selected)
         cols = [x, y] + ([c] if c else [])
         self._plot_index = list(self._dm.data.dropna(subset=cols).index)
+        if self._figure is not None:
+            self._figure.close()  # clear_output only hides it: free the replaced widget
         self._figure = go.FigureWidget(fig)
         self._figure.data[0].on_click(self._on_point_click)
         with self._scatter_out:
