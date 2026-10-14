@@ -11,6 +11,7 @@ import contextlib
 import io
 import logging
 import os
+from urllib.parse import parse_qs, urlencode
 
 import config
 import h5py
@@ -164,7 +165,21 @@ def build_notebook_url(link: config.AppLink, user: str) -> str:
     return f"{base}/{path}/{f'{folder}/' if folder else ''}{link.notebook}"
 
 
-def available_links(h5_path: str, user: str, exclude: str | None = None) -> list[tuple[str, str]]:
+def with_handover(url: str, h5_path: str, screenwidth: int | None = None) -> str:
+    """The link with the file (and screen width) in its query string.
+
+    The IPython store is one database per user, shared by every open tab: with two previewer
+    tabs the last file stored won, whichever tab a link was clicked in. A query parameter
+    belongs to that one link, so the notebook it opens gets the file of the tab it came from."""
+    params = {HANDOVER_H5_PARAM: os.path.abspath(h5_path)}
+    if screenwidth:
+        params[HANDOVER_WIDTH_PARAM] = str(screenwidth)
+    return f"{url}?{urlencode(params)}"
+
+
+def available_links(
+    h5_path: str, user: str, exclude: str | None = None, screenwidth: int | None = None
+) -> list[tuple[str, str]]:
     """The (label, url) links worth offering for one h5, in config.LINK_ORDER.
 
     A variant offers every link but its own (exclude, from Variant.link_key), since a link
@@ -180,7 +195,9 @@ def available_links(h5_path: str, user: str, exclude: str | None = None) -> list
         if link.requires_h5_dataset and not h5_has_dataset(h5_path, link.requires_h5_dataset):
             logger.debug("Link %s hidden: %s has no %s", key, h5_path, link.requires_h5_dataset)
             continue
-        links.append((link.label, build_notebook_url(link, user)))
+        links.append(
+            (link.label, with_handover(build_notebook_url(link, user), h5_path, screenwidth))
+        )
     return links
 
 
@@ -328,7 +345,8 @@ def get_stored_h5_path() -> str | None:
     Without it a notebook opened cold from the dashboard would silently reopen whatever file
     some previewer session stored days ago, possibly one that has since been removed.
     """
-    path = _read_stored("h5_path")
+    from_link = _query_param(HANDOVER_H5_PARAM)
+    path = from_link or _read_stored("h5_path")
     if not path:
         return None
     if not os.path.exists(path):
@@ -339,8 +357,13 @@ def get_stored_h5_path() -> str | None:
 
 def get_stored_screenwidth() -> int | None:
     """The screen width the main previewer put into the IPython store, if any."""
-    value = _read_stored("screenwidth")
-    return int(value) if value is not None else None
+    value = _query_param(HANDOVER_WIDTH_PARAM)
+    if value is None:
+        value = _read_stored("screenwidth")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def store_for_linked_notebooks(h5_path: str, screenwidth: int) -> None:
@@ -354,6 +377,16 @@ def store_for_linked_notebooks(h5_path: str, screenwidth: int) -> None:
     with quiet_stdout():
         for name in ("h5_path", "screenwidth"):
             ipython.run_line_magic("store", name)
+
+
+HANDOVER_H5_PARAM = "h5"
+HANDOVER_WIDTH_PARAM = "w"
+
+
+def _query_param(name: str) -> str | None:
+    """A parameter of the page's query string (Voila puts it into QUERY_STRING), or None."""
+    values = parse_qs(os.environ.get("QUERY_STRING", "")).get(name)
+    return values[0] if values else None
 
 
 def _read_stored(name: str):

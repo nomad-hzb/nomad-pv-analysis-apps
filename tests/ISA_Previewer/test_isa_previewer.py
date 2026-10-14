@@ -389,7 +389,9 @@ def test_a_measurement_variant_stores_its_file_and_returns_the_links(gui, cfg, m
     stored = []
     monkeypatch.setattr(gui.data_manager, "store_for_linked_notebooks", lambda *a: stored.append(a))
     monkeypatch.setattr(
-        gui, "build_link_row", lambda path, user, exclude: f"links for {path} without {exclude}"
+        gui,
+        "build_link_row",
+        lambda path, user, exclude, screenwidth=None: f"links for {path} without {exclude}",
     )
 
     row = gui.handover_row("/uploads/run/file.h5", "someone", 1200, cfg.VARIANTS["main"])
@@ -409,3 +411,47 @@ def test_overview_widgets_passes_the_variant_flags_through(gui, cfg, monkeypatch
     gui.overview_widgets(_Recording(), cfg.VARIANTS["main"])
 
     assert seen == {"xrd": True, "optical": True}
+
+
+# ---------------------------------------------------------------------------
+# 6.12: per-link handover, exact sample match, errors while opening
+# ---------------------------------------------------------------------------
+def test_the_file_travels_in_the_link_not_only_in_the_shared_store(dm):
+    url = dm.with_handover("/north/x/timely_teller.ipynb", "/uploads/run one/file.h5", 1200)
+    assert url.startswith("/north/x/timely_teller.ipynb?")
+    assert "h5=" in url and "w=1200" in url and " " not in url
+
+
+def test_a_notebook_opened_from_a_link_reads_that_links_file_not_the_store(
+    dm, monkeypatch, tmp_path
+):
+    from_link, from_store = tmp_path / "tab_a.h5", tmp_path / "tab_b.h5"
+    from_link.write_bytes(b"")
+    from_store.write_bytes(b"")
+    monkeypatch.setenv("QUERY_STRING", f"h5={from_link}&w=900")
+    monkeypatch.setattr(dm, "_read_stored", lambda _name: str(from_store))
+    assert dm.get_stored_h5_path() == str(from_link)
+    assert dm.get_stored_screenwidth() == 900
+
+
+def test_without_a_query_string_the_store_is_still_used(dm, monkeypatch, tmp_path):
+    stored = tmp_path / "run.h5"
+    stored.write_bytes(b"")
+    monkeypatch.delenv("QUERY_STRING", raising=False)
+    monkeypatch.setattr(dm, "_read_stored", lambda _name: str(stored))
+    assert dm.get_stored_h5_path() == str(stored)
+
+
+def test_preselect_prefers_the_exact_sample_over_a_prefix_of_it(dm, gui, monkeypatch):
+    monkeypatch.setattr(
+        dm, "get_stored_h5_path", lambda: "/uploads/x-AbCdEfGhIjKlMnOpQrStUv/run.h5"
+    )
+    monkeypatch.setattr(dm, "get_stored_screenwidth", lambda: None)
+    monkeypatch.setattr(dm, "upload_id_from_path", lambda path: "up")
+    monkeypatch.setattr(dm, "sample_name_in_h5", lambda path: "HZB_X_10")
+    uploads, samples, measurements = _Select(), _Select(), _Select()
+    uploads.options = [("run", "up")]
+    # setting the upload fills the sample column, as the observers do in the app
+    samples.options = ["HZB_X_1 [first]", "HZB_X_10 [tenth]"]
+    gui.preselect_from_store(uploads, samples, measurements, _IntText())
+    assert samples.value == "HZB_X_10 [tenth]"
