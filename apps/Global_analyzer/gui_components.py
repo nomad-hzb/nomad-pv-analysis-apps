@@ -13,6 +13,7 @@ from data_manager import RESULT_TYPE_LABELS
 from natsort import natsorted
 
 from hysprint_utils.api_calls import get_batch_ids_with_authors
+from hysprint_utils.manual import manual_panel
 from hysprint_utils.plotting_utils import WidgetFactory
 
 
@@ -1934,6 +1935,7 @@ class GUIManager:
         return widgets.VBox(
             [
                 title,
+                manual_panel(__file__),
                 self.step1_accordion,
                 widgets.HTML("<h3 style='color: #A23B72;'>Status</h3>"),
                 self.status_output,

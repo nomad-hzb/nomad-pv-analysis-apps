@@ -38,7 +38,6 @@ KNOWN_EXCEPTIONS = {
 NO_MANUAL_YET = {
     "App_dashboard",
     "Entry_Auditor",
-    "Global_analyzer",
     "Hansen_green_calculator",
     "ISA_Previewer",
     "LCC_Calculator",
