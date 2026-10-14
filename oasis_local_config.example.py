@@ -27,7 +27,8 @@
 # Order of the groups: the groups named here come first, in this order (case and spaces are
 # ignored, unknown names only log a warning); every other group follows in its default order.
 # Unset: the default order. Names: Data Management, Device Characterization,
-# Optical & Structural Analysis, Utilities & Calculators, Build Your Own, Experimental / In Progress.
+# Optical & Structural Analysis, Utilities & Calculators, Build Your Own,
+# Experimental / In Progress.
 # HYSPRINT_DASHBOARD_GROUP_ORDER = "Data Management,Device Characterization"
 
 # --- App Dashboard: the "Projects" cards (slot-die ML pipeline) ------------------------------
