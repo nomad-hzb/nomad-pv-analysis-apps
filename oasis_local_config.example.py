@@ -35,15 +35,6 @@
 # HYSPRINT_PROJECT_CORRELATION_UPLOAD_ID = ""
 # HYSPRINT_PROJECT_ROI_JV_UPLOAD_ID = ""
 
-# --- Keys and tokens (never put them in the code, a notebook or git) -------------------------
-# A key an app needs is read from an environment variable of the same name. Set it here, in this
-# gitignored file (it becomes the variable before the apps start), or in the container's own
-# environment, which wins. Currently used:
-#   Global_analyzer "AI summary" panel (Helmholtz Blablador key):
-# BLABLADOR_API_KEY = "<your key>"
-# A leaked key must be revoked and replaced, deleting the file is not enough. For local runs
-# outside an Oasis, `secrets.py` (gitignored) holds a NOMAD token for tests only.
-
 # --- Logs and debugging ----------------------------------------------------------------------
 # Where notebook_usage.log and button_usage.log are written (default: shared/log/ of the upload).
 # HYSPRINT_USAGE_LOG_DIR = "/home/jovyan/hysprint_logs"
