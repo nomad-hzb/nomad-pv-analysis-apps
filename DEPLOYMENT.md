@@ -189,6 +189,9 @@ NO_PROXY = "localhost,127.0.0.1"
 | `HYSPRINT_USAGE_LOG_DIR` | only to keep usage logs somewhere else | Folder for `notebook_usage.log` and `button_usage.log` (`hysprint_utils.usage_tracking`). Defaults to `shared/log/` in the uploaded repo, so every app in one upload writes to the same two files. Logs from older versions, kept next to `hysprint_utils`, are moved there on first use. |
 | `HYSPRINT_DASHBOARD_HIDE_APPS` | only to drop apps from the App Dashboard | Comma-separated app folder names (or card names) to hide, e.g. `"XPS-Automated,SEM_crystal_counter"`. `Learning` and `Projects` name those two sections. Case and spaces are ignored; an unknown name logs a warning and is ignored. A category with no apps left disappears. Hidden apps stay in the upload and can still be opened directly. Unset: the dashboard is unchanged. |
 | `HYSPRINT_DASHBOARD_SHOW_APPS` | only to show a few apps | An allow-list of the same kind of names: when set, only these appear (and `Learning`/`Projects` only if named). The hide list is applied on top. Example: `"JV-Analysis,File_Uploader,Learning"`. |
+| `HYSPRINT_DASHBOARD_GROUP_ORDER` | only to change the order of the groups | Comma-separated group names (`Data Management`, `Device Characterization`, ...): these come first in this order, the rest follow in the default order. Case and spaces are ignored; an unknown name logs a warning. Unset: the default order. |
+
+**Before adding a new dashboard setting:** the App Dashboard already reads three optional settings from `oasis_local_config.py` (`HYSPRINT_DASHBOARD_HIDE_APPS`, `HYSPRINT_DASHBOARD_SHOW_APPS`, `HYSPRINT_DASHBOARD_GROUP_ORDER`, parsed in `apps/App_dashboard/data_manager.py` by `select_dashboard`). To hide, allow-list or reorder apps or groups, use those; extend `select_dashboard` for anything similar instead of adding a separate mechanism. Groups open and close in the page by clicking their header.
 
 ### Ordering, and why it is not cosmetic
 
