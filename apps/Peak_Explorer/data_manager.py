@@ -4,6 +4,8 @@ Consolidated data handling module
 Contains all data loading, parsing, and management functionality
 """
 
+import contextlib
+import io
 import os
 from urllib.parse import parse_qs
 
@@ -55,7 +57,8 @@ def _handed_over_h5_path():
     ipython = get_ipython()
     if ipython is None:
         return None
-    ipython.run_line_magic("store", "-r h5_path")
+    with contextlib.redirect_stdout(io.StringIO()):  # "no stored variable" is not news
+        ipython.run_line_magic("store", "-r h5_path")
     return ipython.user_ns.get("h5_path")
 
 

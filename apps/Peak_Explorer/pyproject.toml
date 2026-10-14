@@ -10,6 +10,7 @@ dependencies = [
     "ipyvuetify>=1.11",
     "ipywidgets>=8.1",
     "lmfit>=1.3",
+    "nest-asyncio>=1.6",
     "numpy>=2.4",
     "openpyxl>=3.1",
     "packaging>=26.2",
