@@ -40,7 +40,6 @@ NO_MANUAL_YET = {
     "DesignOfExperiments",
     "EQE_Analysis",
     "Entry_Auditor",
-    "Excel_creator",
     "File_Uploader",
     "Global_analyzer",
     "Hansen_green_calculator",
