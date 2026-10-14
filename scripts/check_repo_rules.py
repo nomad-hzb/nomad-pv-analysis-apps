@@ -47,7 +47,6 @@ NO_MANUAL_YET = {
     "LCC_Calculator",
     "MPPT_Analysis",
     "NMR_Analysis",
-    "PeroDatabase_downloader",
     "TRPL_Analysis",
     "Thickness_tracer",
     "Wetting_envelope",

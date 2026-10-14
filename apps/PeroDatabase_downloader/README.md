@@ -4,10 +4,13 @@ A small Voila app for pulling selected fields out of NOMAD entries and
 downloading them as a CSV. Adding or removing columns is a UI action, not
 a code edit.
 
+This file is the developer reference. The user manual is [manual.md](manual.md); the app shows
+it behind its Manual button.
+
 ## Run it
 
 ```bash
-pip install -r requirements.txt
+cd apps/PeroDatabase_downloader
 voila nomad_extractor.ipynb
 ```
 
