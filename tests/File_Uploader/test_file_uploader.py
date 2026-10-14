@@ -431,3 +431,11 @@ def test_archives_are_built_per_upload_and_samples_without_an_upload_are_reporte
     assert no_upload == ["S2"] and list(archives) == ["up1"]
     names = zipfile.ZipFile(io.BytesIO(archives["up1"])).namelist()
     assert names == ["S1.5_S1_jv.jv.txt"]
+
+
+def test_an_opened_sample_button_is_darker_than_a_closed_one():
+    import gui_components as gc
+
+    closed = gc.create_sample_button("S1", "d")
+    assert closed.style.button_color is None
+    assert gc.OPEN_SAMPLE_BUTTON_COLOR != "#eeeeee"

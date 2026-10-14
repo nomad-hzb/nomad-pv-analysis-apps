@@ -179,6 +179,10 @@ def create_reset_assignments_button():
     )
 
 
+# A sample button whose panel is open is a darker gray than one that was never opened.
+OPEN_SAMPLE_BUTTON_COLOR = "#b4b4b4"
+
+
 def create_sample_button(sample_id, description):
     return widgets.Button(
         description=f"{sample_id} [{description}]",
@@ -404,11 +408,10 @@ def on_file_input_change(
         regular_files = [f for f in filenames if not f.lower().endswith(".json")]
         logger.debug("JSON: %d, regular: %d", len(json_files), len(regular_files))
 
-        # Add to, never wipe, the existing pool: people commonly load files in
-        # several rounds (some jv now, more jv later, then PL). Previously this
-        # reset uploaded_files_data/file_read_status wholesale on every new
-        # selection, silently discarding already-loaded content for files a
-        # prior round had already assigned to a sample.
+        # The list shows what was just selected (a new selection replaces the previous list), but
+        # the content already read stays in uploaded_files_data: files a previous round assigned
+        # to a sample are still uploaded. (Wiping uploaded_files_data/file_read_status wholesale
+        # used to discard the content of assigned files.)
         state.file_input_widget = file_input
         already_assigned = {f for files in state.sample_files_dict.values() for f in files}
 
@@ -474,9 +477,7 @@ def on_file_input_change(
         _run_read_queue(read_jobs)
 
         new_unassigned = [f for f in all_display_files if f not in already_assigned]
-        file_selector.options = sorted(
-            set(file_selector.options) | set(new_unassigned), key=natural_sort_key
-        )
+        file_selector.options = sorted(set(new_unassigned), key=natural_sort_key)
         file_count = len(file_selector.options)
         file_count_display.value = (
             f"<b>{file_count} files waiting to be assigned</b>"
@@ -695,6 +696,8 @@ def on_sample_button_first_click(
                 with out_widget:
                     out_widget.clear_output()
                     print(f"Added files to {sample_id}: {state.sample_files_dict[sample_id]}")
+
+            b.style.button_color = OPEN_SAMPLE_BUTTON_COLOR
 
         except Exception as exc:
             logger.exception("Exception in on_sample_button_first_click for %s", sample_id)
