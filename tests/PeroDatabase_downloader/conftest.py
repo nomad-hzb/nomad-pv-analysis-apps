@@ -22,6 +22,7 @@ def _load(unique_name: str, filename: str):
 
 
 _load("config_perodatabase_downloader", "config")
+_load("auth_perodatabase_downloader", "auth")
 _load("schema_perodatabase_downloader", "schema")
 _load("nomad_client_perodatabase_downloader", "nomad_client")
 _load("data_manager_perodatabase_downloader", "data_manager")

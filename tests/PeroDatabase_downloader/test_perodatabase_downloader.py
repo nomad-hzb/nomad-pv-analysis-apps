@@ -100,3 +100,83 @@ def test_validate_reports_hits_and_coverage():
 
     assert exists is True
     assert coverage == 0.5
+
+
+# ---------------------------------------------------------------------------
+# 6.10: token verification, the shared catalog file, the extraction cap
+# ---------------------------------------------------------------------------
+
+
+def _response(status):
+    import requests
+
+    response = requests.Response()
+    response.status_code = status
+    response._content = b'{"name": "Ada"}'
+    return response
+
+
+def test_a_network_failure_is_not_reported_as_an_invalid_token(monkeypatch):
+    import auth
+    import requests
+
+    def boom(*args, **kwargs):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(auth.requests, "get", boom)
+    result = auth.authenticate("https://x/api/v1", token="tok")
+    assert not result.ok and not result.reachable
+    assert "Could not reach" in result.message
+    assert result.raw_token == "tok"  # kept, so the next server switch tries it again
+
+
+def test_a_refused_token_says_so_and_a_good_one_authenticates(monkeypatch):
+    import auth
+
+    monkeypatch.setattr(auth.requests, "get", lambda *a, **k: _response(401))
+    refused = auth.authenticate("https://x/api/v1", token="tok")
+    assert "not valid" in refused.message and refused.reachable and refused.raw_token == "tok"
+    monkeypatch.setattr(auth.requests, "get", lambda *a, **k: _response(200))
+    assert auth.authenticate("https://x/api/v1", token="tok").ok
+
+
+def test_catalog_save_keeps_entries_other_sessions_added(tmp_path, monkeypatch):
+    import json
+
+    import config
+
+    path = tmp_path / "fields_catalog.json"
+    path.write_text(json.dumps([{"label": "A", "column": "A", "path": "a.b"}]), encoding="utf-8")
+    monkeypatch.setattr(config, "CATALOG_PATH", str(path))
+    manager = DataManager(api_url="http://mock", token=None)
+    # another session saves a field after this one loaded its copy
+    other = json.loads(path.read_text(encoding="utf-8")) + [
+        {"label": "B", "column": "B", "path": "c.d"}
+    ]
+    path.write_text(json.dumps(other), encoding="utf-8")
+    manager.add_to_catalog(FieldSpec(path="e.f", name="E"))
+    saved = [e["path"] for e in json.loads(path.read_text(encoding="utf-8"))]
+    assert saved == ["a.b", "c.d", "e.f"]
+    assert not list(tmp_path.glob("*.tmp")) and not list(tmp_path.glob("*.lock"))
+
+
+def test_an_unreadable_catalog_is_never_overwritten(tmp_path, monkeypatch):
+    import config
+
+    path = tmp_path / "fields_catalog.json"
+    path.write_text("{ truncated", encoding="utf-8")
+    monkeypatch.setattr(config, "CATALOG_PATH", str(path))
+    manager = DataManager(api_url="http://mock", token=None)
+    assert manager.catalog_error
+    manager.add_to_catalog(FieldSpec(path="e.f", name="E"))
+    assert path.read_text(encoding="utf-8") == "{ truncated"
+
+
+def test_an_extraction_above_the_cap_is_refused(monkeypatch):
+    import config
+    import pytest
+
+    monkeypatch.setattr(config, "MAX_ENTRIES", 5)
+    manager = _manager_with([{"data": [{"entry_id": "e"}], "pagination": {"total": 50}}])
+    with pytest.raises(ValueError, match="Choose an entry type"):
+        manager.run()
