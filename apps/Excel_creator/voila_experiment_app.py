@@ -8,6 +8,7 @@ from pathlib import Path
 import ipywidgets as widgets
 from IPython.display import display
 
+from hysprint_utils.manual import manual_panel
 from hysprint_utils.process_specs import (
     ATMOSPHERIC_CONFIG_KEY,
     AVAILABLE_PROCESSES,
@@ -163,21 +164,6 @@ class MinimalistExperimentBuilder:
             description="Apply", button_style="primary", layout=widgets.Layout(width="80px")
         )
 
-        # Guide toggle button
-        self.guide_toggle = widgets.Button(
-            description="Show Guide",
-            button_style="info",
-            icon="question",
-            layout=widgets.Layout(width="140px"),
-        )
-
-        # Guide content (loaded from file, initially hidden)
-        self.guide_content = widgets.HTML(
-            value=self._load_guide_content(), layout=widgets.Layout(display="none")
-        )
-
-        self.guide_visible = False
-
         # Process sequence area
         self.process_sequence_area = widgets.VBox([])
 
@@ -206,29 +192,6 @@ class MinimalistExperimentBuilder:
         # Event handlers
         self.apply_button.on_click(self._on_apply_template)
         self.generate_button.on_click(self._on_generate_excel)
-        self.guide_toggle.on_click(self._toggle_guide)
-
-    def _load_guide_content(self):
-        """Load guide content from external HTML file"""
-        try:
-            guide_file = _APP_DIR / "guide.html"
-            if guide_file.exists():
-                with open(guide_file, "r", encoding="utf-8") as f:
-                    return f.read()
-            else:
-                # Fallback content if file doesn't exist
-                return """
-                <div style="padding: 15px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; margin: 10px 0;">  # noqa: E501
-                    <p>Guide file not found. Create 'guide.html' in your project directory.</p>
-                </div>
-                """
-        except Exception as e:
-            return f"""
-            <div style="padding: 15px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; margin: 10px 0;">  # noqa: E501
-                <h4 style="color: #495057;">📖 Guide Error</h4>
-                <p>Error loading guide: {e}</p>
-            </div>
-            """
 
     def _update_template_dropdown(self):
         """Update template dropdown with all available templates"""
@@ -288,19 +251,6 @@ class MinimalistExperimentBuilder:
             process_rows.append(row)
 
         self.process_sequence_area.children = process_rows
-
-    def _toggle_guide(self, button):
-        """Toggle guide visibility"""
-        self.guide_visible = not self.guide_visible
-
-        if self.guide_visible:
-            self.guide_content.layout.display = "block"
-            self.guide_toggle.description = "Hide Guide"
-            self.guide_toggle.icon = "times"
-        else:
-            self.guide_content.layout.display = "none"
-            self.guide_toggle.description = "Show Guide"
-            self.guide_toggle.icon = "question"
 
     def _create_process_row(self, index, process_data):
         """Create a single row for a process"""
@@ -682,14 +632,14 @@ class MinimalistExperimentBuilder:
         # Template selection - compact
         template_section = widgets.VBox(
             [
+                manual_panel(__file__),
                 widgets.HTML(
                     value="<h4 style='margin: 15px 0 8px 0; color: #2c3e50;'>📋 Template</h4>"
                 ),
                 widgets.HBox(
-                    [self.template_dropdown, self.apply_button, self.guide_toggle],
+                    [self.template_dropdown, self.apply_button],
                     layout=widgets.Layout(margin="0 0 15px 0"),
                 ),
-                self.guide_content,
             ]
         )
 
