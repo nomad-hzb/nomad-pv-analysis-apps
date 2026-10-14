@@ -1,0 +1,13 @@
+name,polar,dispersive,literature_total,source,reference_url,note
+Solvent 1,18.0,29.0,,,,Unnamed placeholder
+Solvent 2,2.3,25.5,,,,Unnamed placeholder
+Water,45.61,27.19,72.8,"Zdziennicka, Krawczyk, Szymczyk, Jańczuk, Colloids Surf. A 529 (2017) 864-875 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Ethanol,2.01,21.19,23.2,"Zdziennicka, Krawczyk, Szymczyk, Jańczuk, Colloids Surf. A 529 (2017) 864-875 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Isopropanol (IPA),8.0,20.93,23.0,,,Split has no recorded source and does not add up to the total; total from surface-tension.de (20 C)
+Acetone,10.0,16.35,25.2,,,Split has no recorded source and does not add up to the total; total from surface-tension.de (20 C)
+Diiodomethane,0.0,50.8,50.8,"Zdziennicka, Krawczyk, Szymczyk, Jańczuk, Colloids Surf. A 529 (2017) 864-875 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Formamide,12.82,45.18,58.0,"Zdziennicka, Krawczyk, Szymczyk, Jańczuk, Colloids Surf. A 529 (2017) 864-875 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Ethylene glycol,18.19,29.81,48.0,"Zdziennicka, Krawczyk, Szymczyk, Jańczuk, Colloids Surf. A 529 (2017) 864-875 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Toluene,0.0,28.5,28.5,"Hwang, Lee, Ahn, Mhin, J. Ind. Eng. Chem. 17 (2011) 125-129 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
+Hexane,0.0,18.4,18.43,,,Split has no recorded source; total from surface-tension.de (20 C)
+Chloroform,0.0,27.2,27.2,"Hwang, Lee, Ahn, Mhin, J. Ind. Eng. Chem. 17 (2011) 125-129 (20 C)",https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/,
