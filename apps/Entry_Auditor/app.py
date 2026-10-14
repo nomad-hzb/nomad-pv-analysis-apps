@@ -8,6 +8,8 @@ from pathlib import Path
 import gui_components
 import ipywidgets as widgets
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 _TESTS_ROOT = Path(__file__).parent.parent.parent / "tests"
@@ -32,7 +34,12 @@ def initialize_ui(url: str, token: str) -> widgets.Widget:
     _ui_widget_ids = set()
     ids_before = set(widgets.Widget.widgets.keys())
 
-    ui = gui_components.create_entry_auditor_ui(url, token, DEMO_FIXTURE_PATH)
+    ui = widgets.VBox(
+        [
+            manual_panel(__file__),
+            gui_components.create_entry_auditor_ui(url, token, DEMO_FIXTURE_PATH),
+        ]
+    )
 
     _ui_widget_ids = set(widgets.Widget.widgets.keys()) - ids_before
     return ui

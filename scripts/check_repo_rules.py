@@ -37,10 +37,11 @@ KNOWN_EXCEPTIONS = {
 # check fails for an app that is listed but has a manual, so this list cannot go stale.
 NO_MANUAL_YET = {
     "App_dashboard",
+<<<<<<< HEAD
     "Entry_Auditor",
-    "Hansen_green_calculator",
+=======
+>>>>>>> hzb/main
     "ISA_Previewer",
-    "LCC_Calculator",
     "Thickness_tracer",
     "bitmap_maker",
     "smart_databaser",
