@@ -40,7 +40,6 @@ NO_MANUAL_YET = {
     "ISA_Previewer",
     "Thickness_tracer",
     "bitmap_maker",
-    "smart_databaser",
 }
 
 
