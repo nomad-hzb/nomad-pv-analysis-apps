@@ -39,7 +39,6 @@ NO_MANUAL_YET = {
     "App_dashboard",
     "EQE_Analysis",
     "Entry_Auditor",
-    "Global_analyzer",
     "Hansen_green_calculator",
     "ISA_Previewer",
     "LCC_Calculator",
