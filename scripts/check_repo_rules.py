@@ -42,7 +42,6 @@ NO_MANUAL_YET = {
 =======
 >>>>>>> hzb/main
     "ISA_Previewer",
-    "LCC_Calculator",
     "Thickness_tracer",
     "Wetting_envelope",
     "bitmap_maker",

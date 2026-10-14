@@ -22,6 +22,8 @@ import gui_components as gui
 import ipywidgets as widgets
 from IPython.display import display as ipydisplay
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -203,6 +205,7 @@ class LCCCalculatorApp:
         app_layout = widgets.VBox(
             [
                 title,
+                manual_panel(__file__),
                 self._batch_panel.widget,
                 self._results_panel.widget,
                 self._export_panel.widget,
