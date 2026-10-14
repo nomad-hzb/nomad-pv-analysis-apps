@@ -112,23 +112,19 @@ def test_theta_180_is_rejected_instead_of_giving_an_infinite_curve():
 
 
 def test_presets_with_a_sourced_split_add_up_to_the_literature_total():
-    from data_manager import PRESET_SOLVENTS
+    from data_manager import LITERATURE_TOTALS, PRESET_SOLVENTS, SPLIT_SOURCES
 
-    totals = {  # mN/m at 20 C, surface-tension.de; water, diiodomethane: standard test liquids
-        "Water": 72.8,
-        "Ethanol": 22.1,
-        "Diiodomethane": 50.8,
-        "Ethylene glycol": 47.7,
-    }
     by_name = {s["name"]: s for s in PRESET_SOLVENTS}
-    for name, total in totals.items():
-        assert by_name[name]["polar"] + by_name[name]["dispersive"] == pytest.approx(total, abs=1.0)
+    assert SPLIT_SOURCES  # every sourced preset is checked against its own total
+    for name in SPLIT_SOURCES:
+        total = by_name[name]["polar"] + by_name[name]["dispersive"]
+        assert total == pytest.approx(LITERATURE_TOTALS[name], abs=0.5), name
 
 
 def test_preset_note_says_where_values_come_from_and_flags_sums_that_do_not_match():
     from data_manager import solvent_preset_note
 
-    assert "Accu Dyne" in solvent_preset_note("Ethanol")
+    assert "Zdziennicka" in solvent_preset_note("Ethanol")
     assert "do not add up" not in solvent_preset_note("Ethanol")
     assert "do not add up" in solvent_preset_note("Acetone")
     assert "do not add up" in solvent_preset_note("Isopropanol (IPA)")

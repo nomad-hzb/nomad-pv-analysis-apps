@@ -72,48 +72,59 @@ PRESET_MATERIALS: list[dict] = [
 # Contact angles up to this are accepted (180 gives an infinite envelope).
 MAX_THETA = 179.0
 
-# Polar and dispersive parts add up to the liquid's surface tension. Ethanol and ethylene glycol
-# follow the Accu Dyne Test table of surface tension components
-# (https://www.accudynetest.com/surface_tension_print.html: ethanol 21.4 = 18.8 + 2.6, ethylene
-# glycol 48 = 29 + 19). Isopropanol and acetone still hold their earlier values, which do not add
-# up to the literature totals (23.0 and 25.2 mN/m, surface-tension.de, 20 C): they need a
-# published split from one source. "Solvent 1/2" are unnamed placeholders.
+# Polar and dispersive parts add up to the liquid's surface tension. The splits of water, ethanol,
+# ethylene glycol, diiodomethane and formamide are the 20 C values of Zdziennicka, Krawczyk,
+# Szymczyk and Jańczuk, Colloids Surf. A 529 (2017) 864-875; toluene and chloroform are from Hwang
+# et al., J. Ind. Eng. Chem. 17 (2011) 125-129; both as tabulated at
+# https://www.jikangroup.com/2021/10/17/polar-dispersive-liquid-surface-tensions/ . Isopropanol,
+# acetone and hexane still hold their earlier values: their split has no recorded source and the
+# parts do not add up to the literature total (surface-tension.de, 20 C). "Solvent 1/2" are unnamed
+# placeholders.
 PRESET_SOLVENTS: list[dict] = [
     {"name": "Solvent 1", "polar": 18.00, "dispersive": 29.00},
     {"name": "Solvent 2", "polar": 2.30, "dispersive": 25.50},
-    {"name": "Water", "polar": 51.00, "dispersive": 21.80},
-    {"name": "Ethanol", "polar": 2.60, "dispersive": 18.80},
+    {"name": "Water", "polar": 45.61, "dispersive": 27.19},
+    {"name": "Ethanol", "polar": 2.01, "dispersive": 21.19},
     {"name": "Isopropanol (IPA)", "polar": 8.00, "dispersive": 20.93},
     {"name": "Acetone", "polar": 10.00, "dispersive": 16.35},
     {"name": "Diiodomethane", "polar": 0.00, "dispersive": 50.80},
-    {"name": "Formamide", "polar": 18.70, "dispersive": 39.50},
-    {"name": "Ethylene glycol", "polar": 19.00, "dispersive": 29.00},
-    {"name": "Toluene", "polar": 1.40, "dispersive": 28.50},
+    {"name": "Formamide", "polar": 12.82, "dispersive": 45.18},
+    {"name": "Ethylene glycol", "polar": 18.19, "dispersive": 29.81},
+    {"name": "Toluene", "polar": 0.00, "dispersive": 28.50},
     {"name": "Hexane", "polar": 0.00, "dispersive": 18.40},
-    {"name": "Chloroform", "polar": 3.80, "dispersive": 23.70},
+    {"name": "Chloroform", "polar": 0.00, "dispersive": 27.20},
 ]
 
-# Total surface tension of the preset liquids, mN/m at 20 C (https://surface-tension.de/). The
-# polar and dispersive parts of a preset must add up to this; a preset whose parts do not is
+# Total surface tension of the preset liquids, mN/m at 20 C (from the same tables as the splits;
+# isopropanol, acetone and hexane from https://surface-tension.de/). The polar and dispersive
+# parts of a preset must add up to this; a preset whose parts do not is
 # flagged in the app.
 LITERATURE_TOTALS: dict[str, float] = {
     "Water": 72.8,
-    "Ethanol": 22.1,
+    "Ethanol": 23.2,
     "Isopropanol (IPA)": 23.0,
     "Acetone": 25.2,
     "Diiodomethane": 50.8,
-    "Formamide": 58.2,
-    "Ethylene glycol": 47.7,
-    "Toluene": 28.4,
+    "Formamide": 58.0,
+    "Ethylene glycol": 48.0,
+    "Toluene": 28.5,
     "Hexane": 18.43,
-    "Chloroform": 27.5,
+    "Chloroform": 27.2,
 }
 
-# Where the polar/dispersive split of a preset comes from. Presets not listed here keep the values
-# the app shipped with: the split has no recorded source.
+_ZDZIENNICKA = "Zdziennicka et al., Colloids Surf. A 529 (2017) 864 (20 °C)"
+_HWANG = "Hwang et al., J. Ind. Eng. Chem. 17 (2011) 125 (20 °C)"
+
+# Where the polar/dispersive split of a preset comes from (tabulated at jikangroup.com, see above).
+# Presets not listed here keep the values the app shipped with: their split has no recorded source.
 SPLIT_SOURCES: dict[str, str] = {
-    "Ethanol": "Accu Dyne Test table of surface tension components (accudynetest.com)",
-    "Ethylene glycol": "Accu Dyne Test table of surface tension components (accudynetest.com)",
+    "Water": _ZDZIENNICKA,
+    "Ethanol": _ZDZIENNICKA,
+    "Ethylene glycol": _ZDZIENNICKA,
+    "Diiodomethane": _ZDZIENNICKA,
+    "Formamide": _ZDZIENNICKA,
+    "Toluene": _HWANG,
+    "Chloroform": _HWANG,
 }
 
 
@@ -128,7 +139,7 @@ def solvent_preset_note(name: str) -> str:
     source = SPLIT_SOURCES.get(name, "the split has no recorded source")
     note = f"Polar + dispersive = {total:.1f} mN/m; {source}."
     if literature is not None:
-        note += f" Literature total {literature:g} mN/m (surface-tension.de, 20 °C)."
+        note += f" Literature total {literature:g} mN/m."
         if abs(total - literature) > 1.0:
             note += " These values do not add up to it: check them before relying on this liquid."
     return note
