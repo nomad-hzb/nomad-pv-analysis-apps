@@ -36,6 +36,10 @@ class Variable:
     # For categorical variables
     categories: Optional[List[str]] = None
 
+    # Continuous only: sample evenly in log10 space (load, time, concentration,
+    # dose often span decades; a linear design then crowds the top decade).
+    log_scale: bool = False
+
     def validate(self) -> Tuple[bool, str]:
         """Validate the variable definition."""
         if not self.name or not self.name.strip():
@@ -52,7 +56,13 @@ class Variable:
                 if self.step_size is None or self.step_size <= 0:
                     return False, "Positive step size required for discrete variables"
 
-        elif self.type == VariableType.CATEGORICAL:
+            if self.log_scale and self.min_value <= 0:
+                return False, "Log scale needs a min value above 0"
+
+        if self.log_scale and self.type != VariableType.CONTINUOUS:
+            return False, "Log scale is only available for continuous variables"
+
+        if self.type == VariableType.CATEGORICAL:
             if not self.categories or len(self.categories) < 2:
                 return False, "At least 2 categories required for categorical variables"
 
@@ -71,6 +81,7 @@ class Variable:
             "max_value": self.max_value,
             "step_size": self.step_size,
             "categories": self.categories,
+            "log_scale": self.log_scale,
         }
 
     @classmethod
@@ -84,6 +95,7 @@ class Variable:
             max_value=data.get("max_value"),
             step_size=data.get("step_size"),
             categories=data.get("categories"),
+            log_scale=bool(data.get("log_scale", False)),
         )
 
     def get_range(self) -> Union[Tuple[float, float], List[str]]:
@@ -98,11 +110,25 @@ class Variable:
         if self.type == VariableType.CATEGORICAL:
             return self.categories
         elif self.type == VariableType.DISCRETE:
-            n_steps = int((self.max_value - self.min_value) / self.step_size) + 1
-            return [self.min_value + i * self.step_size for i in range(n_steps)]
+            # round, not truncate: (0.3 - 0.0) / 0.1 is 2.9999999999999996, which made the
+            # old int() drop the top level; and round the values (0.30000000000000004 -> 0.3)
+            n_steps = int(round((self.max_value - self.min_value) / self.step_size)) + 1
+            decimals = _decimals_for_step(self.step_size, self.min_value)
+            return [round(self.min_value + i * self.step_size, decimals) for i in range(n_steps)]
         else:
             # For continuous variables, return a reasonable sample
             return list(np.linspace(self.min_value, self.max_value, 10))
+
+
+def _decimals_for_step(step: float, minimum: float = 0.0) -> int:
+    """Decimal places needed to write min + i * step exactly, from how the step and the minimum
+    are written (0.1 -> 1, 0.25 -> 2, 5 -> 0), capped at 10."""
+
+    def places(number: float) -> int:
+        text = f"{number:.10f}".rstrip("0")
+        return len(text.split(".")[1]) if "." in text else 0
+
+    return min(10, max(places(step), places(minimum)))
 
 
 class DataManager:

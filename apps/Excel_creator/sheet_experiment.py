@@ -9,6 +9,7 @@ from hysprint_utils.process_specs import (
     field_args,
     indexed_group_args,
     optional_block_args,
+    process_family,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                 f("Notes"),
             ]
 
-        if process_name == "Cleaning O2-Plasma" or process_name == "Cleaning UV-Ozone":
+        if process_family(process_name) == "cleaning":
             steps = [f("Datetime"), f("Operator")]
             steps.extend(indexed("solvents", config.get("solvents", 0)))
 
@@ -178,14 +179,7 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
                 steps.extend([f("UV-Ozone Time [s]"), f("Notes")])
             return steps
 
-        if process_name in [
-            "Spin Coating",
-            "Dip Coating",
-            "Slot Die Coating",
-            "Inkjet Printing",
-            "Blade Coating",
-            "Screen Printing",
-        ]:
+        if process_family(process_name) == "coating":
             steps = [
                 f("Datetime"),
                 f("Operator"),

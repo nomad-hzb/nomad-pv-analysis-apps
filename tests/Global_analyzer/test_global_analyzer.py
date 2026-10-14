@@ -9,10 +9,15 @@ from data_manager import (
     MeasurementRow,
     aggregate_results_per_sample,
     apply_row_filters,
+    average_rows_per_sample,
     exclude_samples,
     get_categorical_columns,
     get_layer_type_options,
+    merge_results_per_sample,
+    merged_result_column_names,
     parse_uploaded_analysis_csv,
+    process_type_label,
+    result_type_label,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
     variation_warning,
@@ -28,7 +33,10 @@ from gui_components import GUIManager
 from ml_analysis import (
     detect_integer_columns,
     estimate_max_bo_steps,
+    is_measured_parameter,
+    run_random_forest,
     suggest_next_experiments,
+    suggest_pareto_experiments,
 )
 from plot_manager import PlotManager, bin_numeric_column
 from pydantic import ValidationError
@@ -299,6 +307,50 @@ def test_set_analysis_columns_defaults_new_columns_to_checked():
     assert gui.get_checked_metadata_columns() == ["m1", "m2"]
 
 
+def test_results_tree_has_one_static_group_per_schema_jv_first():
+    gui = GUIManager()
+    gui.set_analysis_columns(
+        ["tracking_time", "efficiency", "fill_factor"],
+        ["m1"],
+        results_groups={
+            "tracking_time": "MPP Tracking",
+            "efficiency": "JV",
+            "fill_factor": "JV",
+        },
+    )
+
+    branches = gui.results_tree_box.children
+    # Plain headings (not accordions), so nothing can be collapsed.
+    assert [type(b.children[0]).__name__ for b in branches] == ["HTML", "HTML"]
+    assert "JV" in branches[0].children[0].value
+    assert "MPP Tracking" in branches[1].children[0].value
+    # Branch checkboxes are the same widgets read by get_checked_results_columns.
+    assert sorted(gui.get_checked_results_columns()) == [
+        "efficiency",
+        "fill_factor",
+        "tracking_time",
+    ]
+
+
+def test_results_tree_select_all_toggles_branch():
+    gui = GUIManager()
+    gui.set_analysis_columns(["a", "b", "c"], [], results_groups={"a": "JV", "b": "JV", "c": "EQE"})
+    jv_branch = next(b for b in gui.results_tree_box.children if "JV" in b.children[0].value)
+    jv_branch.children[1].value = False  # "Select all" off
+
+    assert gui.get_checked_results_columns() == ["c"]
+
+
+def test_merged_result_column_names_suffixes_only_overlapping_columns():
+    names = merged_result_column_names(
+        ["sample_id", "datetime", "efficiency"],
+        ["sample_id", "datetime", "power"],
+        "mpp_tracking",
+    )
+    assert names == {"datetime": "datetime_mpp_tracking", "power": "power"}
+    assert result_type_label("mpp_tracking") == "MPP Tracking"
+
+
 def test_set_layer_selectors_creates_one_dropdown_per_source():
     gui = GUIManager()
     gui.set_layer_selectors({"spin_coating": ["Active Layer", "ETL"], "slot_die_coating": ["HTL"]})
@@ -379,7 +431,35 @@ def test_set_sample_exclusion_checklist_toggle_invokes_callback():
 def test_set_analysis_columns_populates_filter_column_dropdown():
     gui = GUIManager()
     gui.set_analysis_columns(["r1", "r2"], ["m1"])
-    assert gui.filter_column_selector.options == ("m1", "r1", "r2")
+    assert [value for _label, value in gui.filter_column_selector.options] == ["m1", "r1", "r2"]
+
+
+def test_filter_column_dropdown_labels_columns_with_their_schema():
+    gui = GUIManager()
+    gui.set_analysis_columns(
+        ["efficiency", "plain"],
+        ["annealing_temperature"],
+        results_groups={"efficiency": "JV"},
+        metadata_groups={"annealing_temperature": "Spin Coating"},
+    )
+
+    options = dict(gui.filter_column_selector.options)
+    assert options["annealing_temperature (Spin Coating)"] == "annealing_temperature"
+    assert options["efficiency (JV)"] == "efficiency"
+    assert "plain" in options
+    # Filters keep working on the bare column name.
+    gui.filter_column_selector.value = "efficiency"
+    gui.render_active_filters(
+        [{"id": 1, "column": "efficiency", "op": ">=", "value": 5.0}], on_remove=lambda _id: None
+    )
+    assert "efficiency (JV) &gt;=" in gui.active_filters_box.children[0].children[0].value or (
+        "efficiency (JV) >=" in gui.active_filters_box.children[0].children[0].value
+    )
+
+
+def test_process_type_label():
+    assert process_type_label("spin_coating") == "Spin Coating"
+    assert process_type_label("ald") == "ALD"
 
 
 def test_render_active_filters_shows_placeholder_when_none_active():
@@ -523,6 +603,16 @@ def test_get_uploads_path_derives_from_cwd(monkeypatch):
     )
 
     assert get_uploads_path() == "uploads/upload123/apps"
+
+
+def test_get_uploads_path_for_a_git_cloned_repo_keeps_the_upload_id(monkeypatch):
+    """Fixed-depth parent walking returned the repo folder as the upload (broken DoE link)."""
+    monkeypatch.setattr(
+        "os.getcwd",
+        lambda: "/home/jovyan/uploads/upload123/nomad-pv-analysis-apps/apps/Global_analyzer",
+    )
+
+    assert get_uploads_path() == "uploads/upload123/nomad-pv-analysis-apps/apps"
 
 
 def test_build_doe_voila_url_includes_user_and_uploads_path():
@@ -1303,3 +1393,988 @@ def test_run_anova_raises_when_fewer_than_two_usable_groups():
 
     with pytest.raises(ValueError):
         run_anova(df, "material", "efficiency")
+
+
+# ---------------------------------------------------------------------------
+# Issue #46: row duplication, per-sample counting, model validation
+# ---------------------------------------------------------------------------
+
+
+def _jv_and_eqe():
+    jv = pd.DataFrame({"sample_id": ["s1"] * 4 + ["s2"] * 4, "efficiency": np.arange(8.0)})
+    eqe = pd.DataFrame(
+        {"sample_id": ["s1"] * 3 + ["s2"] * 3, "bandgap": [1.5, 1.6, 1.7, 1.4, 1.5, 1.6]}
+    )
+    return {"JV": jv, "EQE": eqe}
+
+
+def test_merge_results_all_points_does_not_cross_pair_two_repeated_types():
+    merged, collapsed = merge_results_per_sample(_jv_and_eqe(), "All Points")
+
+    # 4 JV pixels per sample kept, EQE averaged: 8 rows, not 4 x 3 x 2 = 24.
+    assert len(merged) == 8
+    assert collapsed == ["EQE"]
+    s1 = merged[merged["sample_id"] == "s1"]
+    assert list(s1["efficiency"]) == [0.0, 1.0, 2.0, 3.0]
+    assert np.allclose(s1["bandgap"], 1.6)
+
+
+def test_merge_results_mean_collapses_everything_without_flagging():
+    merged, collapsed = merge_results_per_sample(_jv_and_eqe(), "Mean")
+
+    assert len(merged) == 2
+    assert collapsed == []
+
+
+def test_merge_results_all_points_with_one_repeated_type_collapses_nothing():
+    results = _jv_and_eqe()
+    results["EQE"] = results["EQE"].groupby("sample_id", as_index=False).mean()
+
+    merged, collapsed = merge_results_per_sample(results, "All Points")
+
+    assert len(merged) == 8
+    assert collapsed == []
+
+
+def test_merge_results_skips_empty_and_returns_none_when_nothing_usable():
+    assert merge_results_per_sample({"JV": pd.DataFrame()}, "Mean") == (None, [])
+
+
+def _rf_dataset(n_samples=30, pixels=1, seed=0):
+    rng = np.random.default_rng(seed)
+    temp = rng.uniform(100, 200, n_samples)
+    noise_param = rng.uniform(0, 1, n_samples)
+    rows = []
+    for i in range(n_samples):
+        for _ in range(pixels):
+            rows.append(
+                {
+                    "sample_id": f"s{i}",
+                    "temp": temp[i],
+                    "noise_param": noise_param[i],
+                    "pce": 0.1 * temp[i] + rng.normal(0, 0.5),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_run_random_forest_reports_cross_validated_r2_and_ranks_real_effect_first():
+    result = run_random_forest(_rf_dataset(), "pce", ["temp", "noise_param"])
+
+    assert result["r2"] > 0.7
+    assert result["n_samples"] == 30
+    assert result["importances"][0][0] == "temp"
+    name, mean, sd = result["importances"][1]
+    assert name == "noise_param" and abs(mean) < 0.1 and sd >= 0
+
+
+def test_run_random_forest_counts_samples_not_pixels():
+    # 2 samples x 4 pixels used to pass the 8-row minimum.
+    df = _rf_dataset(n_samples=2, pixels=4)
+
+    with pytest.raises(ValueError, match="2 samples"):
+        run_random_forest(df, "pce", ["temp"])
+
+
+def test_run_random_forest_does_not_leak_pixels_of_one_sample_across_folds():
+    # The target is a per-sample offset unrelated to the parameter, plus small
+    # pixel scatter. A row-wise split predicts each pixel from its siblings and
+    # scores a high R²; split by sample, there is nothing to learn.
+    rng = np.random.default_rng(1)
+    rows = []
+    for i in range(20):
+        param, offset = rng.uniform(0, 1), rng.normal(0, 5)
+        for _ in range(6):
+            rows.append({"sample_id": f"s{i}", "param": param, "pce": offset + rng.normal(0, 0.1)})
+    df = pd.DataFrame(rows)
+
+    result = run_random_forest(df, "pce", ["param"])
+
+    assert result["n_samples"] == 20 and result["n_rows"] == 120
+    assert result["r2"] < 0.2
+
+
+def test_run_random_forest_reports_rows_lost_to_missing_values():
+    df = _rf_dataset()
+    df.loc[:9, "noise_param"] = np.nan
+
+    result = run_random_forest(df, "pce", ["temp", "noise_param"])
+
+    assert result["n_rows_with_target"] == 30
+    assert result["n_rows"] == 20
+    assert result["missing_by_column"] == {"noise_param": 10}
+
+
+def test_run_random_forest_warns_below_recommended_sample_count():
+    result = run_random_forest(_rf_dataset(n_samples=10), "pce", ["temp"])
+
+    assert any("10 samples" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_counts_samples_not_pixels():
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["a", "b", "c"], 4),
+            "x": np.repeat([1.0, 2.0, 3.0], 4),
+            "y": np.arange(12.0),
+        }
+    )
+
+    with pytest.raises(ValueError, match="3 samples"):
+        suggest_next_experiments(df, "y", feature_cols=["x"])
+
+
+def test_suggest_next_experiments_loo_r2_is_high_on_smooth_data_and_ranges_bracket_mean():
+    result = suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"])
+
+    assert result["loo_r2"] > 0.8
+    assert len(result["loo_df"]) == 20
+    s = result["suggestions"]
+    assert (s["predicted_low"] <= s["predicted_y"]).all()
+    assert (s["predicted_y"] <= s["predicted_high"]).all()
+
+
+def test_suggest_next_experiments_flags_pure_noise():
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({"x": rng.uniform(0, 1, 30), "y": rng.normal(0, 1, 30)})
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x"])
+
+    assert result["loo_r2"] < 0.2
+    assert any("Leave-one-sample-out" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_warns_with_few_samples_per_parameter():
+    df = _bo_dataset().head(7)
+    df["x3"] = np.linspace(0, 1, 7)
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x1", "x2", "x3"])
+
+    assert any("free parameter" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_warns_when_data_spans_batches():
+    df = _bo_dataset()
+    df["batch"] = ["b1"] * 10 + ["b2"] * 10
+
+    result = suggest_next_experiments(df, "y", feature_cols=["x1", "x2"])
+
+    assert any("2 batches" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_log_target_back_transforms_predictions():
+    rng = np.random.default_rng(5)
+    x = rng.uniform(0, 4, 25)
+    df = pd.DataFrame({"x": x, "current": 10.0 ** (-x) * rng.lognormal(0, 0.1, 25)})
+
+    result = suggest_next_experiments(
+        df, "current", feature_cols=["x"], direction="minimize", log_target=True
+    )
+
+    assert result["log_target"] is True
+    assert result["loo_r2"] > 0.9
+    s = result["suggestions"]
+    assert (s["predicted_current"] > 0).all()
+    # Pick #1 sits at the optimum; with near-noiseless data later picks have
+    # ~zero EI and are arbitrary, so only the first is checked.
+    assert s.loc[0, "x"] > 3.5
+    assert s.loc[0, "predicted_current"] < 1e-3
+
+
+def test_suggest_next_experiments_log_target_rejects_non_positive_values():
+    df = _bo_dataset()
+
+    with pytest.raises(ValueError, match="> 0"):
+        suggest_next_experiments(df, "y", feature_cols=["x1", "x2"], log_target=True)
+
+
+def test_find_pareto_front_tie_on_first_objective_keeps_only_the_better_point():
+    df = pd.DataFrame({"a": [1.0, 1.0, 0.5], "b": [0.0, 1.0, 0.5]})
+
+    flags = find_pareto_front(df, "a", "b")["result_df"]["is_pareto_optimal"].tolist()
+
+    assert flags == [False, True, False]
+
+
+def _pixel_metadata_df():
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "sample_id": np.repeat([f"s{i}" for i in range(6)], 3),
+            "p1": np.repeat(rng.normal(size=6), 3),
+            "p2": np.repeat(rng.normal(size=6), 3),
+            "eff": rng.normal(size=18),
+        }
+    )
+
+
+def test_run_pca_counts_each_sample_once_and_returns_source_index():
+    df = _pixel_metadata_df()
+
+    result = run_pca(df, ["p1", "p2"])
+
+    assert result["n_samples"] == 6
+    assert len(result["source_index"]) == 6
+    assert list(df.loc[result["source_index"], "sample_id"]) == list(
+        result["scores_df"]["sample_id"]
+    )
+
+
+def test_outlier_flags_align_with_pca_points_when_sample_ids_repeat():
+    df = _pixel_metadata_df()
+    outliers = detect_outliers(df, ["p1", "p2", "eff"])
+    pca = run_pca(outliers["result_df"], feature_cols=outliers["feature_cols"])
+
+    flags = outliers["result_df"].loc[pca["source_index"], "is_outlier"]
+
+    assert len(flags) == len(pca["scores_df"]) == 18
+
+
+def test_run_anova_uses_per_sample_means():
+    # 2 samples per group, 5 pixels each: 10 pixel rows per group, but only 2
+    # independent observations.
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["a1", "a2", "b1", "b2"], 5),
+            "material": np.repeat(["A", "A", "B", "B"], 5),
+            "efficiency": np.repeat([10.0, 12.0, 11.0, 13.0], 5) + np.tile(np.arange(5) * 0.01, 4),
+        }
+    )
+
+    result = run_anova(df, "material", "efficiency")
+
+    assert result["groups"] == {"A": 2, "B": 2}
+    assert result["p_value"] > 0.05
+
+
+def test_compute_process_drift_uses_one_point_per_sample():
+    df = pd.DataFrame(
+        {
+            "sample_id": np.repeat(["s1", "s2", "s3", "s4"], 3),
+            "datetime": np.repeat(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"], 3),
+            "temp": np.repeat([100.0, 110.0, 120.0, 130.0], 3),
+        }
+    )
+
+    result = compute_process_drift(df, "temp")
+
+    assert result["n_samples"] == 4
+    assert result["slope"] == pytest.approx(10.0)
+
+
+def test_create_bo_loo_plot_and_importance_plot_render():
+    pmgr = PlotManager(
+        plot_widget=go.FigureWidget(),
+        stats_output=widgets.Output(),
+        rf_widget=go.FigureWidget(),
+        bo_widget=go.FigureWidget(),
+        bo_loo_widget=go.FigureWidget(),
+    )
+    result = suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"])
+
+    pmgr.create_bo_loo_plot(result["loo_df"], "y", result["loo_r2"], False)
+    pmgr.create_bo_suggestions_plot(result["suggestions"], "y")
+    pmgr.create_feature_importance_plot([("temp", 0.5, 0.1), ("gap", 0.1, 0.05)], "pce")
+
+    assert len(pmgr.bo_loo_widget.data[1].x) == 20
+    assert list(pmgr.rf_widget.data[0].y) == ["gap", "temp"]
+
+
+def test_merge_results_per_sample_fills_column_groups_with_merged_names():
+    jv = pd.DataFrame({"sample_id": ["a", "b"], "efficiency": [1.0, 2.0], "datetime": ["x", "y"]})
+    mpp = pd.DataFrame({"sample_id": ["a", "b"], "power": [3.0, 4.0], "datetime": ["x", "y"]})
+    groups = {}
+
+    merged, _ = merge_results_per_sample(
+        {"jv_measurement": jv, "mpp_tracking": mpp}, "Mean", column_groups=groups
+    )
+
+    assert groups["efficiency"] == "JV"
+    assert groups["power"] == "MPP Tracking"
+    assert groups["datetime_mpp_tracking"] == "MPP Tracking"
+    assert set(groups) == set(merged.columns) - {"sample_id"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #48
+# ---------------------------------------------------------------------------
+
+
+def test_average_rows_per_sample_gives_one_row_per_sample():
+    df = pd.DataFrame(
+        {"sample_id": ["a", "a", "b"], "temp": [100, 100, 120], "pce": [10.0, 12.0, 15.0]}
+    )
+
+    out = average_rows_per_sample(df, ["temp", "pce"])
+
+    assert list(out["sample_id"]) == ["a", "b"]
+    assert list(out["pce"]) == [11.0, 15.0]
+
+
+def test_average_rows_per_sample_passes_through_when_nothing_repeats():
+    df = pd.DataFrame({"sample_id": ["a", "b"], "pce": [1.0, 2.0]})
+
+    assert average_rows_per_sample(df, ["pce"]) is df
+
+
+def test_is_measured_parameter_matches_base_name_and_merge_suffix():
+    measured = {"relative_humidity"}
+
+    assert is_measured_parameter("relative_humidity", measured)
+    assert is_measured_parameter("relative_humidity_Inkjet Printing", measured)
+    assert not is_measured_parameter("annealing_temperature", measured)
+
+
+def test_bo_search_space_row_for_measured_parameter_starts_fixed_at_median():
+    gui = GUIManager()
+    gui.set_bo_search_space(
+        [
+            {"col": "temp", "min": 100.0, "max": 150.0, "integer": False},
+            {
+                "col": "relative_humidity",
+                "min": 20.0,
+                "max": 40.0,
+                "integer": False,
+                "measured": True,
+                "median": 31.0,
+            },
+        ]
+    )
+
+    space = gui.get_bo_search_space()
+
+    assert space["temp"]["fixed"] is None
+    assert space["relative_humidity"]["fixed"] == 31.0
+
+
+def _categorical_dataset(seed=0, n=40):
+    rng = np.random.default_rng(seed)
+    material = rng.choice(["A", "B", "C"], n)
+    temp = rng.uniform(100, 200, n)
+    offset = pd.Series(material).map({"A": 0.0, "B": 5.0, "C": 1.0}).to_numpy()
+    pce = offset - ((temp - 150) / 25) ** 2 + rng.normal(0, 0.3, n)
+    return pd.DataFrame(
+        {"sample_id": [f"s{i}" for i in range(n)], "material": material, "temp": temp, "pce": pce}
+    )
+
+
+def test_run_random_forest_uses_categorical_parameter_and_its_partial_dependence():
+    result = run_random_forest(
+        _categorical_dataset(), "pce", ["temp"], categorical_cols=["material"]
+    )
+
+    assert result["importances"][0][0] == "material"
+    pd_material = next(p for p in result["partial_dependence"] if p["feature"] == "material")
+    assert pd_material["kind"] == "categorical"
+    best = pd_material["grid"][int(np.argmax(pd_material["average"]))]
+    assert best == "B"
+
+
+def test_run_random_forest_drops_single_level_categorical_with_a_note():
+    df = _categorical_dataset()
+    df["lab"] = "HZB"
+
+    result = run_random_forest(df, "pce", ["temp"], categorical_cols=["lab"])
+
+    assert [name for name, _, _ in result["importances"]] == ["temp"]
+    assert any("'lab' has a single value" in w for w in result["warnings"])
+
+
+def test_run_random_forest_numeric_partial_dependence_follows_the_effect():
+    result = run_random_forest(_rf_dataset(), "pce", ["temp", "noise_param"])
+
+    temp_pd = next(p for p in result["partial_dependence"] if p["feature"] == "temp")
+    assert temp_pd["kind"] == "numeric"
+    assert temp_pd["average"][-1] > temp_pd["average"][0]
+
+
+def test_run_random_forest_flags_strongly_correlated_parameters():
+    df = _rf_dataset()
+    df["temp_copy"] = df["temp"] * 2 + 1
+
+    result = run_random_forest(df, "pce", ["temp", "temp_copy", "noise_param"])
+
+    assert ("temp", "temp_copy") == result["correlated_pairs"][0][:2]
+    assert any("Strongly correlated" in w for w in result["warnings"])
+
+
+def test_suggest_next_experiments_picks_the_best_categorical_level():
+    result = suggest_next_experiments(
+        _categorical_dataset(),
+        "pce",
+        feature_cols=["temp"],
+        categorical_cols=["material"],
+        n_suggestions=1,
+    )
+
+    s = result["suggestions"]
+    assert s.loc[0, "material"] == "B"
+    assert 125 < s.loc[0, "temp"] < 175
+    assert "material" in result["length_scales"]
+
+
+def test_suggest_next_experiments_respects_fixed_categorical_level():
+    result = suggest_next_experiments(
+        _categorical_dataset(),
+        "pce",
+        feature_cols=["temp"],
+        categorical_cols=["material"],
+        fixed={"material": "A"},
+        n_suggestions=3,
+    )
+
+    assert (result["suggestions"]["material"] == "A").all()
+
+
+def test_suggest_next_experiments_rejects_unknown_fixed_level():
+    with pytest.raises(ValueError, match="not a level"):
+        suggest_next_experiments(
+            _categorical_dataset(),
+            "pce",
+            feature_cols=["temp"],
+            categorical_cols=["material"],
+            fixed={"material": "Z"},
+        )
+
+
+def _batch_dataset(seed=0):
+    # Four batches with large offsets on top of a smooth temp effect.
+    rng = np.random.default_rng(seed)
+    rows = []
+    for b, offset in enumerate([0.0, 4.0, -3.0, 2.0]):
+        for _ in range(8):
+            temp = rng.uniform(100, 200)
+            pce = 10 + offset - ((temp - 150) / 25) ** 2 + rng.normal(0, 0.2)
+            rows.append({"batch": f"b{b}", "temp": temp, "pce": pce})
+    df = pd.DataFrame(rows)
+    df.insert(0, "sample_id", [f"s{i}" for i in range(len(df))])
+    return df
+
+
+def test_suggest_next_experiments_models_batch_offsets():
+    df = _batch_dataset()
+
+    with_batch = suggest_next_experiments(
+        df, "pce", feature_cols=["temp"], batch_col="batch", n_suggestions=1
+    )
+    without = suggest_next_experiments(df, "pce", feature_cols=["temp"], n_suggestions=1)
+
+    assert with_batch["n_batches"] == 4
+    assert 1.5 < with_batch["batch_offset_sd"] < 6
+    assert with_batch["loo_r2"] > without["loo_r2"]
+    # The batch-free noise estimate is far below the batch-to-batch scatter.
+    assert with_batch["noise_sd"] < without["noise_sd"]
+    assert 135 < with_batch["suggestions"].loc[0, "temp"] < 165
+
+
+def test_suggest_next_experiments_single_batch_is_not_modelled():
+    df = _batch_dataset()
+    df["batch"] = "only"
+
+    result = suggest_next_experiments(df, "pce", feature_cols=["temp"], batch_col="batch")
+
+    assert result["batch_col"] is None
+    assert any("one 'batch' value" in w for w in result["warnings"])
+
+
+def _constraint_dataset(seed=0, n=40):
+    rng = np.random.default_rng(seed)
+    x1, x2 = rng.uniform(0, 1, n), rng.uniform(0, 1, n)
+    return pd.DataFrame(
+        {
+            "sample_id": [f"s{i}" for i in range(n)],
+            "x1": x1,
+            "x2": x2,
+            "y": x1 + 0.2 * x2,
+            "dark": x1 + x2 + rng.normal(0, 0.02, n),
+        }
+    )
+
+
+def test_suggest_next_experiments_constraint_keeps_suggestions_feasible():
+    result = suggest_next_experiments(
+        _constraint_dataset(),
+        "y",
+        feature_cols=["x1", "x2"],
+        n_suggestions=3,
+        constraints=[{"col": "dark", "op": "<=", "value": 1.0}],
+    )
+
+    s = result["suggestions"]
+    # Constrained optima sit on the boundary, so picks land close to it.
+    assert (s["x1"] + s["x2"] < 1.15).all()
+    # Later picks in the batch can be weakly motivated (near-zero score); the
+    # first is the real constrained-BO choice.
+    assert s.loc[0, "probability_feasible"] > 0.5
+    # Unconstrained, the best is at x1 = x2 = 1 (dark ~2).
+    assert s.loc[0, "x1"] > 0.6
+
+
+def test_suggest_next_experiments_without_feasible_sample_aims_at_feasibility():
+    result = suggest_next_experiments(
+        _constraint_dataset(),
+        "y",
+        feature_cols=["x1", "x2"],
+        n_suggestions=1,
+        constraints=[{"col": "dark", "op": "<=", "value": -0.5}],
+    )
+
+    assert result["incumbent"] is None
+    assert any("meet the constraints" in w for w in result["warnings"])
+    s = result["suggestions"]
+    assert s.loc[0, "x1"] + s.loc[0, "x2"] < 0.3
+
+
+def test_suggest_next_experiments_rejects_constraint_on_target():
+    with pytest.raises(ValueError, match="target itself"):
+        suggest_next_experiments(
+            _constraint_dataset(),
+            "y",
+            feature_cols=["x1"],
+            constraints=[{"col": "y", "op": "<=", "value": 1}],
+        )
+
+
+def test_suggest_pareto_experiments_spreads_along_the_trade_off():
+    # a prefers high x, b prefers low x: every x is Pareto-optimal.
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0, 1, 25)
+    df = pd.DataFrame({"sample_id": [f"s{i}" for i in range(25)], "x": x, "a": x, "b": 1 - x**2})
+
+    result = suggest_pareto_experiments(
+        df,
+        [("a", "maximize"), ("b", "maximize")],
+        n_suggestions=5,
+        feature_cols=["x"],
+    )
+
+    s = result["suggestions"]
+    assert len(s) == 5
+    assert s["x"].max() - s["x"].min() > 0.4
+    assert {"predicted_a", "predicted_b", "weight_a", "weight_b"} <= set(s.columns)
+    # Picks that favour a (high weight_a) sit at higher x.
+    assert s.sort_values("weight_a")["x"].iloc[-1] > s.sort_values("weight_a")["x"].iloc[0]
+
+
+def test_suggest_pareto_experiments_needs_two_distinct_objectives():
+    df = _bo_dataset()
+    with pytest.raises(ValueError):
+        suggest_pareto_experiments(df, [("y", "maximize")], feature_cols=["x1"])
+    with pytest.raises(ValueError):
+        suggest_pareto_experiments(df, [("y", "maximize"), ("y", "minimize")], feature_cols=["x1"])
+
+
+def test_categorical_checklist_defaults_unticked_and_keeps_choices():
+    gui = GUIManager()
+    gui.set_analysis_columns(["pce"], ["temp"], categorical_cols=["material", "batch"])
+    assert gui.get_checked_categorical_columns() == []
+
+    gui.categorical_checklist_box.children[0].value = True
+    gui.set_analysis_columns(["pce"], ["temp"], categorical_cols=["material", "batch", "solvent"])
+
+    assert gui.get_checked_categorical_columns() == ["material"]
+
+
+def test_bo_search_space_categorical_row_returns_chosen_level():
+    gui = GUIManager()
+    gui.set_bo_search_space([{"col": "material", "levels": ["A", "B"]}])
+    assert gui.get_bo_search_space()["material"] == {"categorical": True, "fixed": None}
+
+    gui.bo_search_space_box.children[0]._bo_widgets[0].value = "B"
+
+    assert gui.get_bo_search_space()["material"]["fixed"] == "B"
+
+
+def test_bo_constraints_only_returns_enabled_rows():
+    gui = GUIManager()
+    for _, column, _, _ in gui.bo_constraint_rows:
+        column.options = ["jsc", "voc"]
+    enable, column, op, value = gui.bo_constraint_rows[1]
+    enable.value, column.value, op.value, value.value = True, "voc", ">=", 1.1
+
+    assert gui.get_bo_constraints() == [{"col": "voc", "op": ">=", "value": 1.1}]
+
+
+def test_doe_link_is_styled_as_a_link():
+    """The link sat in plain text; it must be underlined and coloured so it reads as clickable."""
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[2] / "apps" / "Global_analyzer" / "gui_components.py"
+    ).read_text(encoding="utf-8")
+    anchor = re.search(r"<a href=\"\{doe_voila_url\}\"[^>]*?style=\"([^\"]*)\"", source)
+    assert anchor, "DoE link has no inline style"
+    assert "underline" in anchor.group(1) and "color" in anchor.group(1)
+
+
+# ---------------------------------------------------------------------------
+# 5.8: result columns that share a name, plotting merge without cross-pairing, "Max",
+# identifier-like parameters, samples with several entries of one process
+# ---------------------------------------------------------------------------
+
+
+def test_measurement_row_dump_only_carries_the_fields_that_were_set():
+    """model_dump() put all 12 JV-schema fields (efficiency, bandgap, ...) into EQE, PL and
+    SEM rows as None, which then blocked those types' real columns."""
+    row = MeasurementRow(sample_id="s1", bandgap=1.6)
+    assert row.model_dump(exclude_unset=True) == {"sample_id": "s1", "bandgap": 1.6}
+
+
+def _plot_dm(results, metadata=None):
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_results = results
+    dm.current_metadata = metadata or {}
+    return dm
+
+
+def _rebuild(dm):
+    dm.rebuild_merged_data(None, None, None, "All", "All", "All")
+
+
+def test_plotting_merge_keeps_the_bandgap_of_every_result_type():
+    """JV, EQE and PL each have a bandgap: EQE's and PL's were dropped, 'bandgap (EQE)'
+    plotted nothing."""
+    dm = _plot_dm(
+        {
+            "jv_measurement": pd.DataFrame({"sample_id": ["S1"], "efficiency": [18.0]}),
+            "eqe_measurement": pd.DataFrame({"sample_id": ["S1"], "bandgap": [1.6]}),
+            "pl_measurement": pd.DataFrame({"sample_id": ["S1"], "bandgap": [1.55]}),
+        }
+    )
+    _rebuild(dm)
+
+    eqe = dm.resolve_result_column("bandgap (EQE)")
+    pl = dm.resolve_result_column("bandgap (PL)")
+    assert eqe != pl
+    assert dm.merged_data[eqe].iloc[0] == pytest.approx(1.6)
+    assert dm.merged_data[pl].iloc[0] == pytest.approx(1.55)
+
+
+def test_a_result_datetime_next_to_a_process_datetime_is_kept():
+    """With an Inkjet/ALD/... source selected, JV's datetime was dropped and
+    'datetime (JV)' plotted the process date."""
+    dm = _plot_dm(
+        {
+            "jv_measurement": pd.DataFrame(
+                {"sample_id": ["S1"], "efficiency": [18.0], "datetime": ["2024-05-05"]}
+            )
+        },
+        metadata={
+            "ald": pd.DataFrame({"sample_id": ["S1"], "datetime": ["2024-01-01"], "layer": ["x"]})
+        },
+    )
+    dm.rebuild_merged_data("ald", None, None, "All", "All", "All")
+    column = dm.resolve_result_column("datetime (JV)")
+    assert dm.merged_data[column].iloc[0] == "2024-05-05"
+    assert dm.merged_data["datetime"].iloc[0] == "2024-01-01"  # the process date is unchanged
+
+
+def test_plotting_merge_does_not_cross_pair_rows_of_different_result_types():
+    """8 JV rows x 2 EQE x 2 MPP gave 32 rows per sample; now one type keeps its points."""
+    jv = pd.DataFrame({"sample_id": ["S1"] * 8, "efficiency": [float(i) for i in range(8)]})
+    eqe = pd.DataFrame({"sample_id": ["S1"] * 2, "jsc_eqe": [20.0, 22.0]})
+    mpp = pd.DataFrame({"sample_id": ["S1"] * 2, "mpp_power": [15.0, 17.0]})
+    dm = _plot_dm({"jv_measurement": jv, "eqe_measurement": eqe, "mpp_tracking": mpp})
+    _rebuild(dm)
+
+    assert len(dm.merged_data) == 8
+    assert dm.merged_data["efficiency"].tolist() == [float(i) for i in range(8)]
+    assert set(dm.merged_data["jsc_eqe"]) == {21.0}  # that sample's mean, pixel by pixel
+    assert set(dm._collapsed_result_types) == {"eqe_measurement", "mpp_tracking"}
+
+
+def test_resolve_result_column_ignores_non_result_parameters():
+    dm = _plot_dm({"jv_measurement": pd.DataFrame({"sample_id": ["S1"], "efficiency": [1.0]})})
+    _rebuild(dm)
+    assert dm.resolve_result_column("annealing_temperature") is None
+    assert dm.resolve_result_column("efficiency (JV)") == "efficiency"
+    assert dm.resolve_result_column("efficiency (XYZ)") is None
+
+
+def test_plot_manager_uses_the_resolver_for_display_names():
+    manager = PlotManager(plot_widget=go.FigureWidget(), stats_output=widgets.Output())
+    assert manager.extract_column_name("bandgap (EQE)") == "bandgap"  # unchanged without one
+    manager.column_resolver = lambda param: "bandgap_eqe_measurement" if "EQE" in param else None
+    assert manager.extract_column_name("bandgap (EQE)") == "bandgap_eqe_measurement"
+    assert manager.extract_column_name("bandgap (PL)") == "bandgap"
+    assert manager.extract_column_name("Notes") == "description"
+
+
+def test_max_aggregation_takes_the_best_device_not_a_column_wise_composite():
+    """Max of each column on its own built a device nobody measured: the highest Voc of one
+    pixel with the highest FF of another."""
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S1", "S2"],
+            "efficiency": [16.0, 19.0, 10.0, 12.0],
+            "open_circuit_voltage": [1.10, 1.02, 1.20, 0.9],
+            "fill_factor": [0.80, 0.75, 0.60, 0.7],
+        }
+    )
+    out = aggregate_results_per_sample(df, "Max").set_index("sample_id")
+    best = out.loc["S1"]
+    assert best["efficiency"] == 19.0 and best["open_circuit_voltage"] == 1.02
+    assert best["fill_factor"] == 0.75  # all from the 19% pixel
+    assert out.loc["S2"]["efficiency"] == 12.0
+
+
+def test_max_aggregation_falls_back_to_column_max_without_an_efficiency_column():
+    df = pd.DataFrame({"sample_id": ["S1", "S1"], "bandgap": [1.5, 1.7]})
+    assert aggregate_results_per_sample(df, "Max")["bandgap"].iloc[0] == 1.7
+
+
+def test_max_aggregation_keeps_samples_without_any_efficiency():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2"],
+            "efficiency": [None, None, 5.0],
+            "fill_factor": [0.5, 0.6, 0.7],
+        }
+    )
+    out = aggregate_results_per_sample(df, "Max").set_index("sample_id")
+    assert out.loc["S1"]["fill_factor"] == 0.6  # column-wise fallback, but the sample stays
+    assert out.loc["S2"]["efficiency"] == 5.0
+
+
+def test_identifier_like_columns_start_unchecked_but_stay_available():
+    import config
+
+    for column in ("position_in_plan", "position_in_plan_spin_coating", "number_of_pixels"):
+        assert config.is_identifier_like(column), column
+    for column in ("annealing_temperature", "speed", "positions"):
+        assert not config.is_identifier_like(column), column
+
+    gui = GUIManager()
+    gui.set_analysis_columns(
+        ["efficiency"], ["annealing_temperature", "position_in_plan", "pixel_area"]
+    )
+    states = {cb.description: cb.value for cb in gui.metadata_checklist_box.children}
+    assert states == {
+        "annealing_temperature": True,
+        "position_in_plan": False,
+        "pixel_area": False,
+    }
+    # a choice the user already made survives a rebuild
+    gui.metadata_checklist_box.children[1].value = True
+    gui.set_analysis_columns(["efficiency"], ["annealing_temperature", "position_in_plan"])
+    assert {cb.description: cb.value for cb in gui.metadata_checklist_box.children}[
+        "position_in_plan"
+    ]
+
+
+def test_samples_with_several_entries_of_one_process_are_listed():
+    """Two spin-coating 'Absorber' entries per sample duplicated every result row."""
+    from data_manager import samples_with_several_rows
+
+    df = pd.DataFrame(
+        {"sample_id": ["S1", "S1", "S2", "S3", "S3"], "rpm": [1000, 3000, 2000, 1, 2]}
+    )
+    assert samples_with_several_rows(df) == ["S1", "S3"]
+    assert samples_with_several_rows(df.drop_duplicates("sample_id")) == []
+    assert samples_with_several_rows(None) == []
+    assert samples_with_several_rows(pd.DataFrame({"rpm": [1]})) == []
+
+
+# --- MPP results: every figure of merit becomes a column ----------------------------------
+
+
+def _mpp_entry(results=None, properties=None):
+    entry = {
+        "name": "HZB_X_C-1",
+        "datetime": "2026-01-01",
+        "time": [0.0, 1.0],  # arrays at the top level are not columns
+        "properties": properties if properties is not None else {"time": 3629877.0},
+    }
+    if results is not None:
+        entry["results"] = results
+    return entry
+
+
+def test_mpp_rows_carry_every_scalar_figure_of_merit_and_the_duration():
+    """Simple MPP showed only `time`: T80, T95, Ts80, LEY... sit in `results`."""
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(
+        _mpp_entry(
+            [
+                {
+                    "T80": 1708239.0,
+                    "T95": 68283.0,
+                    "PCE_after_1000_h": 5.0,
+                    "lifetime_energy_yield": 12.5,
+                    "fit_method": "Exponential",
+                    "fitted_time": [0.0, 1.0],  # an array: not a column
+                }
+            ]
+        ),
+        ["datetime", "name"],
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["T80"] == 1708239.0 and row["T95"] == 68283.0
+    assert row["lifetime_energy_yield"] == 12.5 and row["fit_method"] == "Exponential"
+    assert row["time"] == 3629877.0 and row["name"] == "HZB_X_C-1"
+    assert "fitted_time" not in row and not any(isinstance(v, list) for v in row.values())
+
+
+def test_mpp_fit_parameters_become_prefixed_columns_with_their_errors():
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(
+        _mpp_entry(
+            [
+                {
+                    "T80": 10.0,
+                    "fit_parameters": [
+                        {"name": "A", "value": 20.0, "unit": "mW/cm^2", "error": 0.5},
+                        {"name": "tau", "value": 3600.0, "unit": "s"},
+                    ],
+                }
+            ]
+        ),
+        [],
+    )
+    row = rows[0]
+    assert row["fit_A"] == 20.0 and row["fit_A_error"] == 0.5
+    assert row["fit_tau"] == 3600.0 and "fit_tau_error" not in row
+    assert "fit_parameters" not in row
+
+
+def test_mpp_entry_without_results_still_gives_its_properties():
+    from data_manager import mpp_result_rows
+
+    assert mpp_result_rows(_mpp_entry(None), ["name"]) == [{"time": 3629877.0, "name": "HZB_X_C-1"}]
+    assert mpp_result_rows(_mpp_entry([]), []) == [{"time": 3629877.0}]
+
+
+def test_mpp_entry_with_several_results_gives_one_row_each():
+    from data_manager import mpp_result_rows
+
+    rows = mpp_result_rows(_mpp_entry([{"T80": 1.0}, {"T80": 2.0}]), [])
+    assert [r["T80"] for r in rows] == [1.0, 2.0]
+
+
+def test_loading_results_uses_the_mpp_extraction_for_both_mpp_types(monkeypatch):
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.data_loader = type(
+        "FakeLoader",
+        (),
+        {
+            name: staticmethod(lambda *a, **k: None)
+            for name in (
+                "load_inkjet_printing_data",
+                "load_cleaning_data",
+                "load_substrate_data",
+                "load_evaporation_data",
+                "load_slot_die_coating_data",
+                "load_spin_coating_data",
+                "load_ald_data",
+                "load_blade_coating_data",
+                "load_dip_coating_data",
+                "load_laser_scribing_data",
+                "load_annealing_data",
+            )
+        }
+        | {"url": "http://example.test", "token": "token"},
+    )()
+
+    def fake_get_all_eqe(url, token, sample_ids, measurement_type):
+        if measurement_type != "HySprint_SimpleMPPTracking":
+            return None
+        return {"S1": [(_mpp_entry([{"T80": 100.0, "T95": 10.0}]), {})]}
+
+    monkeypatch.setattr("data_manager.get_all_eqe", fake_get_all_eqe, raising=False)
+    dm.load_all_data_for_summary(["S1"], {"S1": ""})
+
+    frame = dm.current_results["simple_mpp_tracking"]
+    assert {"T80", "T95", "time"} <= set(frame.columns)
+    options = dm.get_parameter_options(dm.current_results, "x_parameters", is_results=True)
+    assert "T80 (Simple MPP)" in options and "T95 (Simple MPP)" in options
+
+
+# --- the Filters tab: one filter set for Plotting and the analysis tabs ---------------------
+
+
+def _plot_frame():
+    return pd.DataFrame(
+        {
+            "sample_id": ["S1", "S1", "S2", "S3"],
+            "efficiency": [18.0, 4.0, 15.0, 9.0],
+            "T80": [10.0, 20.0, 30.0, 40.0],
+        }
+    )
+
+
+def test_filter_plot_data_applies_row_filters_and_sample_exclusion():
+    from data_manager import filter_plot_data
+
+    filters = [{"id": 1, "column": "efficiency", "op": ">=", "value": 10.0}]
+    kept, skipped = filter_plot_data(_plot_frame(), filters, {"S2"})
+    assert list(kept["efficiency"]) == [18.0]  # the 4.0 pixel fails the filter, S2 is excluded
+    assert skipped == []
+
+
+def test_filter_plot_data_reports_a_filter_on_a_column_the_plot_does_not_have():
+    from data_manager import filter_plot_data
+
+    filters = [
+        {"id": 1, "column": "efficiency", "op": ">", "value": 10.0},
+        {"id": 2, "column": "annealing_temperature", "op": ">", "value": 100.0},
+    ]
+    kept, skipped = filter_plot_data(_plot_frame(), filters, set())
+    assert len(kept) == 2  # only the applicable filter ran
+    assert [f["column"] for f in skipped] == ["annealing_temperature"]
+
+
+def test_filter_plot_data_without_filters_returns_everything():
+    from data_manager import filter_plot_data
+
+    kept, skipped = filter_plot_data(_plot_frame(), [], set())
+    assert len(kept) == 4 and skipped == []
+
+
+def test_filters_tab_comes_right_after_parameter_summary_and_owns_the_filter_widgets(monkeypatch):
+    monkeypatch.setattr(
+        "gui_components.get_batch_ids_with_authors",
+        lambda url, token: [{"lab_id": "B_1", "author_name": "me"}],
+    )
+    gui = GUIManager()
+    gui.setup_batch_selection("http://x", "t", lambda *a: None)
+    gui.create_layout()
+    titles = list(gui.main_tabs.titles)
+    assert titles[:3] == ["Parameter Summary", "Filters", "Plotting"]
+    assert "Analysis Data" in titles[3]
+
+    def contains(widget, target):
+        return widget is target or any(contains(c, target) for c in getattr(widget, "children", ()))
+
+    filters_tab = gui.main_tabs.children[1]
+    analysis_tab = gui.main_tabs.children[3]
+    for owned in (gui.add_filter_button, gui.active_filters_box, gui.sample_exclusion_accordion):
+        assert contains(filters_tab, owned)
+        assert not contains(analysis_tab, owned)
+    gui.set_filter_summary("3 of 5 samples")
+    assert "3 of 5 samples" in gui.filter_summary_html.value
+    gui.set_filter_summary("")
+    assert gui.filter_summary_html.value == ""
+
+
+def test_filters_tab_has_a_confirm_button_that_flags_unconfirmed_edits(monkeypatch):
+    monkeypatch.setattr(
+        "gui_components.get_batch_ids_with_authors",
+        lambda url, token: [{"lab_id": "B_1", "author_name": "me"}],
+    )
+    gui = GUIManager()
+    gui.setup_batch_selection("http://x", "t", lambda *a: None)
+    gui.create_layout()
+    clicked = []
+    gui.connect_callbacks({"confirm_filters": clicked.append})
+    gui.confirm_filters_button.click()
+    assert len(clicked) == 1
+    gui.set_filters_pending(True)
+    assert "Confirm filters" in gui.filters_pending_html.value
+    assert gui.confirm_filters_button.button_style == "warning"
+    gui.set_filters_pending(False)
+    assert gui.filters_pending_html.value == ""
+    assert gui.confirm_filters_button.button_style == "success"

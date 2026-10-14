@@ -56,7 +56,7 @@ workflow: from JV curve analysis and MPPT tracking to EQE, TRPL, XRD, XPS, and m
 Clone the repository:
 
 ```bash
-git clone https://github.com/EdNanda/nomad-pv-analysis-apps.git
+git clone https://github.com/nomad-hzb/nomad-pv-analysis-apps.git
 cd nomad-pv-analysis-apps
 ```
 
@@ -126,8 +126,7 @@ nomad-pv-analysis-apps/
 │       ├── auth_manager.py
 │       ├── batch_selection.py
 │       ├── error_handler.py
-│       ├── plotting_utils.py
-│       └── process_handling.py
+│       └── plotting_utils.py
 ├── apps/                       # one folder per app (see table above for the full list)
 │   ├── JV-Analysis/
 │   ├── Peak_Explorer/
@@ -147,10 +146,11 @@ nomad-pv-analysis-apps/
 ## Contributing
 
 Contributions, bug reports, and feature requests are welcome. Please open an
-issue or pull request on GitHub.
+issue or pull request on GitHub; the workflow is described in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 If you are adapting these apps for a different NOMAD instance or server
-environment, see the adapter documentation in `shared/hysprint_utils/adapters/`.
+environment, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 

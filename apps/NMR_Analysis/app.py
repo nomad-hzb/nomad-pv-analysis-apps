@@ -86,7 +86,7 @@ class NMRPlotterApp:
             return
         with self._status_out:
             ErrorHandler.log_success(
-                "Loaded %d demo NMR spectra." % len(self._dm.sample_ids), self._status_out
+                "Loaded %d demo NMR spectra." % len(self._dm.measurement_ids), self._status_out
             )
         self._build_data_ui()
 
@@ -118,7 +118,7 @@ class NMRPlotterApp:
 
         with self._status_out:
             ErrorHandler.log_success(
-                "Loaded %d NMR spectra." % len(self._dm.sample_ids), self._status_out
+                "Loaded %d NMR spectra." % len(self._dm.measurement_ids), self._status_out
             )
 
         self._build_data_ui()

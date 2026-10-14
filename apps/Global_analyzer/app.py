@@ -28,18 +28,24 @@ import logging
 import traceback
 from typing import List, Optional
 
+import config
 import experimental_analysis as experimental
 import ml_analysis as ml
 import pandas as pd
 from data_loader import HySprintDataLoader
 from data_manager import (
     DataManager,
-    aggregate_results_per_sample,
     apply_row_filters,
+    average_rows_per_sample,
     exclude_samples,
+    filter_plot_data,
     get_categorical_columns,
     get_layer_type_options,
+    merge_results_per_sample,
+    merged_result_column_names,
     parse_uploaded_analysis_csv,
+    process_type_label,
+    samples_with_several_rows,
     select_layer_row_per_sample,
     uploaded_numeric_columns,
     variation_warning,
@@ -61,6 +67,34 @@ from hysprint_utils.api_calls import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _rows_note(result: dict) -> str:
+    """' (N rows: ...)' when the model saw more rows than samples (pixels, repeats)."""
+    if result["n_rows"] == result["n_samples"]:
+        return ""
+    return f" ({result['n_rows']} rows: several measurements per sample)"
+
+
+def _format_cell(value) -> str:
+    """A table cell: numbers to 3 significant digits, anything else as text."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:.3g}"
+    return str(value)
+
+
+def _missing_note(result: dict) -> str:
+    """A Markdown bullet naming the parameters whose missing values cost rows."""
+    missing = result["missing_by_column"]
+    if not missing:
+        return ""
+    dropped = result["n_rows_with_target"] - result["n_rows"]
+    worst = ", ".join(f"`{col}` ({n})" for col, n in list(missing.items())[:3])
+    return (
+        f"- ⚠️ {dropped} of {result['n_rows_with_target']} rows with a target value "
+        f"were left out for missing parameter values, mostly: {worst}. Unchecking a "
+        "sparse parameter in the Analysis Data tab brings them back.\n"
+    )
 
 
 class SampleDataExplorer:
@@ -99,7 +133,10 @@ class SampleDataExplorer:
             self.gui.experimental_outlier_widget,
             self.gui.experimental_drift_widget,
             self.gui.experimental_anova_widget,
+            bo_loo_widget=self.gui.bo_loo_widget,
+            rf_pdp_output=self.gui.rf_pdp_output,
         )
+        self.plot_manager.column_resolver = self.data_manager.resolve_result_column
 
         # Application state
         self.current_batches = []
@@ -117,11 +154,22 @@ class SampleDataExplorer:
         self.analysis_df = None
         self.analysis_metadata_cols = []
         self.analysis_results_cols = []
+        # {column in the merged results table: result schema label, e.g. "JV"};
+        # drives the grouped Results tree in the Analysis Data tab.
+        self.analysis_results_groups: dict = {}
+        # Same for process metadata columns ("Spin Coating", ...).
+        self.analysis_metadata_groups: dict = {}
+        # row_filters is what the Filters tab shows (staged); the applied copies are what
+        # every tab reads, and only change when the user clicks Confirm filters.
         self.row_filters: list = []  # [{"id", "column", "op", "value"}, ...]
+        self._applied_filters: list = []
+        self._applied_excluded: set = set()
         self._next_filter_id = 1
         self._last_correlation_result = None
         self._last_rf_result = None
         self._last_bo_result = None
+        self._collapsed_result_types = []
+        self.analysis_categorical_cols = []
         # A user-uploaded CSV (issue #40) replaces the NOMAD-built dataset until
         # the next batch load; kept separately so Recalculate re-applies it
         # instead of rebuilding from (possibly empty) NOMAD data.
@@ -151,6 +199,7 @@ class SampleDataExplorer:
                 "upload_analysis_csv": self._on_upload_analysis_csv,
                 "upload_results_columns_changed": self._on_upload_results_columns_changed,
                 "add_row_filter": self._on_add_row_filter,
+                "confirm_filters": self._on_confirm_filters,
                 "download_analysis_data_preview": self._on_download_analysis_data_preview,
                 "download_correlations": self._on_download_correlations,
                 "download_rf_results": self._on_download_rf_results,
@@ -209,12 +258,23 @@ class SampleDataExplorer:
                 default = next((c for c in numeric_cols if "efficiency" in c.lower()), None)
                 selector.value = default if default else numeric_cols[0]
 
+        other_selectors = [self.gui.bo_pareto_target] + [
+            column for _, column, _, _ in self.gui.bo_constraint_rows
+        ]
+        for selector in other_selectors:
+            previous_value = selector.value
+            selector.options = numeric_cols
+            if previous_value in numeric_cols:
+                selector.value = previous_value
+
         self._refresh_bo_search_space()
 
     def _refresh_bo_search_space(self):
         """Rebuild the BO tab's search-space rows for the checked Process
         Metadata columns, defaulting each to its observed range and to integer
-        when every measured value is a whole number."""
+        when every measured value is a whole number. Columns listed in
+        config.MEASURED_PARAMETERS (logged conditions, not settings) start
+        fixed at their median."""
         if self.analysis_df is None or self.analysis_df.empty:
             self.gui.set_bo_search_space([])
             return
@@ -236,8 +296,16 @@ class SampleDataExplorer:
                     "min": float(values.min()),
                     "max": float(values.max()),
                     "integer": col in integer_cols,
+                    "measured": ml.is_measured_parameter(col, config.MEASURED_PARAMETERS),
+                    "median": float(values.median()),
                 }
             )
+        for col in self.gui.get_checked_categorical_columns():
+            if col == "batch" or col not in self.analysis_df.columns:
+                continue
+            levels = sorted(self.analysis_df[col].dropna().astype(str).unique())
+            if len(levels) > 1:
+                defaults.append({"col": col, "levels": levels})
         self.gui.set_bo_search_space(defaults)
 
     def _build_process_dataframe(self) -> Optional[pd.DataFrame]:
@@ -264,6 +332,7 @@ class SampleDataExplorer:
 
         layer_selections = self.gui.get_layer_selections()
         process_df = None
+        self.analysis_metadata_groups = {}
         for metadata_type, metadata_df in self.data_manager.current_metadata.items():
             if metadata_df is None or metadata_df.empty or "sample_id" not in metadata_df.columns:
                 continue
@@ -273,8 +342,12 @@ class SampleDataExplorer:
             if metadata_df.empty:
                 continue
             if process_df is None:
+                renamed = {c: c for c in metadata_df.columns if c != "sample_id"}
                 process_df = metadata_df.copy()
             else:
+                renamed = merged_result_column_names(
+                    process_df.columns, metadata_df.columns, metadata_type
+                )
                 # Suffix by process type (not a generic "_dup") - the same column name
                 # (e.g. layer_material_name) means something different per process
                 # type (ETL vs HTL material), so it must survive as a distinct feature,
@@ -286,6 +359,8 @@ class SampleDataExplorer:
                     how="outer",
                     suffixes=("", f"_{metadata_type}"),
                 )
+            for merged_name in renamed.values():
+                self.analysis_metadata_groups[merged_name] = process_type_label(metadata_type)
 
         return process_df
 
@@ -297,7 +372,8 @@ class SampleDataExplorer:
         collapsed to one via the Analysis Data tab's chosen aggregation method
         (Mean/Median/Max) - unlike the process-metadata side, these really are
         repeated measurements of the same thing, so aggregating (not selecting
-        one) is the right operation.
+        one) is the right operation. With "All Points", only one result type
+        keeps its individual rows (see merge_results_per_sample).
 
         Also carries the first non-null 'datetime' per sample_id through
         (dropped by the numeric-only aggregation otherwise) - measurement
@@ -306,30 +382,16 @@ class SampleDataExplorer:
         Drift tool's only source for one, since not every process-metadata
         loader captures it.
         """
+        self._collapsed_result_types = []
         if not self.data_manager.current_results:
             return None
 
-        aggregation_method = self.gui.results_aggregation_selector.value
-        results_df = None
-        for result_type, result_type_df in self.data_manager.current_results.items():
-            if (
-                result_type_df is None
-                or result_type_df.empty
-                or "sample_id" not in result_type_df.columns
-            ):
-                continue
-            grouped = aggregate_results_per_sample(result_type_df, aggregation_method)
-            if results_df is None:
-                results_df = grouped
-            else:
-                results_df = pd.merge(
-                    results_df,
-                    grouped,
-                    on="sample_id",
-                    how="outer",
-                    suffixes=("", f"_{result_type}"),
-                )
-
+        self.analysis_results_groups = {}
+        results_df, self._collapsed_result_types = merge_results_per_sample(
+            self.data_manager.current_results,
+            self.gui.results_aggregation_selector.value,
+            column_groups=self.analysis_results_groups,
+        )
         return results_df
 
     def _rebuild_full_analysis_dataframe(self):
@@ -347,12 +409,16 @@ class SampleDataExplorer:
         self.gui.set_layer_selectors(get_layer_type_options(self.data_manager.current_metadata))
 
         process_df = self._build_process_dataframe()
+        self._multi_row_samples = samples_with_several_rows(process_df)
         results_df = self._build_results_dataframe()
 
         if process_df is None or results_df is None:
             self.full_analysis_df = None
             self.analysis_metadata_cols = []
             self.analysis_results_cols = []
+            self.analysis_results_groups = {}
+            self.analysis_metadata_groups = {}
+            self.analysis_categorical_cols = []
         else:
             combined = pd.merge(
                 process_df, results_df, on="sample_id", how="inner", suffixes=("", "_result")
@@ -371,14 +437,26 @@ class SampleDataExplorer:
                 for col in combined.select_dtypes(include="number").columns
                 if col in results_numeric and combined[col].dropna().nunique() > 1
             ]
+            # Text-valued process parameters (material, solvent, batch, ...).
+            process_text = set(process_df.select_dtypes(include="object").columns)
+            self.analysis_categorical_cols = [
+                c for c in get_categorical_columns(combined) if c in process_text
+            ]
 
-        self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        self.gui.set_analysis_columns(
+            self.analysis_results_cols,
+            self.analysis_metadata_cols,
+            results_groups=self.analysis_results_groups,
+            metadata_groups=self.analysis_metadata_groups,
+            categorical_cols=self.analysis_categorical_cols,
+        )
         sample_ids = (
             sorted(self.full_analysis_df["sample_id"].unique())
             if self.full_analysis_df is not None
             else []
         )
         self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
+        self._applied_excluded = set()  # a rebuilt checklist starts with every sample included
         self._apply_filters()
         self._refresh_variation_warning()
 
@@ -393,12 +471,60 @@ class SampleDataExplorer:
         if self.full_analysis_df is None:
             self.analysis_df = None
         else:
-            filtered = apply_row_filters(self.full_analysis_df, self.row_filters)
-            filtered = exclude_samples(filtered, self.gui.get_excluded_sample_ids())
+            filtered = apply_row_filters(self.full_analysis_df, self._applied_filters)
+            filtered = exclude_samples(filtered, self._applied_excluded)
             self.analysis_df = filtered
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
         self._render_analysis_data_preview()
+        self._update_filter_summary()
+        self._refresh_filters_pending()
+
+    def _refresh_filters_pending(self):
+        """Show whether the Filters tab holds edits that are not applied yet."""
+        staged = [(f["column"], f["op"], f["value"]) for f in self.row_filters]
+        applied = [(f["column"], f["op"], f["value"]) for f in self._applied_filters]
+        pending = staged != applied or self.gui.get_excluded_sample_ids() != self._applied_excluded
+        self.gui.set_filters_pending(pending)
+
+    def _on_confirm_filters(self, button):
+        """Apply the staged row filters and sample exclusions to every tab."""
+        self._applied_filters = [dict(f) for f in self.row_filters]
+        self._applied_excluded = set(self.gui.get_excluded_sample_ids())
+        self._apply_filters()
+        self._rerun_active_analyses()
+
+    def _update_filter_summary(self):
+        """The Filters tab's one-line summary of what passes (analysis rows and samples)."""
+        if self.full_analysis_df is None or self.analysis_df is None:
+            self.gui.set_filter_summary("")
+            return
+        samples_all = self.full_analysis_df["sample_id"].nunique()
+        samples_kept = self.analysis_df["sample_id"].nunique()
+        self.gui.set_filter_summary(
+            f"<b>{samples_kept} of {samples_all} samples</b> and {len(self.analysis_df)} of "
+            f"{len(self.full_analysis_df)} analysis rows pass the filters "
+            f"({len(self._applied_filters)} row filter(s), "
+            f"{len(self._applied_excluded)} excluded sample(s))."
+        )
+
+    def _plot_source_df(self) -> Optional[pd.DataFrame]:
+        """The Plotting tab's table with the Filters tab's filters and exclusions applied; sets
+        self._plot_filter_note to what was kept and which filters did not apply."""
+        merged = self.data_manager.merged_data
+        self._plot_filter_note = ""
+        if merged is None:
+            return None
+        excluded = self._applied_excluded
+        if not self._applied_filters and not excluded:
+            return merged
+        filtered, skipped = filter_plot_data(merged, self._applied_filters, excluded)
+        note = f"filters kept {len(filtered)} of {len(merged)} rows"
+        if skipped:
+            names = ", ".join(f"{f['column']} {f['op']} {f['value']:g}" for f in skipped)
+            note += f"; not applied (column not in this plot's data): {names}"
+        self._plot_filter_note = note
+        return filtered
 
     def _get_analysis_data_preview_df(self) -> Optional[pd.DataFrame]:
         """The exact rows/columns currently feeding Correlations/Random Forest/
@@ -472,21 +598,20 @@ class SampleDataExplorer:
             }
         )
         self._next_filter_id += 1
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_remove_row_filter(self, filter_id):
         """Drop one active row filter (by id) and re-apply the rest."""
         self.row_filters = [f for f in self.row_filters if f["id"] != filter_id]
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
+        self._refresh_filters_pending()
 
     def _on_sample_exclusion_toggled(self, change):
         """A sample's checkbox in "Exclude specific samples" was checked or
-        unchecked - re-apply immediately (no separate Recalculate needed) and
+        unchecked - staged until Confirm filters; otherwise (before, it re-applied at once) and
         re-run whichever of Correlations/RF/BO is already showing a result."""
-        self._apply_filters()
-        self._rerun_active_analyses()
+        self._refresh_filters_pending()
 
     def _refresh_variation_warning(self):
         """Show an advisory (never blocking) warning for checked metadata columns
@@ -501,6 +626,23 @@ class SampleDataExplorer:
                 print(
                     "⚠️ For better results, use parameters with more variation "
                     f"(aim for 6+ distinct values): {', '.join(low_variation)}"
+                )
+            if getattr(self, "_multi_row_samples", None) and self._uploaded_df is None:
+                shown = ", ".join(self._multi_row_samples[:5])
+                more = len(self._multi_row_samples) - 5
+                print(
+                    f"⚠️ {len(self._multi_row_samples)} sample(s) have more than one entry of "
+                    "the same process step (e.g. two spin-coating steps): their rows are "
+                    "repeated in this table, once per entry, so the parameters of one step are "
+                    "paired with the other's. Choose a layer type or check the entries: "
+                    f"{shown}{f' (+{more} more)' if more > 0 else ''}"
+                )
+            if self._collapsed_result_types and self._uploaded_df is None:
+                print(
+                    "ℹ️ 'All Points' keeps individual rows for one measurement type only; "
+                    "pairing every row of one type with every row of another would "
+                    "invent combinations that were never measured. Averaged per sample "
+                    f"instead: {', '.join(self._collapsed_result_types)}"
                 )
 
     def _on_recalculate_analysis_data(self, button):
@@ -606,8 +748,15 @@ class SampleDataExplorer:
         self.full_analysis_df = df
         self.analysis_results_cols = [c for c in numeric_cols if c in results]
         self.analysis_metadata_cols = [c for c in numeric_cols if c not in results]
+        self.analysis_results_groups = {}
+        self.analysis_metadata_groups = {}
+        self.analysis_categorical_cols = get_categorical_columns(df)
         self.gui.set_layer_selectors({})
-        self.gui.set_analysis_columns(self.analysis_results_cols, self.analysis_metadata_cols)
+        self.gui.set_analysis_columns(
+            self.analysis_results_cols,
+            self.analysis_metadata_cols,
+            categorical_cols=self.analysis_categorical_cols,
+        )
         sample_ids = sorted(df["sample_id"].unique())
         self.gui.set_sample_exclusion_checklist(sample_ids, self._on_sample_exclusion_toggled)
         self._apply_filters()
@@ -617,6 +766,8 @@ class SampleDataExplorer:
         """Re-run whichever of Correlations/RF/BO already produced a result, so
         Recalculate and row-filter changes visibly update whatever the user
         has open without requiring a trip back through each tab's own button."""
+        if getattr(self, "_plot_created", False):
+            self._on_create_plot(None)
         if self._last_correlation_result is not None:
             self._on_find_correlations(None)
         if self._last_rf_result is not None:
@@ -1259,8 +1410,13 @@ class SampleDataExplorer:
 
     def _on_create_plot(self, button):
         """Handle plot creation."""
-        if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+        merged = self.data_manager.merged_data
+        if merged is None or merged.empty:
             self._update_status("❌ No data available for plotting.")
+            return
+        source_df = self._plot_source_df()
+        if source_df.empty:
+            self._update_status("❌ No rows left after the Filters tab's filters.")
             return
 
         x_param = self.gui.x_param_selector.value
@@ -1276,7 +1432,7 @@ class SampleDataExplorer:
             # Prepare plot data
             plot_type = self.gui.plot_type_selector.value
             plot_df, x_col, y_col, color_col = self.plot_manager.prepare_plot_data(
-                self.data_manager.merged_data,
+                source_df,
                 x_param,
                 y_param,
                 color_param,
@@ -1354,6 +1510,9 @@ class SampleDataExplorer:
             status_msg = f"✓ Plot created with {len(plot_df)} data points!"
             if self.gui.group_by_subbatch.value:
                 status_msg += " (grouped by subbatch)"
+            if self._plot_filter_note:
+                status_msg += f" ({self._plot_filter_note})"
+            self._plot_created = True
 
             # Debug output
             if self.gui.debug_checkbox.value:
@@ -1376,7 +1535,8 @@ class SampleDataExplorer:
         with self.gui.download_output:
             clear_output()
 
-            if self.data_manager.merged_data is None or self.data_manager.merged_data.empty:
+            source_df = self._plot_source_df()
+            if source_df is None or source_df.empty:
                 print("⚠️ No data loaded to download.")
                 return
 
@@ -1391,7 +1551,7 @@ class SampleDataExplorer:
 
             try:
                 plot_df, x_col, y_col, _ = self.plot_manager.prepare_plot_data(
-                    self.data_manager.merged_data,
+                    source_df,
                     x_param,
                     y_param,
                     color_param,
@@ -1433,7 +1593,8 @@ class SampleDataExplorer:
                 return
 
             importances_df = pd.DataFrame(
-                self._last_rf_result["importances"], columns=["parameter", "importance"]
+                self._last_rf_result["importances"],
+                columns=["parameter", "importance_r2_drop", "importance_sd"],
             )
             filename = trigger_csv_download(importances_df, "random_forest_importances")
             print(
@@ -1487,11 +1648,22 @@ class SampleDataExplorer:
             min_unique = self.gui.correlation_min_unique.value
             plot_type = self.gui.correlation_plot_type.value
 
+            corr_source = self.analysis_df
+            if self.gui.correlation_per_sample.value:
+                corr_source = average_rows_per_sample(
+                    self.analysis_df, checked_results + checked_metadata
+                )
+                if len(corr_source) < len(self.analysis_df):
+                    print(
+                        f"ℹ️ Averaged {len(self.analysis_df)} rows into "
+                        f"{len(corr_source)} samples (one point per sample)."
+                    )
+
             try:
                 if plot_type == "Heatmap":
                     self.gui.correlation_scatter_output.clear_output()
                     results_used, metadata_used = self.plot_manager.create_metadata_results_heatmap(
-                        self.analysis_df, checked_results, checked_metadata, min_unique=min_unique
+                        corr_source, checked_results, checked_metadata, min_unique=min_unique
                     )
                     dropped_results = [c for c in checked_results if c not in results_used]
                     dropped_metadata = [c for c in checked_metadata if c not in metadata_used]
@@ -1521,7 +1693,7 @@ class SampleDataExplorer:
                                 f"  Excluded {len(excluded)} checked column(s) with <{min_unique + 1} "
                                 f"unique values: {', '.join(excluded)}"
                             )
-                        numeric_df = self.analysis_df.select_dtypes(include="number")
+                        numeric_df = corr_source.select_dtypes(include="number")
                         corr_df = (
                             pd.DataFrame(
                                 {
@@ -1545,7 +1717,7 @@ class SampleDataExplorer:
                     self.gui.correlation_widget.update_layout(
                         title='Switch "Format" to Heatmap to use this view'
                     )
-                    combined_df = self.analysis_df[checked_results + checked_metadata]
+                    combined_df = corr_source[checked_results + checked_metadata]
                     used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
                         combined_df, min_unique=min_unique
                     )
@@ -1611,16 +1783,27 @@ class SampleDataExplorer:
                 for col in self.analysis_metadata_cols
                 if col in checked_metadata and col != target
             ]
-            if not feature_cols:
+            categorical_cols = [
+                c
+                for c in self.gui.get_checked_categorical_columns()
+                if c in self.analysis_df.columns
+            ]
+            if not feature_cols and not categorical_cols:
                 print(
-                    "⚠️ No Process Metadata columns checked. Check at least one in "
-                    "the Analysis Data tab."
+                    "⚠️ No Process Metadata or categorical parameters checked. Check at "
+                    "least one in the Analysis Data tab."
                 )
                 self._last_rf_result = None
                 return
 
+            print("⏳ Cross-validating the Random Forest...")
             try:
-                result = ml.run_random_forest(self.analysis_df, target, feature_cols=feature_cols)
+                result = ml.run_random_forest(
+                    self.analysis_df,
+                    target,
+                    feature_cols=feature_cols,
+                    categorical_cols=categorical_cols,
+                )
             except ValueError as e:
                 print(f"⚠️ {e}")
                 self._last_rf_result = None
@@ -1631,30 +1814,92 @@ class SampleDataExplorer:
                 self._last_rf_result = None
                 return
 
-            held_out_note = (
-                ""
-                if result["held_out"]
-                else " _(evaluated on training data - too few samples for a held-out test set)_"
-            )
+            clear_output(wait=True)
             top_features = "\n".join(
-                f"- **{name}**: {importance:.1%}" for name, importance in result["importances"][:10]
+                f"- **{name}**: {mean:.3f} ± {sd:.3f}"
+                for name, mean, sd in result["importances"][:10]
+            )
+            r2_note = (
+                " _(no better than predicting the average: the importances below "
+                "carry little information)_"
+                if result["r2"] <= 0
+                else ""
             )
             summary = (
                 f"### Random Forest results for `{target}`\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Samples used: **{result['n_samples']}**"
+                f"{_rows_note(result)}\n"
                 f"- Features used: **{result['n_features']}**\n"
-                f"- R²: **{result['r2']:.3f}**{held_out_note}\n"
-                f"- RMSE: **{result['rmse']:.3g}**\n\n"
-                f"**Top parameters by importance:**\n\n{top_features}"
+                f"- Cross-validated R²: **{result['r2']:.3f} ± {result['r2_sd']:.3f}**"
+                f"{r2_note}\n"
+                f"- Cross-validated RMSE: **{result['rmse']:.3g} ± {result['rmse_sd']:.2g}**\n"
+                f"  _({result['n_folds']}-fold, repeated {result['n_repeats']}x, all rows "
+                "of a sample kept in the same fold; ± is the SD over repeats)_\n"
+                + _missing_note(result)
+                + "".join(f"- ⚠️ {w}\n" for w in result["warnings"])
+                + "\n**Top parameters by importance** (drop in cross-validated R² "
+                f"when shuffled, ± SD):\n\n{top_features}"
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_feature_importance_plot(result["importances"], target)
+            self.plot_manager.create_partial_dependence_plot(result["partial_dependence"], target)
             self._last_rf_result = result
+
+    def _bo_inputs(self, target: str):
+        """Feature, categorical, batch, search-space and constraint arguments for
+        the BO calls, from the Analysis Data checklists and the BO tab's controls.
+        None if nothing usable is checked (the message is already printed)."""
+        checked_metadata = set(self.gui.get_checked_metadata_columns())
+        feature_cols = [
+            col for col in self.analysis_metadata_cols if col in checked_metadata and col != target
+        ]
+        checked_categorical = [
+            c for c in self.gui.get_checked_categorical_columns() if c in self.analysis_df.columns
+        ]
+        categorical_cols = [c for c in checked_categorical if c != "batch"]
+        if not feature_cols and not categorical_cols:
+            print(
+                "⚠️ No Process Metadata or categorical parameters checked. Check at "
+                "least one in the Analysis Data tab."
+            )
+            return None
+
+        batch_col = None
+        if (
+            self.gui.bo_batch_offset.value
+            and "batch" in self.analysis_df.columns
+            and self.analysis_df["batch"].nunique() > 1
+        ):
+            batch_col = "batch"
+
+        space = self.gui.get_bo_search_space()
+        numeric_space = {c: v for c, v in space.items() if not v.get("categorical")}
+        return {
+            "feature_cols": feature_cols,
+            "categorical_cols": categorical_cols,
+            "batch_col": batch_col,
+            "bounds": {
+                c: (numeric_space[c]["min"], numeric_space[c]["max"])
+                for c in feature_cols
+                if c in numeric_space
+            },
+            "integer_cols": [
+                c for c in feature_cols if c in numeric_space and numeric_space[c]["integer"]
+            ],
+            "fixed": {
+                c: space[c]["fixed"]
+                for c in [*feature_cols, *categorical_cols]
+                if c in space and space[c]["fixed"] is not None
+            },
+            "constraints": [c for c in self.gui.get_bo_constraints() if c["col"] != target],
+        }
 
     def _on_suggest_experiments(self, button):
         """Suggest next parameter combinations most likely to improve the chosen
         target (a Results column), using a Gaussian Process surrogate fit on the
-        checked Process Metadata columns in the Analysis Data tab."""
+        checked Process Metadata (and categorical) parameters in the Analysis
+        Data tab - or, with a second objective, a batch spread along the
+        trade-off between the two."""
         with self.gui.bo_output:
             clear_output(wait=True)
 
@@ -1670,124 +1915,249 @@ class SampleDataExplorer:
                 return
 
             direction = self.gui.bo_direction_selector.value.lower()
-
-            checked_metadata = set(self.gui.get_checked_metadata_columns())
-            feature_cols = [
-                col
-                for col in self.analysis_metadata_cols
-                if col in checked_metadata and col != target
-            ]
-            if not feature_cols:
-                print(
-                    "⚠️ No Process Metadata columns checked. Check at least one in "
-                    "the Analysis Data tab."
-                )
+            inputs = self._bo_inputs(target)
+            if inputs is None:
                 self._last_bo_result = None
                 return
 
-            space = self.gui.get_bo_search_space()
-            bounds = {c: (space[c]["min"], space[c]["max"]) for c in feature_cols if c in space}
-            integer_cols = [c for c in feature_cols if c in space and space[c]["integer"]]
-            fixed = {
-                c: space[c]["fixed"]
-                for c in feature_cols
-                if c in space and space[c]["fixed"] is not None
-            }
+            second = self.gui.bo_pareto_target.value if self.gui.bo_pareto_enable.value else None
+            if second == target:
+                print("⚠️ Pick a second objective different from the target.")
+                self._last_bo_result = None
+                return
+            if second:
+                inputs["constraints"] = [c for c in inputs["constraints"] if c["col"] != second]
 
-            try:
-                result = ml.suggest_next_experiments(
-                    self.analysis_df,
-                    target,
-                    feature_cols=feature_cols,
-                    direction=direction,
-                    n_suggestions=self.gui.bo_n_suggestions.value,
-                    bounds=bounds,
-                    integer_cols=integer_cols,
-                    fixed=fixed,
+            # Fitting the Gaussian Process can take a while: show a banner that
+            # stays until the results replace it (clear_output(wait=True) below).
+            self.gui.suggest_experiments_button.disabled = True
+            ipy_display(
+                HTML(
+                    "<div style='padding:12px 16px; margin:8px 0; background:#fff3cd; "
+                    "border:2px solid #f0ad4e; border-radius:4px; color:#664d03; "
+                    "font-size:1.1em; font-weight:bold;'>"
+                    "⏳ Processing... fitting the model and calculating suggestions. "
+                    "This can take a moment.</div>"
                 )
+            )
+            try:
+                if second:
+                    result = ml.suggest_pareto_experiments(
+                        self.analysis_df,
+                        [(target, direction), (second, self.gui.bo_pareto_direction.value.lower())],
+                        n_suggestions=self.gui.bo_n_suggestions.value,
+                        **inputs,
+                    )
+                else:
+                    result = ml.suggest_next_experiments(
+                        self.analysis_df,
+                        target,
+                        direction=direction,
+                        n_suggestions=self.gui.bo_n_suggestions.value,
+                        log_target=self.gui.bo_log_target.value,
+                        **inputs,
+                    )
             except ValueError as e:
+                clear_output(wait=True)
                 print(f"⚠️ {e}")
                 self._last_bo_result = None
                 return
             except Exception as e:
+                clear_output(wait=True)
                 print(f"❌ Error suggesting experiments: {e}")
                 logger.exception("Error suggesting experiments")
                 self._last_bo_result = None
                 return
+            finally:
+                self.gui.suggest_experiments_button.disabled = False
 
-            suggestions = result["suggestions"]
-            pred_col = f"predicted_{target}"
-            display_feature_cols = [
-                c
-                for c in suggestions.columns
-                if c not in (pred_col, "predicted_std", "expected_improvement")
+            try:
+                if second:
+                    self._show_pareto_suggestions(result)
+                else:
+                    self._show_bo_suggestions(result)
+            except Exception as e:
+                clear_output(wait=True)
+                print(f"❌ Error plotting suggestions: {e}")
+                logger.exception("Error plotting BO suggestions")
+                self._last_bo_result = None
+                return
+            self._last_bo_result = result
+
+    def _show_pareto_suggestions(self, result: dict):
+        """Render suggest_pareto_experiments' output: a table of picks with each
+        objective's prediction and weighting, and the trade-off plot."""
+        suggestions = result["suggestions"]
+        (col_a, dir_a), (col_b, dir_b) = result["objectives"][:2]
+        objective_cols = {
+            f"predicted_{col_a}",
+            f"predicted_{col_b}",
+            f"weight_{col_a}",
+            f"weight_{col_b}",
+        }
+        feature_cols = [c for c in suggestions.columns if c not in objective_cols]
+        header = [
+            *feature_cols,
+            f"{col_a} (predicted)",
+            f"{col_b} (predicted)",
+            f"weight on {col_a}",
+        ]
+        lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+        for _, row in suggestions.iterrows():
+            values = [_format_cell(row[c]) for c in feature_cols]
+            lines.append(
+                "| "
+                + " | ".join(values)
+                + f" | {row[f'predicted_{col_a}']:.4g} | {row[f'predicted_{col_b}']:.4g} "
+                f"| {row[f'weight_{col_a}']:.2f} |"
+            )
+        summary = (
+            f"### {len(suggestions)} suggestion(s) along the trade-off: {dir_a} `{col_a}`, "
+            f"{dir_b} `{col_b}`\n\n"
+            f"- Samples used: **{result['n_samples']}**\n"
+            "- Each suggestion weighs the two objectives differently, from mostly "
+            f"`{col_a}` (weight near 1) to mostly `{col_b}`; predictions are from a model "
+            "of each objective on its own.\n"
+            + "".join(f"- ⚠️ {w}\n" for w in result["warnings"])
+            + "\n"
+            + "\n".join(lines)
+        )
+        measured = average_rows_per_sample(self.analysis_df, [col_a, col_b]).dropna(
+            subset=[col_a, col_b]
+        )
+        self.plot_manager.create_pareto_suggestions_plot(measured, suggestions, col_a, col_b)
+        self.gui.bo_loo_widget.data = []
+        self.gui.bo_loo_widget.update_layout(title="Model check: not shown for a two-objective run")
+        # Swap the Processing banner for the results in one step.
+        clear_output(wait=True)
+        ipy_display(Markdown(summary))
+
+    def _show_bo_suggestions(self, result: dict):
+        """Render suggest_next_experiments' output: summary, table and plots."""
+        target = result["target"]
+        suggestions = result["suggestions"]
+        pred_col = f"predicted_{target}"
+        has_constraints = "probability_feasible" in suggestions.columns
+        display_feature_cols = [
+            c
+            for c in suggestions.columns
+            if c
+            not in (
+                pred_col,
+                "predicted_low",
+                "predicted_high",
+                "expected_improvement",
+                "probability_feasible",
+            )
+        ]
+
+        log_target = result["log_target"]
+        log_units = " (log10)" if log_target else ""
+        header_cols = [
+            *display_feature_cols,
+            f"{target} (predicted)",
+            "range (±1 SD)",
+            ("EI x P(feasible)" if has_constraints else "Expected improvement") + log_units,
+            *(["P(feasible)"] if has_constraints else []),
+        ]
+        table_lines = [
+            "| " + " | ".join(header_cols) + " |",
+            "|" + "---|" * len(header_cols),
+        ]
+        integer_set = set(result["integer_cols"])
+        for _, row in suggestions.iterrows():
+            values = [
+                f"{int(row[c])}" if c in integer_set else _format_cell(row[c])
+                for c in display_feature_cols
             ]
-
-            header_cols = [
-                *display_feature_cols,
-                f"{target} (predicted)",
-                "± std",
-                "Expected improvement",
-            ]
-            table_lines = [
-                "| " + " | ".join(header_cols) + " |",
-                "|" + "---|" * len(header_cols),
-            ]
-            integer_set = set(result["integer_cols"])
-            for _, row in suggestions.iterrows():
-                values = [
-                    f"{int(row[c])}" if c in integer_set else f"{row[c]:.3g}"
-                    for c in display_feature_cols
-                ]
-                table_lines.append(
-                    "| "
-                    + " | ".join(values)
-                    + f" | {row[pred_col]:.4g} | {row['predicted_std']:.2g} "
-                    f"| {row['expected_improvement']:.3g} |"
-                )
-
-            steps_estimate = ml.estimate_max_bo_steps(result["n_features"])
-
-            upper = result["length_scale_upper"]
-            length_scale_lines = "\n".join(
-                f"  - `{col}`: {ls:.2g}"
-                + (" (at the upper limit: no detectable effect)" if ls >= upper * 0.99 else "")
-                for col, ls in sorted(result["length_scales"].items(), key=lambda kv: kv[1])
+            table_lines.append(
+                "| " + " | ".join(values) + f" | {row[pred_col]:.4g} "
+                f"| {row['predicted_low']:.3g} to {row['predicted_high']:.3g} "
+                f"| {row['expected_improvement']:.3g} |"
+                + (f" {row['probability_feasible']:.2f} |" if has_constraints else "")
             )
 
-            # Once the batch has covered the promising regions, EI for the rest
-            # is ~0 and later picks are close to arbitrary - say so.
-            ei = suggestions["expected_improvement"].to_numpy()
-            low_ei = [i + 1 for i, v in enumerate(ei) if ei[0] > 0 and v < 1e-3 * ei[0]]
-            low_ei_note = (
-                f"- ⚠️ Suggestion(s) #{low_ei[0]} onward have near-zero expected "
-                "improvement: given the earlier picks, the model sees little left to "
-                "gain, so these are weakly motivated. Fewer suggestions, or measuring "
-                "the first ones before asking again, is usually better.\n"
-                if low_ei
-                else ""
-            )
+        steps_estimate = ml.estimate_max_bo_steps(result["n_features"])
 
-            summary = (
-                f"### {len(suggestions)} suggested next experiment(s) to "
-                f"{result['direction']} `{target}`\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
-                f"- Best observed so far: **{result['best_observed']:.4g}**; best "
-                f"predicted at a measured sample (what EI tries to beat): "
-                f"**{result['incumbent']:.4g}**\n"
+        upper = result["length_scale_upper"]
+        length_scale_lines = "\n".join(
+            f"  - `{col}`: {ls:.2g}"
+            + (" (at the upper limit: no detectable effect)" if ls >= upper * 0.99 else "")
+            for col, ls in sorted(result["length_scales"].items(), key=lambda kv: kv[1])
+        )
+
+        # Once the batch has covered the promising regions, EI for the rest
+        # is ~0 and later picks are close to arbitrary - say so.
+        ei = suggestions["expected_improvement"].to_numpy()
+        low_ei = [i + 1 for i, v in enumerate(ei) if ei[0] > 0 and v < 1e-3 * ei[0]]
+        low_ei_note = (
+            f"- ⚠️ Suggestion(s) #{low_ei[0]} onward have near-zero expected "
+            "improvement: given the earlier picks, the model sees little left to "
+            "gain, so these are weakly motivated (with constraints, they may also be "
+            "unlikely to meet them: check P(feasible)). Fewer suggestions, or measuring "
+            "the first ones before asking again, is usually better.\n"
+            if low_ei
+            else ""
+        )
+
+        if log_target:
+            noise_line = (
+                f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** in log10 "
+                f"units (1 SD), i.e. a single measurement scatters by a factor of "
+                f"about {10 ** result['noise_sd']:.2g}\n"
+            )
+        else:
+            noise_line = (
                 f"- Fitted measurement noise: **± {result['noise_sd']:.2g}** (1 SD, "
                 f"in `{target}` units)\n"
-                f"- Length scales (0-1 scaled; smaller = stronger effect; estimated "
-                f"from the data, so uncertain with few or noisy samples):\n"
-                f"{length_scale_lines}\n"
-                f"- {steps_estimate['rationale']}\n"
-                + low_ei_note
-                + "- Listed in the order they were picked as one batch (see 'How are the "
-                "suggestions calculated?' above).\n\n" + "\n".join(table_lines)
             )
-            ipy_display(Markdown(summary))
-            self.plot_manager.create_bo_suggestions_plot(suggestions, target)
-            self._last_bo_result = result
+        batch_line = ""
+        if result["batch_col"]:
+            batch_line = (
+                f"- Batch offsets modelled across **{result['n_batches']}** batches: "
+                f"batches differ by about **± {result['batch_offset_sd']:.2g}**{log_units} "
+                "(1 SD). Predictions are for the process alone, i.e. a new batch "
+                "without its own (unknown) offset.\n"
+            )
+        constraint_line = ""
+        if result["constraints"]:
+            listed = ", ".join(
+                f"`{c['col']}` {c['op']} {c['value']:g}" for c in result["constraints"]
+            )
+            constraint_line = f"- Constraints: {listed} (each with its own model)\n"
+        if result["incumbent"] is None:
+            incumbent_text = "none yet (no measured sample is predicted to meet the constraints)"
+        else:
+            incumbent_text = f"**{result['incumbent']:.4g}**"
+        summary = (
+            f"### {len(suggestions)} suggested next experiment(s) to "
+            f"{result['direction']} `{target}`\n\n"
+            f"- Samples used: **{result['n_samples']}**{_rows_note(result)}"
+            + (" (target modelled on a log10 scale)" if log_target else "")
+            + "\n"
+            f"- Best observed so far: **{result['best_observed']:.4g}**; best "
+            f"predicted at a measured sample (what EI tries to beat): {incumbent_text}\n"
+            + noise_line
+            + batch_line
+            + constraint_line
+            + f"- Leave-one-sample-out R²{log_units}: **{result['loo_r2']:.2f}** "
+            "(how well the model predicts a sample it has not seen; see the model "
+            "check plot below)\n"
+            + _missing_note(result)
+            + "".join(f"- ⚠️ {w}\n" for w in result["warnings"])
+            + "- Length scales (0-1 scaled; smaller = stronger effect; estimated "
+            "from the data, so uncertain with few or noisy samples):\n"
+            f"{length_scale_lines}\n"
+            f"- {steps_estimate['rationale']}\n"
+            + low_ei_note
+            + "- Listed in the order they were picked as one batch (see 'How are the "
+            "suggestions calculated?' above).\n\n" + "\n".join(table_lines)
+        )
+        self.plot_manager.create_bo_suggestions_plot(suggestions, target)
+        self.plot_manager.create_bo_loo_plot(result["loo_df"], target, result["loo_r2"], log_target)
+        # Swap the Processing banner for the results in one step.
+        clear_output(wait=True)
+        ipy_display(Markdown(summary))
 
     def _refresh_experimental_options(self):
         """Keep the Experimental tab's dropdowns in sync with the checked columns
@@ -1864,14 +2234,11 @@ class SampleDataExplorer:
             color_col = self.gui.experimental_pca_color_selector.value
             color_col = None if not color_col or color_col == "None" else color_col
             scores_df = result["scores_df"]
-            if (
-                color_col
-                and color_col in self.analysis_df.columns
-                and "sample_id" in scores_df.columns
-            ):
-                scores_df = scores_df.merge(
-                    self.analysis_df[["sample_id", color_col]], on="sample_id", how="left"
-                )
+            if color_col and color_col in self.analysis_df.columns:
+                # By row position, not a merge on sample_id: a sample_id repeats
+                # under "All Points", and a merge would multiply the points.
+                color_values = self.analysis_df.loc[result["source_index"], color_col]
+                scores_df = scores_df.assign(**{color_col: color_values.to_numpy()})
 
             variance_pct = ", ".join(f"{v:.1%}" for v in result["explained_variance_ratio"])
             summary = (
@@ -1978,16 +2345,14 @@ class SampleDataExplorer:
 
             summary = (
                 f"### Outlier detection over {len(result['feature_cols'])} checked parameters\n\n"
-                f"- Samples used: **{result['n_samples']}**\n"
+                f"- Rows checked: **{result['n_samples']}** (each measurement row on its own)\n"
                 f"- Outliers flagged: **{result['n_outliers']}** "
                 f"(contamination={contamination:.2f})\n"
             )
             ipy_display(Markdown(summary))
-            is_outlier = (
-                result["result_df"]
-                .set_index("sample_id")
-                .loc[pca_result["scores_df"]["sample_id"], "is_outlier"]
-            )
+            # By row position: sample_id repeats under "All Points", so a lookup
+            # by sample_id would return several flags per point.
+            is_outlier = result["result_df"].loc[pca_result["source_index"], "is_outlier"]
             self.plot_manager.create_outlier_plot(
                 pca_result["scores_df"], is_outlier.reset_index(drop=True)
             )
@@ -2022,7 +2387,7 @@ class SampleDataExplorer:
             summary = (
                 f"### {param_col} over time\n\n"
                 f"- Samples used: **{result['n_samples']}**\n"
-                f"- Slope: **{result['slope']:.3g}** per measurement "
+                f"- Slope: **{result['slope']:.3g}** per sample, in time order "
                 f"(p={result['p_value']:.3g} - {trend_note})\n"
             )
             ipy_display(Markdown(summary))
@@ -2064,7 +2429,8 @@ class SampleDataExplorer:
             significance_note = "significant" if result["significant"] else "not significant"
             summary = (
                 f"### ANOVA: `{value_col}` across `{group_col}`\n\n"
-                f"- Groups: {groups_line}\n"
+                f"- Groups (n = samples; pixels of one sample are averaged first): "
+                f"{groups_line}\n"
                 f"- F-statistic: **{result['f_stat']:.3g}**\n"
                 f"- p-value: **{result['p_value']:.3g}** ({significance_note} at p<0.05)\n"
             )

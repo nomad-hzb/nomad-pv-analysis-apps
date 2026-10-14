@@ -10,7 +10,6 @@ import io
 import logging
 import re
 import warnings
-from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -421,11 +420,6 @@ def export_blend_csv(
     temperature_k: Optional[float] = None,
 ) -> str:
     """Return CSV string for blend results."""
-    lines = [
-        "# Hansen Blend Calculator Results",
-        f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "",
-    ]
     summary = {
         "Parameter": [
             "Target_D",

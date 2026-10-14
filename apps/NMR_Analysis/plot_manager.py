@@ -32,12 +32,47 @@ def default_color(index: int) -> str:
     return _DEFAULT_COLORS[index % len(_DEFAULT_COLORS)]
 
 
+MAX_PLOT_POINTS = 4000
+
+
+def decimate_minmax(x, y, max_points: int = MAX_PLOT_POINTS):
+    """(x, y) reduced to about max_points points for DISPLAY, keeping the lowest and the highest
+    point of every bucket (in their original order), so peak tops and dips survive.
+
+    A real spectrum has tens of thousands of points; sending every point of every sample to
+    the browser (22 MB for 8 spectra of 65k points) broke the Voila websocket, which looked like
+    the app resetting right after the widgets appeared. Analysis (peaks, integrals) always uses
+    the full data."""
+    x = np.asarray(x)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if n <= max_points:
+        return x, y
+    buckets = max(1, max_points // 2)
+    size = n // buckets
+    usable = buckets * size
+    block = y[:usable].reshape(buckets, size)
+    filled_low = np.where(np.isnan(block), np.inf, block)
+    filled_high = np.where(np.isnan(block), -np.inf, block)
+    offsets = (np.arange(buckets) * size)[:, None]
+    picks = np.concatenate(
+        [
+            np.argmin(filled_low, axis=1)[:, None] + offsets,
+            np.argmax(filled_high, axis=1)[:, None] + offsets,
+        ],
+        axis=1,
+    )
+    picks = np.unique(np.concatenate([np.sort(picks, axis=1).ravel(), [0, n - 1]]))
+    return x[picks], y[picks]
+
+
 class NMRPlotManager:
     @staticmethod
     def plot_overlay(
         df: pd.DataFrame,
         colors: dict[str, str],
         offset: float = 0.0,
+        labels: dict[str, str] | None = None,
     ) -> go.Figure:
         """
         Overlay all NMR spectra.
@@ -47,28 +82,29 @@ class NMRPlotManager:
         df:
             Full data DataFrame from NMRDataManager.
         colors:
-            Mapping of sample_id -> hex color string.
+            Mapping of measurement_id -> hex color string.
         offset:
             Vertical offset applied cumulatively across spectra.
         """
         fig = go.Figure()
 
-        unique_samples = df["sample_id"].unique()
+        for i, (_, sample_row) in enumerate(df.iterrows()):
+            # one trace per measurement: a sample measured twice shows both spectra
+            measurement_id = sample_row.get("measurement_id", sample_row["sample_id"])
+            if labels and measurement_id in labels:
+                label = labels[measurement_id]
+            else:
+                variation = sample_row["variation"]
+                label = variation if variation else measurement_id
 
-        for i, sample_id in enumerate(unique_samples):
-            sample_row = df[df["sample_id"] == sample_id].iloc[0]
-            variation = sample_row["variation"]
-            label = variation if variation else sample_id
+            # The whole spectrum. (A hidden filter used to keep only points above 20x the
+            # median and join the survivors with straight lines, so the overlay was not the
+            # spectrum the single-spectrum panel shows.)
+            x_filt, y_filt = decimate_minmax(
+                sample_row["chemical_shift"], np.array(sample_row["intensity"]) + i * offset
+            )
 
-            x = np.array(sample_row["chemical_shift"])
-            y = np.array(sample_row["intensity"])
-
-            # Noise filter: keep only points above 20x the median intensity
-            mask = y >= np.median(y) * 20
-            x_filt = x[mask]
-            y_filt = y[mask] + i * offset
-
-            color = colors.get(sample_id, default_color(i))
+            color = colors.get(measurement_id, default_color(i))
 
             fig.add_trace(
                 go.Scatter(
@@ -124,10 +160,11 @@ class NMRPlotManager:
         fig = go.Figure()
 
         # Spectrum trace
+        x_plot, y_plot = decimate_minmax(x, y)
         fig.add_trace(
             go.Scatter(
-                x=x,
-                y=y,
+                x=x_plot,
+                y=y_plot,
                 mode="lines",
                 name=label,
                 line=dict(width=2, color=color),
@@ -163,7 +200,7 @@ class NMRPlotManager:
             lo, hi = min(range_start, range_end), max(range_start, range_end)
             mask = (x >= lo) & (x <= hi)
             if mask.any():
-                x_r, y_r = x[mask], y[mask]
+                x_r, y_r = decimate_minmax(x[mask], y[mask])
                 fig.add_trace(
                     go.Scatter(
                         x=np.concatenate([x_r, x_r[::-1]]),
@@ -219,7 +256,12 @@ class NMRPlotManager:
         if not mask.any():
             return None
         x_r, y_r = x[mask], y[mask]
-        integral = float(-1 * np.trapz(y_r, x_r))
+        # Integrate along increasing ppm whatever order the entry stores the axis in: the old
+        # fixed sign was only right for a descending axis, so ascending data gave negative
+        # integrals that could not be compared with other samples.
+        order = np.argsort(x_r)
+        integrate = getattr(np, "trapezoid", None) or np.trapz
+        integral = float(integrate(y_r[order], x_r[order]))
         return {
             "start": lo,
             "end": hi,

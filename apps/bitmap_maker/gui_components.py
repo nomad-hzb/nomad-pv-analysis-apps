@@ -119,7 +119,6 @@ def create_pattern_controls(default_percentage=50):
             ("Multi-Level Halftone", "multi_level"),
             ("Publication (Base 3)", "publication_3"),
             ("Publication (Base 4)", "publication_4"),
-            ("Publication (Base 5)", "publication_5"),
         ],
         value="random",
         description="Pattern:",
@@ -161,7 +160,7 @@ def create_pattern_controls(default_percentage=50):
 def create_file_format_selector():
     """Create file format selection widget"""
     format_selector = widgets.Dropdown(
-        options=["BMP", "PNG", "TIFF", "JPEG"],
+        options=["BMP", "PNG", "TIFF"],
         value="BMP",
         description="Format:",
         style={"description_width": "100px"},

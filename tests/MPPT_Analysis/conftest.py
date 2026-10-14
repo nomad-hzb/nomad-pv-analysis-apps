@@ -20,6 +20,13 @@ sys.modules["dm_mppt"] = _dm
 sys.modules["data_manager"] = _dm
 _spec.loader.exec_module(_dm)
 
+sys.modules.pop("plot_manager", None)
+_pm_spec = importlib.util.spec_from_file_location("pm_mppt", _APP_DIR / "plot_manager.py")
+_pm = importlib.util.module_from_spec(_pm_spec)
+sys.modules["pm_mppt"] = _pm
+sys.modules["plot_manager"] = _pm
+_pm_spec.loader.exec_module(_pm)
+
 from app_state import AppState  # noqa: E402
 from data_manager import DataManager  # noqa: E402
 from plot_manager import PlotManager  # noqa: E402
@@ -27,11 +34,11 @@ from plot_manager import PlotManager  # noqa: E402
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
 
 FIXTURE_ROWS = [
-    {"time": 0.0, "power_density": 15.2, "voltage": 0.92, "current_density": -16.5},
-    {"time": 0.5, "power_density": 14.8, "voltage": 0.91, "current_density": -16.3},
-    {"time": 1.0, "power_density": 14.4, "voltage": 0.90, "current_density": -16.0},
-    {"time": 1.5, "power_density": 14.1, "voltage": 0.89, "current_density": -15.8},
-    {"time": 2.0, "power_density": 13.9, "voltage": 0.88, "current_density": -15.7},
+    {"time": 0.0, "power_density": -15.2, "voltage": 0.92, "current_density": -16.5},
+    {"time": 0.5, "power_density": -14.8, "voltage": 0.91, "current_density": -16.3},
+    {"time": 1.0, "power_density": -14.4, "voltage": 0.90, "current_density": -16.0},
+    {"time": 1.5, "power_density": -14.1, "voltage": 0.89, "current_density": -15.8},
+    {"time": 2.0, "power_density": -13.9, "voltage": 0.88, "current_density": -15.7},
 ]
 
 

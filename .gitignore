@@ -183,6 +183,7 @@ secrets.py
 # (oasis_local_config.<oasis>.py). Only the exact name is read by
 # bootstrap.py, so renaming one is how you deactivate it locally.
 oasis_local_config*.py
+!oasis_local_config.example.py
 *.zip
 *.tar.gz
 
@@ -198,3 +199,10 @@ output/**/*.json
 *.npz
 *.mat
 *.nc
+# Personal Claude Code permissions; never commit
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Usage logs written by hysprint_utils.usage_tracking
+shared/log/
+apps/Entry_Auditor/entry_auditor_backups/

@@ -13,9 +13,9 @@ except ImportError:
     )
 
 try:
-    from hysprint_utils.access_token import log_button_usage
+    from hysprint_utils.usage_tracking import log_button_usage
 except ImportError:
-    logger.warning("hysprint_utils.access_token not found; button usage will not be logged")
+    logger.warning("hysprint_utils.usage_tracking not found; button usage will not be logged")
 
     def log_button_usage(action: str, user: str | None = None) -> None:
         return None
@@ -299,6 +299,67 @@ CATEGORIES: dict[str, list[AppEntry]] = {
 }
 
 
+HIDE_APPS_ENV = "HYSPRINT_DASHBOARD_HIDE_APPS"
+SHOW_APPS_ENV = "HYSPRINT_DASHBOARD_SHOW_APPS"
+"""Per-deployment app selection, set like every other per-Oasis override (usually in
+oasis_local_config.py): comma-separated app folder names (or card names) to hide, or, if
+SHOW is set, the only ones to show. "Learning" and "Projects" name those two sections. Names
+ignore case and spaces; an unknown name logs a warning and is otherwise ignored. Hidden apps
+stay in the upload and can still be opened directly."""
+
+
+@dataclass(frozen=True)
+class DashboardSelection:
+    categories: dict[str, list[AppEntry]]
+    """Every category of CATEGORIES, in order, with only the visible entries (may be empty)."""
+    show_learning: bool
+    show_projects: bool
+
+
+def _normalize_name(name: str) -> str:
+    return "".join(name.split()).lower()
+
+
+def parse_name_list(value: str | None) -> set[str]:
+    """Normalized names from a comma-separated environment value ('' or None gives an empty set)."""
+    return {_normalize_name(part) for part in (value or "").split(",") if part.strip()}
+
+
+def _entry_keys(entry: AppEntry) -> set[str]:
+    return {key for key in (_normalize_name(entry.folder), _normalize_name(entry.name)) if key}
+
+
+def select_dashboard(
+    categories: dict[str, list[AppEntry]],
+    hide: set[str] | None = None,
+    show: set[str] | None = None,
+) -> DashboardSelection:
+    """Apply a hide list and an optional allow-list (both normalized names) to the cards.
+
+    With neither set the result is exactly `categories`, Learning and Projects shown."""
+    hide, show = hide or set(), show or set()
+    known = {"learning", "projects"}
+    for entries in categories.values():
+        for entry in entries:
+            known |= _entry_keys(entry)
+    for unknown in sorted((hide | show) - known):
+        logger.warning("Dashboard app selection: unknown name %r is ignored", unknown)
+
+    def visible(keys: set[str]) -> bool:
+        if keys & hide:
+            return False
+        return not show or bool(keys & show)
+
+    return DashboardSelection(
+        categories={
+            category: [entry for entry in entries if visible(_entry_keys(entry))]
+            for category, entries in categories.items()
+        },
+        show_learning=visible({"learning"}),
+        show_projects=visible({"projects"}),
+    )
+
+
 def _project_upload_id(env_var: str, hzb_default: str) -> str | None:
     """Resolve one Projects-section upload_id from env, HZB's value as default.
 
@@ -395,6 +456,12 @@ def _build_projects() -> list[Project]:
 
 
 PROJECTS: list[Project] = _build_projects()
+
+SELECTION = select_dashboard(
+    CATEGORIES,
+    hide=parse_name_list(os.environ.get(HIDE_APPS_ENV)),
+    show=parse_name_list(os.environ.get(SHOW_APPS_ENV)),
+)
 
 
 LEARNING_FOLDER = LearningEntry(

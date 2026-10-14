@@ -427,7 +427,7 @@ def test_compute_process_cost_rows_sums_multiple_locations():
 # ---------------------------------------------------------------------------
 
 
-def test_compute_material_cost_rows_uses_average_quantity_times_usage_count():
+def test_compute_material_cost_rows_uses_the_average_quantity_once_per_batch():
     material_rows = [
         MaterialRow(batch_id="Batch1", process_type="X", material_name="PbI2", role="solute"),
         MaterialRow(batch_id="Batch1", process_type="Y", material_name="PbI2", role="solute"),
@@ -449,9 +449,11 @@ def test_compute_material_cost_rows_uses_average_quantity_times_usage_count():
     assert len(rows) == 1
     row = rows[0]
     assert row.usage_count == 2
-    assert row.quantity_grams == pytest.approx(1.0)  # 0.5 x 2 uses
-    assert row.quantity_source == "average (reference)"
-    assert row.total_cost == pytest.approx(3.0)
+    # Average_Quantity_Grams is "how many grams a batch typically consumes": once per batch,
+    # not times the number of process entries that mention the material
+    assert row.quantity_grams == pytest.approx(0.5)
+    assert row.quantity_source == "average per batch (reference)"
+    assert row.total_cost == pytest.approx(1.5)
 
 
 def test_compute_material_cost_rows_unknown_quantity_when_no_average_in_reference():
@@ -831,3 +833,295 @@ def test_reference_template_round_trips_through_parser():
     assert reference.material_prices["PbI2"]["cas_number"] == "10101-63-0"
     assert set(reference.labor_rates) == set(LABOR_ROLES)
     assert "Cleanroom / lab rent" in reference.overhead_costs
+
+
+# ---------------------------------------------------------------------------
+# 5.7: missing is not zero (C2), unusable cells (H5), equipment once per location with its
+# allocation (H1/H3), overhead (H3), quantity per batch (H2), no double entries (H4)
+# ---------------------------------------------------------------------------
+
+
+def _steps(batch="B1", *locations_by_type):
+    rows = []
+    for process_type, location in locations_by_type:
+        rows.append(ProcessStepRow(batch_id=batch, process_type=process_type, location=location))
+    return rows
+
+
+def _entry(cost, allocation="per batch", verified=True):
+    return {
+        "cost_est": cost,
+        "verified": verified,
+        "notes": "",
+        "category": "",
+        "allocation_method": allocation,
+    }
+
+
+def _reference(locations=None, processes=None, overhead=None):
+    reference = CostReference()
+    for location, entry in (locations or {}).items():
+        reference.location_costs[location] = entry
+        reference.overhead_costs[f"Equipment depreciation - {location}"] = entry
+    for item, entry in (overhead or {}).items():
+        reference.overhead_costs[item] = entry
+    for process_type, cost in (processes or {}).items():
+        reference.process_costs[process_type] = {"cost_est": cost, "verified": True, "notes": ""}
+    return reference
+
+
+def test_equipment_cost_counts_once_per_location_not_once_per_process_type():
+    """Spin coating, annealing and quenching in one box each carried the full 1000."""
+    rows = _steps(
+        "B1", ("SpinCoating", "HySpinBox"), ("Annealing", "HySpinBox"), ("Quenching", "HySpinBox")
+    )
+    reference = _reference(locations={"HySpinBox": _entry(1000.0)})
+    result = compute_process_cost_rows(rows, {"B1": 4}, reference)
+    assert sum(r.equipment_cost or 0 for r in result) == pytest.approx(1000.0)
+    totals = compute_batch_totals(result, [], {"B1": 4}, {}, reference)
+    assert totals[0].equipment_total == pytest.approx(1000.0)  # was 3000
+
+
+def test_the_same_location_is_charged_again_in_another_batch():
+    rows = _steps("B1", ("SpinCoating", "Box")) + _steps("B2", ("SpinCoating", "Box"))
+    reference = _reference(locations={"Box": _entry(100.0)})
+    result = compute_process_cost_rows(rows, {"B1": 2, "B2": 2}, reference)
+    assert sorted(r.equipment_cost for r in result) == [100.0, 100.0]
+
+
+@pytest.mark.parametrize(
+    "allocation, hours, expected",
+    [("per batch", None, 100.0), ("per sample", None, 400.0), ("per hour", 3.0, 300.0)],
+)
+def test_allocation_method_is_honoured_for_equipment(allocation, hours, expected):
+    rows = _steps("B1", ("SpinCoating", "Box"))
+    reference = _reference(locations={"Box": _entry(100.0, allocation)})
+    labor_hours = {"B1": hours} if hours else None
+    result = compute_process_cost_rows(rows, {"B1": 4}, reference, labor_hours)
+    assert result[0].equipment_cost == pytest.approx(expected)
+
+
+def test_per_hour_equipment_is_unknown_until_hours_are_entered():
+    rows = _steps("B1", ("SpinCoating", "Box"))
+    reference = _reference(locations={"Box": _entry(100.0, "per hour")})
+    result = compute_process_cost_rows(rows, {"B1": 4}, reference, {})
+    assert result[0].equipment_cost is None and result[0].equipment_missing == 1
+    totals = compute_batch_totals(result, [], {"B1": 4}, {}, reference)
+    assert totals[0].missing_count >= 1 and not totals[0].is_complete
+
+
+def test_overhead_without_a_location_reaches_the_totals_by_its_allocation():
+    """'Cleanroom / lab rent' was parsed and then never used by any total."""
+    reference = _reference(
+        overhead={
+            "Cleanroom / lab rent": _entry(10.0, "per hour"),
+            "Waste disposal": _entry(2.0, "per sample"),
+            "Admin": _entry(5.0, "per batch"),
+        }
+    )
+    totals = compute_batch_totals([], [], {"B1": 3}, {}, reference, {"B1": 4.0})
+    assert totals[0].overhead_total == pytest.approx(10 * 4 + 2 * 3 + 5)
+    assert totals[0].grand_total == pytest.approx(51.0)
+    assert totals[0].is_complete
+
+
+def test_a_blank_reference_gives_incomplete_not_zero():
+    """C2: with every cost blank the summary read 0.00, Unverified 0: a verified free batch."""
+    rows = _steps("B1", ("SpinCoating", "Box"))
+    materials = [MaterialRow(batch_id="B1", process_type="X", material_name="PbI2", role="solute")]
+    reference = _reference(locations={"Box": _entry(None)}, processes={"SpinCoating": None})
+    process_rows = compute_process_cost_rows(rows, {"B1": 2}, reference)
+    material_rows = compute_material_cost_rows(materials, reference)
+    totals = compute_batch_totals(process_rows, material_rows, {"B1": 2}, {}, reference)
+    total = totals[0]
+    assert total.grand_total == 0.0 and total.unverified_count == 0
+    assert total.missing_count == 3  # process cost, equipment cost, material cost
+    assert not total.is_complete
+
+
+def test_a_fully_costed_batch_is_complete():
+    rows = _steps("B1", ("SpinCoating", "Box"))
+    materials = [MaterialRow(batch_id="B1", process_type="X", material_name="PbI2", role="solute")]
+    reference = _reference(locations={"Box": _entry(10.0)}, processes={"SpinCoating": 5.0})
+    reference.material_prices["PbI2"] = {
+        "cas_number": None,
+        "price_per_gram_est": 2.0,
+        "average_quantity_grams": 1.0,
+        "verified": True,
+        "notes": "",
+    }
+    totals = compute_batch_totals(
+        compute_process_cost_rows(rows, {"B1": 2}, reference),
+        compute_material_cost_rows(materials, reference),
+        {"B1": 2},
+        {},
+        reference,
+    )
+    assert totals[0].is_complete and totals[0].grand_total == pytest.approx(17.0)
+
+
+def test_summary_marks_an_incomplete_total_as_a_lower_bound():
+    import gui_components as gui
+
+    panel = gui.ResultsPanel()
+    total = BatchTotal("B1", 2, 1.0, 2.0, 0.0, 0.0, 0, missing_count=2)
+    panel.show_summary([total])
+    # the table is rendered into an Output widget; check the formatter used for it directly
+    html_text = gui._build_html_table(
+        ["Grand Total"], [[f"≥ {total.grand_total:.2f} (incomplete)"]]
+    )
+    assert "incomplete" in html_text and "≥" in html_text
+
+
+def test_reference_text_and_formula_cells_are_reported_not_crashed_on():
+    """H5: 'TBD' or '=10*2' in a cost cell raised TypeError inside the load callback."""
+    workbook = build_cost_reference_template()
+    processes_ws = workbook["Processes"]
+    processes_ws.cell(row=2, column=1, value="HySprint_SpinCoating")
+    processes_ws.cell(row=2, column=2, value="TBD")
+    processes_ws.cell(row=3, column=1, value="HySprint_Annealing")
+    processes_ws.cell(row=3, column=2, value="=10*2")
+    labor_ws = workbook["Labor"]
+    labor_ws.cell(row=2, column=2, value="12 EUR")
+    capital_ws = workbook["Capital_Overhead_Disposal"]
+    capital_ws.cell(row=2, column=5, value="n/a")
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    reference = parse_cost_reference_workbook(buffer.getvalue())
+
+    assert reference.process_costs["HySprint_SpinCoating"]["cost_est"] is None
+    assert reference.process_costs["HySprint_Annealing"]["cost_est"] is None
+    assert reference.labor_rates["PhD Researcher"]["hourly_rate_est"] is None
+    assert len(reference.problems) == 4
+    assert any("TBD" in p and "SpinCoating" in p for p in reference.problems)
+    # and the rest of the pipeline treats them as missing, without raising
+    rows = _steps("B1", ("HySprint_SpinCoating", ""))
+    totals = compute_batch_totals(
+        compute_process_cost_rows(rows, {"B1": 1}, reference), [], {"B1": 1}, {}, reference
+    )
+    assert not totals[0].is_complete
+
+
+def test_a_sheet_without_its_key_column_is_skipped_and_reported():
+    workbook = build_cost_reference_template()
+    ws = workbook["Labor"]
+    ws.cell(row=1, column=1, value="Not_A_Role")  # the Role header is gone
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    reference = parse_cost_reference_workbook(buffer.getvalue())
+    assert reference.labor_rates == {}
+    assert any("Labor" in p and "Role" in p for p in reference.problems)
+    assert reference.material_prices  # the other sheets still load
+
+
+def test_missing_verified_and_notes_columns_default_instead_of_raising():
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.title = "Labor"
+    ws.append(["Role", "Hourly_Rate_Est"])
+    ws.append(["PhD Researcher", 30.0])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    reference = parse_cost_reference_workbook(buffer.getvalue())
+    assert reference.labor_rates["PhD Researcher"] == {"hourly_rate_est": 30.0, "verified": False}
+
+
+def test_has_any_cost_tells_an_empty_reference_from_a_filled_one():
+    empty = _reference(
+        locations={"Box": _entry(None)},
+        processes={"SpinCoating": None},
+        overhead={"Rent": _entry(None)},
+    )
+    empty.material_prices["PbI2"] = {"price_per_gram_est": None, "average_quantity_grams": None}
+    empty.labor_rates["PhD Researcher"] = {"hourly_rate_est": None, "verified": False}
+    assert empty.total_entries > 0 and not empty.has_any_cost  # the shipped state
+    assert _reference(processes={"SpinCoating": 5.0}).has_any_cost
+
+
+def _template_bytes():
+    buffer = io.BytesIO()
+    build_cost_reference_template().save(buffer)
+    return buffer.getvalue()
+
+
+def test_default_reference_allocation_is_per_batch_for_rows_without_one():
+    reference = parse_cost_reference_workbook(_template_bytes())
+    assert all(
+        entry["allocation_method"] in {"per batch", "per sample", "per hour"}
+        for entry in reference.overhead_costs.values()
+    )
+    assert reference.overhead_costs["Cleanroom / lab rent"]["allocation_method"] == "per hour"
+
+
+def test_a_process_returned_by_two_query_chunks_is_counted_once(mocker):
+    """H4: a process referencing several samples came back from every chunk that held one."""
+    sample_entries = mocker.Mock()
+    sample_entries.raise_for_status.return_value = None
+    sample_entries.json.return_value = {"data": [{"entry_id": f"s{i}"} for i in range(301)]}
+
+    def process_page():
+        response = mocker.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": [
+                {
+                    "archive": {
+                        "data": {"positon_in_experimental_plan": 1, "samples": [{"lab_id": "S1"}]},
+                        "metadata": {"entry_type": "HySprint_SpinCoating", "entry_id": "p1"},
+                    }
+                }
+            ]
+        }
+        return response
+
+    mocker.patch("requests.post", side_effect=[sample_entries, process_page(), process_page()])
+    entries = fetch_process_entries("http://x", "tok", ["S1"])
+    assert len(entries) == 1
+
+
+def test_requests_have_a_timeout(mocker):
+    response = mocker.Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"data": []}
+    post = mocker.patch("requests.post", return_value=response)
+    fetch_process_entries("http://x", "tok", ["S1"])
+    assert post.call_args.kwargs.get("timeout")
+
+
+def test_table_cells_from_nomad_are_html_escaped():
+    import gui_components as gui
+
+    html_text = gui._build_html_table(["Material"], [["<img src=x onerror=alert(1)>"], ["a & b"]])
+    assert "<img" not in html_text
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html_text and "a &amp; b" in html_text
+
+
+def test_summary_sheet_has_overhead_and_completeness_columns():
+    from excel_export import SUMMARY_HEADERS
+
+    assert {"Overhead_Total", "Missing_Count", "Complete"} <= set(SUMMARY_HEADERS)
+    total = BatchTotal("B1", 2, 1.0, 2.0, 0.0, 0.0, 0, overhead_total=4.0, missing_count=1)
+    workbook = openpyxl.Workbook()
+    from excel_export import _build_summary_sheet
+
+    _build_summary_sheet(workbook, [total])
+    ws = workbook["Summary"]
+    headers = [c.value for c in ws[1]]
+    row = dict(zip(headers, [c.value for c in ws[2]]))
+    assert row["Overhead_Total"] == 4.0 and row["Missing_Count"] == 1
+    assert row["Complete"].startswith("NO")
+    assert row["Grand_Total"] == pytest.approx(7.0)
+
+
+def test_a_price_from_the_admin_reference_is_not_labelled_a_rough_estimate():
+    materials = [MaterialRow(batch_id="B1", process_type="X", material_name="PbI2", role="solute")]
+    reference = CostReference()
+    reference.material_prices["PbI2"] = {
+        "cas_number": None,
+        "price_per_gram_est": 2.0,
+        "average_quantity_grams": 1.0,
+        "verified": True,
+        "notes": "",
+    }
+    assert compute_material_cost_rows(materials, reference)[0].notes == ""

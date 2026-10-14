@@ -1,3 +1,48 @@
+import re
+
+from hysprint_utils.process_specs import ATMOSPHERIC_FIELDS, PROCESSES
+
+_UNIT_IN_LABEL = re.compile(r"\[([^\]]+)\]\s*$")
+
+
+def _guide_row(label, test):
+    """[Field Name, Description, Data Format, Units, Example] for one catalogue column."""
+    unit = _UNIT_IN_LABEL.search(label)
+    name = _UNIT_IN_LABEL.sub("", label).strip()
+    if label == "Datetime":
+        data_format, unit_text = "DD.MM.YYYY HH:MM:SS", "DD.MM.YYYY HH:MM:SS"
+    else:
+        unit_text = unit.group(1) if unit else ""
+        if isinstance(test, bool):
+            data_format = "Boolean"
+        elif isinstance(test, (int, float)):
+            data_format = "Number"
+        else:
+            data_format = "Text"
+    return [label, name, data_format, unit_text, "" if test is None else str(test)]
+
+
+def _test_value(spec_entry, n=1):
+    test = spec_entry.get("test")
+    return test(n) if callable(test) else test
+
+
+def _guide_rows(process_name, atmospheric=False):
+    """Guide table rows for one process type (or the atmospheric block), in catalogue order.
+
+    Indexed groups (solvents, solutes, spin steps, ...) contribute their first item only."""
+    if atmospheric:
+        return [_guide_row(label, _test_value(spec)) for label, spec in ATMOSPHERIC_FIELDS.items()]
+    spec = PROCESSES[process_name]
+    rows = [
+        _guide_row(label, _test_value(field)) for label, field in spec.get("fields", {}).items()
+    ]
+    for group in spec.get("indexed", {}).values():
+        for entry in group:
+            rows.append(_guide_row(entry["excel_key"].format(n=1), _test_value(entry)))
+    return rows
+
+
 # Method for adding a sheet with information on how to fill up the columns
 def add_guide_sheet(workbook):
     guide_ws = workbook.create_sheet(title="Data Entry Guide")
@@ -41,151 +86,19 @@ def add_guide_sheet(workbook):
                 ws.cell(row=r, column=c, value=val)
         return start_row + len(table_data) + 2  # leave a blank row after table
 
-    # Timestamp and operator will be added to all processes
-    timestamp_operator = [
-        [
-            "Date Time",
-            "Date and time of process",
-            "DD.MM.YYYY HH:MM:SS",
-            "DD.MM.YYYY HH:MM:SS",
-            "09.01.2026 10:19:00",
-        ],
-        ["Operator", "Person who did the process", "Text", "", "Max Mustermann"],
-    ]
-
-    # Experiment Info Table
-    experiment_info = timestamp_operator + [
-        ["Date", "Date of experiment", "DD-MM-YYYY", "", "26-02-2025"],
-        ["Project_Name", "Scientist initials/project name", "Text", "", "FiNa"],
-        ["Batch", "General experiment batch number", "Number", "", "1"],
-        ["Subbatch", "Subset for variations", "Number", "", "2"],
-        ["Sample", "Sample serial number", "Number", "", "1"],
-        ["Nomad ID", "Auto-generated sample ID", "Alphanumeric", "", ""],
-        ["Variation", "Subbatch variation", "Alphanumeric", "", "1000 rpm"],
-        ["Sample Dimension", "Sample size", "Number", "cm", "1 cm x 1 cm"],
-        ["Sample area", "Active area (e.g., ITO/Cu overlap)", "Number", "cm²", "0.16"],
-        ["Number of pixels", "Number of pixels", "Number", "", "6"],
-        ["Pixel area", "Area per pixel", "Number", "cm²", "0.16"],
-        ["Substrate Material", "Substrate material", "Alphanumeric", "", "Soda Lime Glass"],
-        ["Substrate Conductive Layer", "Conductive layer material", "Alphanumeric", "", "ITO"],
-        ["Number of Junctions", "Number of junctions", "Number", "", "1"],
-        ["Notes", "Additional notes or methods", "Alphanumeric", "", ""],
-    ]
-    row = write_table(guide_ws, row, "Experiment Info", experiment_info)
-
-    # Step 1: Cleaning (UV-Ozone)
-    cleaning = timestamp_operator + [
-        ["Solvent", "Cleaning solvent", "Text", "", "Hellmanex"],
-        ["Time", "Ultrasonic bath time", "Number", "s", "31"],
-        ["Temperature", "Bath temperature", "Number", "°C", "61"],
-        ["UV-Ozone Time", "UV-Ozone duration", "Number", "s", "900"],
-    ]
-    row = write_table(guide_ws, row, "Step 1: Cleaning (UV-Ozone)", cleaning)
-
-    # Step 2: Spin Coating
-    spin_coating = timestamp_operator + [
-        [
-            "Material Name",
-            "Coated material",
-            "Alphanumeric",
-            "",
-            "Cs0.05(MA0.17FA0.83)0.95Pb(I0.83Br0.17)3",
-        ],
-        ["Layer Type", "Type of layer", "Text", "", "Absorber"],
-        ["Tool/GB name", "Tool used", "Text", "", "HZB-HySprintBox"],
-        ["Solvent 1 name", "First solvent", "Text", "", "DMF"],
-        ["Solvent 1 volume", "Volume of solvent 1", "Number", "µL", "10"],
-        ["Solvent 1 relative amt.", "Relative amount of solvent 1", "Number", "", "1.5"],
-        ["Solute 1 name", "First solute", "Text", "", "PbI2"],
-        ["Solute 1 Concentration", "Concentration of solute 1", "Number", "mM", "1.42"],
-        ["Solution volume", "Total solution volume", "Number", "µL", "100"],
-        ["Spin Delay", "Delay before spinning", "Number", "s", "0.5"],
-        ["Rotation Speed 1", "First spin speed", "Number", "rpm", "3001"],
-        ["Rotation time 1", "First spin time", "Number", "s", "31"],
-        ["Acceleration 1", "First acceleration", "Number", "rpm/s", "1001"],
-        ["Rotation speed 2", "Second spin speed", "Number", "rpm", "3002"],
-        ["Rotation time 2", "Second spin time", "Number", "s", "32"],
-        ["Acceleration 2", "Second acceleration", "Number", "rpm/s", "1002"],
-        ["Annealing Time", "Annealing duration", "Number", "min", "30"],
-        ["Annealing Temperature", "Annealing temperature", "Number", "°C", "120"],
-        ["Annealing Atmosphere", "Annealing atmosphere", "Text", "", "Nitrogen"],
-        ["Notes", "Additional notes", "Alphanumeric", "", ""],
-    ]
-    row = write_table(guide_ws, row, "Step 2: Spin Coating", spin_coating)
-
-    # Step 3: Evaporation
-    evaporation = timestamp_operator + [
-        ["Material Name", "Evaporated material", "Alphanumeric", "", "PCBM"],
-        ["Layer Type", "Type of layer", "Text", "", "Electron Transport Layer"],
-        ["Tool/GB name", "Tool used", "Text", "", "Hysprint Evap"],
-        ["Organic", "Is the layer organic?", "Boolean", "", "True"],
-        ["Sample Holder width", "Width of sample holder", "Number", "cm", "5"],
-        ["Base Pressure", "Base pressure", "Number", "bar", "0.00001"],
-        ["Pressure start", "Start pressure", "Number", "bar", "0.00005"],
-        ["Pressure end", "End pressure", "Number", "bar", "0.00003"],
-        ["Source temp. start", "Source temp. (start)", "Number", "°C", "150"],
-        ["Source temp. end", "Source temp. (end)", "Number", "°C", "150"],
-        ["Substrate temperature", "Substrate temp.", "Number", "°C", "25"],
-        ["Thickness", "Layer thickness", "Number", "nm", "100"],
-        ["Rate start", "Start deposition rate", "Number", "Å/s", "0.5"],
-        ["Rate target", "Target deposition rate", "Number", "Å/s", "1"],
-        ["Tooling factor", "Tooling factor", "Number", "", "1.5"],
-        ["Notes", "Additional notes", "Alphanumeric", "", ""],
-    ]
-    row = write_table(guide_ws, row, "Step 3: Evaporation", evaporation)
-
-    # Step 4: ALD (Atomic Layer Deposition)
-    ald = timestamp_operator + [
-        ["Material Name", "Deposited material", "Alphanumeric", "", "PCBM"],
-        ["Layer Type", "Type of layer", "Text", "", "Electron Transport Layer"],
-        ["Tool/GB name", "Tool used", "Text", "", "IRIS ALD"],
-        ["Source", "Precursor source", "Alphanumeric", "", "TMA"],
-        ["Thickness", "Film thickness", "Number", "nm", "25"],
-        ["Temperature", "Deposition temperature", "Number", "°C", "150"],
-        ["Rate", "Deposition rate", "Number", "Å/s", "0.1"],
-        ["Time", "Deposition time", "Number", "s", "1800"],
-        ["Number of cycles", "Number of ALD cycles", "Number", "", "250"],
-        ["Precursor 1", "First precursor", "Alphanumeric", "", "TMA"],
-        ["Pulse Duration 1", "Pulse duration (precursor 1)", "Number", "s", "0.2"],
-        ["Manifold temp. 1", "Manifold temp. (precursor 1)", "Number", "°C", "80"],
-        ["Bottle temp. 1", "Bottle temp. (precursor 1)", "Number", "°C", "25"],
-        ["Precursor 2", "Second precursor", "Alphanumeric", "", "H2O"],
-        ["Pulse Duration 2", "Pulse duration (precursor 2)", "Number", "s", "0.1"],
-        ["Manifold temp. 2", "Manifold temp. (precursor 2)", "Number", "°C", "70"],
-    ]
-    row = write_table(guide_ws, row, "Step 4: ALD (Atomic Layer Deposition)", ald)
-
-    # Step 5: Sputtering
-    sputtering = timestamp_operator + [
-        ["Material Name", "Sputtered material", "Alphanumeric", "", "TiO2"],
-        ["Layer Type", "Type of layer", "Text", "", "Electron Transport Layer"],
-        ["Tool/GB name", "Tool used", "Text", "", "Hysprint tool"],
-        ["Gas", "Sputtering gas", "Text", "", "Argon"],
-        ["Temperature", "Deposition temperature", "Number", "°C", "150"],
-        ["Pressure", "Chamber pressure", "Number", "mbar", "0.01"],
-        ["Deposition Time", "Deposition time", "Number", "s", "300"],
-        ["Burn in time", "Burn-in time", "Number", "s", "60"],
-        ["Power", "Sputtering power", "Number", "W", "150"],
-        ["Rotation rate", "Substrate rotation rate", "Number", "rpm", "30"],
-        ["Thickness", "Film thickness", "Number", "nm", "50"],
-        ["Gas flow rate", "Gas flow rate", "Number", "cm³/min", "20"],
-        ["Notes", "Additional notes", "Alphanumeric", "", ""],
-    ]
-    row = write_table(guide_ws, row, "Step 5: Sputtering", sputtering)
-
-    # Step X: Atmospheric
-    atmospheric = timestamp_operator + [
-        ["Room temperature", "Room temperature", "number", "°C", "21"],
-        ["Room relative humidity", "Room relative humidity", "number", "%", "30"],
-        ["Start GB Oxygen level", "Start ppm values on glovebox", "number", "ppm", "0.1"],
-        ["End GB Oxygen level", "End ppm values on glovebox", "number", "ppm", "0.1"],
-        ["Start GB Water level", "Start ppm values on glovebox", "number", "ppm", "0.1"],
-        ["End GB Water level", "End ppm values on glovebox", "number", "ppm", "0.1"],
-        ["Start GB Temperature", "Start temperature on glovebox", "number", "°C", "20"],
-        ["End GB Temperature", "End temperature on glovebox", "number", "°C", "20"],
-        ["Notes", "Additional notes", "Alphanumeric", "", ""],
-    ]
-    row = write_table(guide_ws, row, "Step 6: Atmospheric", atmospheric)
+    # Every table below is generated from hysprint_utils.process_specs, the same catalogue
+    # that builds the sheet's real columns, so the guide cannot drift from them. Examples are
+    # the catalogue's test values; the first solvent/solute/step stands for the repeated ones.
+    row = write_table(guide_ws, row, "Experiment Info", _guide_rows("Experiment Info"))
+    for title, process_name in (
+        ("Step 1: Cleaning (UV-Ozone)", "Cleaning UV-Ozone"),
+        ("Step 2: Spin Coating", "Spin Coating"),
+        ("Step 3: Evaporation", "Evaporation"),
+        ("Step 4: ALD (Atomic Layer Deposition)", "ALD"),
+        ("Step 5: Sputtering", "Sputtering"),
+    ):
+        row = write_table(guide_ws, row, title, _guide_rows(process_name))
+    row = write_table(guide_ws, row, "Step 6: Atmospheric", _guide_rows(None, atmospheric=True))
 
     # 3. Data Entry Best Practices
     best_practices = [

@@ -439,23 +439,13 @@ class MinimalistExperimentBuilder:
         if index < len(self.current_sequence):
             self.current_sequence[index]["process"] = new_process_type
 
-            # Reset config when changing process type. Deliberately NOT every process
-            # type with a config_defaults entry (Co-Evaporation/Ink Recycling are also
-            # configurable but were never in this reset list either, even before this
-            # migration) - preserved exactly as it already was, not generalized, since
-            # each numeric control's own value=config.get(key, min_val) fallback already
-            # covers the "config missing" case, so widening this list isn't required for
-            # correctness and isn't this migration's call to make.
-            if new_process_type in [
-                "Spin Coating",
-                "Cleaning O2-Plasma",
-                "Cleaning UV-Ozone",
-                "Inkjet Printing",
-                "Slot Die Coating",
-                "Blade Coating",
-                "Screen Printing",
-            ]:
-                self.current_sequence[index]["config"] = self._get_default_config(new_process_type)
+            # Reset config when changing process type: every type with defaults in the
+            # catalogue gets them, every other type none. (A hand-kept list of 7 types used
+            # to leave Co-Evaporation/Ink Recycling without a config, so their controls showed
+            # "Materials: 1" while the sheet generated no material columns.)
+            defaults = self._get_default_config(new_process_type)
+            if defaults:
+                self.current_sequence[index]["config"] = defaults
             else:
                 self.current_sequence[index].pop("config", None)
 

@@ -145,6 +145,8 @@ both places.
 
 ## 3. Create `oasis_local_config.py`
 
+**Shortcut:** copy `oasis_local_config.example.py` (repo root) to `oasis_local_config.py` and un-comment what you need. It lists every supported variable, commented out, with a one-line explanation each (Oasis URL, proxy, hiding dashboard apps, the Projects cards, log folder).
+
 Create it at the repo root of the upload, next to `bootstrap.py`. It is
 gitignored (same pattern as `secrets.py`) because it describes one deployment,
 not the repo - it travels with the upload, and is not committed upstream.
@@ -184,6 +186,9 @@ NO_PROXY = "localhost,127.0.0.1"
 | `HYSPRINT_API_ENDPOINT` | only if the API is not at `/nomad-oasis/api/v1` | Identical to the HZB default on CE-AME. Set anyway so the deployment is fully described by one file. |
 | `HTTP_PROXY`, `HTTPS_PROXY` | the container has no direct outbound route | Applied *before* `pip install shared/` runs, because pip fetches `hatchling` from PyPI to build it. Also picked up by `git` for the `insitu_analyser` dependency. |
 | `NO_PROXY` | whenever a proxy is set | Hosts that must be reached *without* the proxy. Defaults to `localhost,127.0.0.1` if omitted. Do not add the Oasis host unless a direct call to it actually works from the container - on CE-AME it does not, and excluding it breaks every API call with `Errno 113 No route to host`. |
+| `HYSPRINT_USAGE_LOG_DIR` | only to keep usage logs somewhere else | Folder for `notebook_usage.log` and `button_usage.log` (`hysprint_utils.usage_tracking`). Defaults to `shared/log/` in the uploaded repo, so every app in one upload writes to the same two files. Logs from older versions, kept next to `hysprint_utils`, are moved there on first use. |
+| `HYSPRINT_DASHBOARD_HIDE_APPS` | only to drop apps from the App Dashboard | Comma-separated app folder names (or card names) to hide, e.g. `"XPS-Automated,SEM_crystal_counter"`. `Learning` and `Projects` name those two sections. Case and spaces are ignored; an unknown name logs a warning and is ignored. A category with no apps left disappears. Hidden apps stay in the upload and can still be opened directly. Unset: the dashboard is unchanged. |
+| `HYSPRINT_DASHBOARD_SHOW_APPS` | only to show a few apps | An allow-list of the same kind of names: when set, only these appear (and `Learning`/`Projects` only if named). The hide list is applied on top. Example: `"JV-Analysis,File_Uploader,Learning"`. |
 
 ### Ordering, and why it is not cosmetic
 

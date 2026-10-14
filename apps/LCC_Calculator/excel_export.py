@@ -134,8 +134,9 @@ _GUIDE_TEXT = [
     (
         "One row per distinct material per batch, aggregated across every "
         "time it was used. Quantity_Grams is Average_Quantity_Grams (from "
-        "the reference file) multiplied by how many times the material was "
-        "used - NOMAD only records concentration/volume/thickness for these "
+        "the reference file) once per batch, not multiplied by how many "
+        "process entries mention the material - NOMAD only records "
+        "concentration/volume/thickness for these "
         "materials, never a directly usable gram amount, so the reference "
         "file's average figure is the only quantity source (Quantity_Source "
         "column says so explicitly).",
@@ -157,7 +158,14 @@ _GUIDE_TEXT = [
         "row summing every selected batch - the overall cost of everything "
         "selected. Unverified_Count tallies how many line items behind that "
         "batch's total are not yet marked Verified=TRUE in the reference "
-        "file.",
+        "file. Missing_Count tallies the items whose cost is blank or not a "
+        "number in the reference file: they add nothing to the totals, so a "
+        "batch with Missing_Count > 0 (Complete = NO) is a lower bound, not "
+        "its real cost. Overhead_Total is the reference's overhead rows "
+        "without a Location (rent, disposal, ...) allocated by their "
+        "Allocation_Method; Equipment_Total counts each location once per "
+        "batch, by the same allocation (per batch / per sample / per hour of "
+        "labour entered for the batch).",
         False,
     ),
 ]
@@ -333,10 +341,13 @@ SUMMARY_HEADERS = [
     "Material_Total",
     "Process_Total",
     "Equipment_Total",
+    "Overhead_Total",
     "Labor_Total",
     "Grand_Total",
     "Per_Sample",
     "Unverified_Count",
+    "Missing_Count",
+    "Complete",
 ]
 
 
@@ -361,6 +372,11 @@ def _build_summary_sheet(wb: Workbook, batch_totals: list[BatchTotal]) -> None:
             column=_col(SUMMARY_HEADERS, "Equipment_Total"),
             value=total.equipment_total,
         )
+        ws.cell(
+            row=row_index,
+            column=_col(SUMMARY_HEADERS, "Overhead_Total"),
+            value=total.overhead_total,
+        )
         ws.cell(row=row_index, column=_col(SUMMARY_HEADERS, "Labor_Total"), value=total.labor_total)
         ws.cell(row=row_index, column=_col(SUMMARY_HEADERS, "Grand_Total"), value=total.grand_total)
         ws.cell(row=row_index, column=_col(SUMMARY_HEADERS, "Per_Sample"), value=total.per_sample)
@@ -368,6 +384,16 @@ def _build_summary_sheet(wb: Workbook, batch_totals: list[BatchTotal]) -> None:
             row=row_index,
             column=_col(SUMMARY_HEADERS, "Unverified_Count"),
             value=total.unverified_count,
+        )
+        ws.cell(
+            row=row_index,
+            column=_col(SUMMARY_HEADERS, "Missing_Count"),
+            value=total.missing_count,
+        )
+        ws.cell(
+            row=row_index,
+            column=_col(SUMMARY_HEADERS, "Complete"),
+            value="yes" if total.is_complete else "NO - lower bound, costs missing",
         )
         row_index += 1
 
@@ -398,6 +424,11 @@ def _build_summary_sheet(wb: Workbook, batch_totals: list[BatchTotal]) -> None:
         )
         ws.cell(
             row=row_index,
+            column=_col(SUMMARY_HEADERS, "Overhead_Total"),
+            value=sum(total.overhead_total for total in batch_totals),
+        )
+        ws.cell(
+            row=row_index,
             column=_col(SUMMARY_HEADERS, "Labor_Total"),
             value=sum(total.labor_total for total in batch_totals),
         )
@@ -410,6 +441,16 @@ def _build_summary_sheet(wb: Workbook, batch_totals: list[BatchTotal]) -> None:
             row=row_index,
             column=_col(SUMMARY_HEADERS, "Unverified_Count"),
             value=sum(total.unverified_count for total in batch_totals),
+        )
+        ws.cell(
+            row=row_index,
+            column=_col(SUMMARY_HEADERS, "Missing_Count"),
+            value=sum(total.missing_count for total in batch_totals),
+        )
+        ws.cell(
+            row=row_index,
+            column=_col(SUMMARY_HEADERS, "Complete"),
+            value="yes" if all(t.is_complete for t in batch_totals) else "NO - lower bound",
         )
 
     _autosize_columns(ws, SUMMARY_HEADERS)

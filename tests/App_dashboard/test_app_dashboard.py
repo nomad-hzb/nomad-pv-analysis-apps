@@ -171,3 +171,69 @@ def test_learning_folder_opens_the_first_notebook_and_it_exists_in_repo():
     assert os.path.isfile(os.path.join(repo_root, LEARNING_FOLDER.path)), (
         f"missing learning notebook: {LEARNING_FOLDER.path}"
     )
+
+
+# --- per-deployment app selection (D1) -----------------------------------------------------
+
+
+def _names(selection):
+    return {
+        category: [e.folder or e.name for e in entries]
+        for category, entries in selection.categories.items()
+    }
+
+
+def test_no_setting_means_no_change():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(CATEGORIES, parse_name_list(None), parse_name_list(""))
+    assert selection.categories == CATEGORIES
+    assert selection.show_learning and selection.show_projects
+
+
+def test_hide_one_app_by_folder_name_ignoring_case_and_spaces():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(
+        CATEGORIES, hide=parse_name_list(" xps-automated , Sem_crystal_counter")
+    )
+    folders = {e.folder for entries in selection.categories.values() for e in entries}
+    assert "XPS-Automated" not in folders
+    assert "LCC_Calculator" in folders  # others untouched
+
+
+def test_hide_every_app_of_a_category_leaves_it_empty():
+    from data_manager import select_dashboard
+
+    category = "Data Management"
+    hide = {e.folder.lower() for e in CATEGORIES[category]}
+    selection = select_dashboard(CATEGORIES, hide=hide)
+    assert selection.categories[category] == []
+    assert selection.categories["Build Your Own"] == CATEGORIES["Build Your Own"]
+
+
+def test_allow_list_shows_only_the_named_apps():
+    from data_manager import parse_name_list, select_dashboard
+
+    selection = select_dashboard(CATEGORIES, show=parse_name_list("JV-Analysis,File_Uploader"))
+    folders = [e.folder for entries in selection.categories.values() for e in entries]
+    assert sorted(folders) == ["File_Uploader", "JV-Analysis"]
+    assert not selection.show_learning and not selection.show_projects
+
+
+def test_learning_and_projects_can_be_hidden_or_allowed_by_name():
+    from data_manager import select_dashboard
+
+    assert not select_dashboard(CATEGORIES, hide={"learning"}).show_learning
+    assert not select_dashboard(CATEGORIES, hide={"projects"}).show_projects
+    allowed = select_dashboard(CATEGORIES, show={"learning"})
+    assert allowed.show_learning and not allowed.show_projects
+
+
+def test_unknown_name_warns_and_changes_nothing(caplog):
+    from data_manager import select_dashboard
+
+    with caplog.at_level("WARNING"):
+        selection = select_dashboard(CATEGORIES, hide={"jv-analyzis"})
+    assert selection.categories == CATEGORIES
+    assert "jv-analyzis" in caplog.text
