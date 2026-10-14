@@ -8,3 +8,4 @@ Process types, columns and archive paths come from `shared/hysprint_utils/proces
 - A widget whose display depends on `ExperimentState` changed outside its own handlers needs a public `refresh()` wired into `refresh_all` in `app.py`.
 - A field marked "varies" is never autofilled; Replicate and Adopt restore the previous state if they fail.
 - Before calling something an ingestion bug, force a reprocess and re-fetch: staging lag looks like a defect.
+- `gui_components.py` is split by widget family: `gui_fields.py` (field rows and the helpers they share), `gui_matrix.py` (Varying Fields table, Variation format), `gui_sequence.py` (process rows and sequence builder, debug panel). They never import `gui_components`; it re-exports their names, so imports and string patch targets (`gui_components.upload_experiment_excel`) keep working. The test conftest loads the three siblings first.
