@@ -40,7 +40,6 @@ NO_MANUAL_YET = {
     "Entry_Auditor",
     "Hansen_green_calculator",
     "ISA_Previewer",
-    "LCC_Calculator",
     "Thickness_tracer",
     "Wetting_envelope",
     "bitmap_maker",
