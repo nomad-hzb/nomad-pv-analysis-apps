@@ -16,6 +16,7 @@ from IPython.display import display as ipydisplay
 
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.error_handler import ErrorHandler
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,6 @@ class TRPLApp:
         url_base: str,
         api_endpoint: str,
         token: str,
-        manual_file: str | None = None,
     ) -> None:
         self._auth = AuthenticationManager(url_base, api_endpoint)
         self._auth.authenticate_with_token(token)
@@ -64,6 +64,7 @@ class TRPLApp:
     # Public
     # ------------------------------------------------------------------
     def display(self) -> None:
+        ipydisplay(manual_panel(__file__))
         ipydisplay(self._demo_btn)
         ipydisplay(self._batch_panel.widget)
         ipydisplay(self._container)
