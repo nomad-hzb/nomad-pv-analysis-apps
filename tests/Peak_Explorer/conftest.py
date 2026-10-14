@@ -19,6 +19,8 @@ _MODULE_ORDER = (
     "fitting_engine",
     "plot_manager",
     "gui_components",
+    "background_handlers",
+    "fit_handlers",
     "gui_layouts",
 )
 
