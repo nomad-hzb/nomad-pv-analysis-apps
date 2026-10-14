@@ -38,7 +38,6 @@ KNOWN_EXCEPTIONS = {
 NO_MANUAL_YET = {
     "App_dashboard",
     "Thickness_tracer",
-    "bitmap_maker",
     "smart_databaser",
 }
 

@@ -5,6 +5,8 @@ import ipywidgets as widgets
 import utils
 from IPython.display import HTML, display
 
+from hysprint_utils.manual import manual_panel
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,6 +220,7 @@ def setup_app():
     app_layout = widgets.VBox(
         [
             header,
+            manual_panel(__file__),
             widgets.HBox([controls, display_box], layout=widgets.Layout(width="100%")),
         ],
         layout=widgets.Layout(padding="20px"),
