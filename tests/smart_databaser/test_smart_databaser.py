@@ -2551,8 +2551,8 @@ def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
     ):
         main_interface = initialize_ui("url", "token")
         # app.py's main_interface.children order: h2, manual panel, h4, sample_setup,
-        # template_picker, quick_fill_all_button, h4, sequence_builder, ... (progress_bar now lives inside
-        # finish_section, not at the top level)
+        # template_picker, quick_fill_all_button, h4, sequence_builder, ... (progress_bar now
+        # lives inside finish_section, not at the top level)
         template_picker = main_interface.children[4]
         sequence_builder = main_interface.children[7]
         assert len(sequence_builder.rows_box.children) == 0
