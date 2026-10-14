@@ -14,6 +14,7 @@ import requests
 from pydantic import BaseModel, ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
+    REQUEST_TIMEOUT,
     get_all_mppt,
     get_batch_ids,
     get_ids_in_batch,
@@ -541,6 +542,7 @@ class DataManager:
             }
             resp = requests.post(
                 f"{self.url}/entries/query",
+                timeout=REQUEST_TIMEOUT,
                 headers={"Authorization": f"Bearer {self.token}"},
                 json=query,
             )
@@ -560,6 +562,7 @@ class DataManager:
                 }
                 resp2 = requests.post(
                     f"{self.url}/entries/archive/query",
+                    timeout=REQUEST_TIMEOUT,
                     headers={"Authorization": f"Bearer {self.token}"},
                     json=query2,
                 )
@@ -589,6 +592,7 @@ class DataManager:
         }
         resp = requests.post(
             f"{self.url}/entries/archive/query",
+            timeout=REQUEST_TIMEOUT,
             headers={"Authorization": f"Bearer {self.token}"},
             json=query,
         )

@@ -19,11 +19,12 @@ import scipy.signal
 from pydantic import ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
-    get_all_eqe as _get_all_trpl,
-)
-from hysprint_utils.api_calls import (
+    REQUEST_TIMEOUT,
     get_ids_in_batch,
     get_sample_description,
+)
+from hysprint_utils.api_calls import (
+    get_all_eqe as _get_all_trpl,
 )
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
@@ -141,6 +142,7 @@ class TRPLDataManager:
         headers = {"Authorization": f"Bearer {self._token}"}
         resp = requests.post(
             f"{self._url}/entries/archive/query",
+            timeout=REQUEST_TIMEOUT,
             headers=headers,
             json={
                 "required": {"metadata": {"upload_id": "*"}},
@@ -159,6 +161,7 @@ class TRPLDataManager:
 
         resp = requests.post(
             f"{self._url}/entries/archive/query",
+            timeout=REQUEST_TIMEOUT,
             headers=headers,
             json={
                 "required": {"data": "*", "metadata": "*"},

@@ -74,6 +74,7 @@ def test_target_upload_is_listed_and_reachable():
     response = requests.get(
         f"{NOMAD_URL}/uploads/{DISPOSABLE_UPLOAD_ID}",
         headers={"Authorization": f"Bearer {NOMAD_TOKEN}"},
+        timeout=30,
     )
     response.raise_for_status()
     print("\nGET /uploads/{id} response:", response.json())
