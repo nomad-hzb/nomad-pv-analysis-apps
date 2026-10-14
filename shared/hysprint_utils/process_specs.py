@@ -1,34 +1,11 @@
 """Single source of truth for per-process-type Excel columns and their NOMAD
 archive field mappings.
 
-Before this module existed, the same information was hand-duplicated in two
-different shapes across two apps: apps/Excel_creator/sheet_experiment.py
-(generate_steps_for_process - which Excel columns a process generates, in
-what order, with what test values) and
-apps/smart_databaser/config/field_mappings.json (which archive path each of
-those columns autofills from). Adding or changing a process type meant
-editing both by hand, plus (separately) up to six hand-maintained lists in
-apps/smart_databaser/data_manager.py (AVAILABLE_PROCESSES,
-CONFIGURABLE_PROCESS_TYPES, DEFAULT_CONFIG_BY_PROCESS_TYPE,
-MATERIAL_GATED_PROCESS_TYPES, NUMERIC_CONFIG_FIELDS, BOOLEAN_CONFIG_FIELDS)
-and a further set of separate, easy-to-miss copies in
-apps/Excel_creator/voila_experiment_app.py's own inline config-control code
-(configurable_processes, the solvents/solutes applicable-type lists, and the
-per-process checkbox blocks) - a real gap of exactly this kind (Screen
-Printing's config controls silently not rendering because
-voila_experiment_app.py's own list was never updated) is what prompted this
-module. See nomad-hzb/nomad-pv-analysis-apps#38.
-
-Both apps now read from PROCESSES below instead of hand-duplicating any of
-this. sheet_experiment.py still owns the per-process ASSEMBLY logic (which
-fields appear in what order, and the handful of genuinely special-cased
-branches - Spin Coating's single-vs-multi spin step naming, Experiment
-Info's Ink Recycling variant) since that's real conditional logic, not
-duplicated data; it looks up each field's label/test-value/dropdown from
-here instead of hardcoding them inline. data_manager.py derives all of its
-former hand-maintained lists from PROCESS_META, and loads archive field
-paths directly from PROCESS_FIELDS/PROCESS_INDEXED_FIELDS instead of parsing
-a separate JSON file.
+Excel_creator (sheet columns, order, test values) and smart_databaser (archive path each column
+autofills from, config controls, optional blocks) both read PROCESSES below; add or change a
+process type here first. sheet_experiment.py still owns the per-process assembly logic (the
+few genuinely special-cased branches, such as Spin Coating's single vs multi spin step naming);
+smart_databaser's data_manager.py derives its config lists from PROCESS_META.
 
 Shape of one field entry (a dict): {"test": <test value>, "path": [...]} for
 a single archive path, or {"test": <test value>, "paths": [[...], [...]]}
