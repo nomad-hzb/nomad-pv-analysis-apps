@@ -12,7 +12,7 @@ from IPython.display import display as ipydisplay
 
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.error_handler import ErrorHandler
-from hysprint_utils.plotting_utils import create_manual
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,11 @@ class EQEApp:
         url_base: str,
         api_endpoint: str,
         token: str,
-        manual_file: str | None = None,
     ):
         self._auth = AuthenticationManager(url_base, api_endpoint)
         self._auth.authenticate_with_token(token)
         self._url = self._auth.api_client.get_api_url()
         self._token = self._auth.current_token
-        self._manual_file = manual_file
 
         self._dm = dm_module.EQEDataManager()
         self._status_out = widgets.Output()
@@ -55,10 +53,13 @@ class EQEApp:
             on_load=self._on_load,
             measurement_type=dm_module.MEASUREMENT_TYPE,
         )
-        sections = []
-        if self._manual_file:
-            sections.append(create_manual(self._manual_file))
-        sections += [self._demo_btn, batch_panel.widget, self._status_out, self._data_area]
+        sections = [
+            manual_panel(__file__),
+            self._demo_btn,
+            batch_panel.widget,
+            self._status_out,
+            self._data_area,
+        ]
         ipydisplay(widgets.VBox(sections))
 
     # ------------------------------------------------------------------
