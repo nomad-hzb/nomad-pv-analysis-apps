@@ -349,3 +349,14 @@ def test_plots_are_wrapped_to_fill_the_page_and_the_noise_line_needs_a_noise():
     assert not TRPLPlotManager.trpl_traces(frame).layout.shapes  # no line at 0 on a log axis
     frame["noise"] = [0.5]
     assert len(TRPLPlotManager.trpl_traces(frame).layout.shapes) == 1
+
+
+def test_pivot_has_one_compact_column_per_group():
+    manager = trpl.TRPLDataManager("http://x", "t")
+    manager.data = pd.DataFrame(
+        {"group": ["a", "a", "b", "b", "b"], "tau": [1.0, 2.0, 3.0, 4.0, 5.0]}
+    )
+    pivot = manager.get_pivot_table("tau", "group")
+    assert pivot["a"].dropna().tolist() == [1.0, 2.0]
+    assert pivot["b"].tolist() == [3.0, 4.0, 5.0]
+    assert len(pivot) == 3

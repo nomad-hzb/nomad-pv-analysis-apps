@@ -28,6 +28,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
+from hysprint_utils.table_utils import pivot_by_group
 
 logger = logging.getLogger(__name__)
 # Measurement type constant -- imported by gui_components.py
@@ -249,13 +250,8 @@ class TRPLDataManager:
         return self.data[scalar_cols].to_csv()
 
     def get_pivot_table(self, value_col: str, group_col: str) -> pd.DataFrame:
-        """Pivot scalar data: rows = sample index, columns = group_col values."""
-        return self.data.pivot_table(
-            values=value_col,
-            index=self.data.index,
-            columns=group_col,
-            aggfunc="mean",
-        )
+        """One column per group, one row per measurement in it (every measurement is kept)."""
+        return pivot_by_group(self.data, value_col, group_col)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
+from hysprint_utils.table_utils import pivot_by_group
 
 logger = logging.getLogger(__name__)
 MEASUREMENT_TYPE = ENTRY_TYPES["abspl"]
@@ -117,7 +118,12 @@ class AbsPlDataManager:
     # ------------------------------------------------------------------
 
     def load(self, batch_ids: list[str]) -> bool:
-        """Load AbsPL data for the given batch IDs. Returns True on success."""
+        """Load AbsPL data for the given batch IDs. Returns True on success; API errors are
+        raised for the caller to show.
+
+        Units: wavelength is in nm and bandgap / QFLS in eV as stored in NOMAD (checked on real
+        HySprint_AbsPLMeasurement entries: wavelength 550.0, 550.4 ..., QFLS 1.17, bandgap 1.55),
+        so the values are plotted as they are."""
         sample_ids = get_ids_in_batch(self.url, self.token, list(batch_ids))
         descriptions = get_sample_description(self.url, self.token, list(sample_ids))
         raw = _get_all_abspl(self.url, self.token, sample_ids, eqe_type=MEASUREMENT_TYPE)
@@ -223,12 +229,8 @@ class AbsPlDataManager:
         return buf.getvalue()
 
     def get_pivot_table(self, value_col: str, group_by_col: str) -> pd.DataFrame:
-        """Return a pivot DataFrame with group_by_col values as columns."""
-        pivot = pd.DataFrame()
-        for group_val in self.data[group_by_col].unique():
-            subset = self.data[self.data[group_by_col] == group_val]
-            pivot[group_val] = subset[value_col].reset_index(drop=True)
-        return pivot
+        """One column per group, one row per measurement in it (every measurement is kept)."""
+        return pivot_by_group(self.data, value_col, group_by_col)
 
     def pivot_to_csv_string(self, value_col: str, group_by_col: str) -> str:
         """Return pivot table as a CSV string."""
