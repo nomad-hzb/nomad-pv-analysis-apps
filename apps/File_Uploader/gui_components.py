@@ -25,7 +25,7 @@ from data_manager import (
     state,
     unavailable_files,
 )
-from IPython.display import HTML, display
+from IPython.display import display
 
 from hysprint_utils.api_calls import get_upload_ids_for_samples, upload_raw_file_and_wait
 
@@ -43,40 +43,6 @@ MAX_CONCURRENT_READS = 6
 # A read that hasn't settled within this many seconds is treated as stuck so
 # it surfaces as a visible error instead of hanging the queue forever.
 READ_TIMEOUT_S = 30
-
-# ---------------------------------------------------------------------------
-# Guide content
-# ---------------------------------------------------------------------------
-_GUIDE_HTML = """
-<div style="padding: 15px; border: 1px solid #ddd; border-radius: 5px;
-            background-color: #f9f9f9; margin: 10px 0;">
-<h2>Quick Start Guide</h2>
-<h3>1. <strong>Search and Select Batch</strong></h3>
-<ul>
-<li>Use the search field to filter available batches by name.</li>
-<li>Select your target batch from the list.</li>
-<li>Click <strong>Load Data</strong> to retrieve sample IDs for that batch.</li>
-</ul>
-<h3>2. <strong>Upload Files</strong></h3>
-<ul>
-<li>Click <strong>Choose Files</strong> to select your measurement data files.</li>
-<li>The system automatically recognises common file types.</li>
-<li>Unrecognised files are flagged for manual type assignment.</li>
-</ul>
-<h3>3. <strong>Assign Files to Samples</strong></h3>
-<ul>
-<li>Select files from the file list.</li>
-<li>Click a sample ID button to assign the selected files to that sample.</li>
-</ul>
-<h3>4. <strong>Verify and Process</strong></h3>
-<ul>
-<li>Review file assignments and types for each sample.</li>
-<li>Adjust file types using the dropdown menus if needed.</li>
-<li>Click <strong>Upload and process Data</strong> when ready
-    (this action is not reversible).</li>
-</ul>
-</div>
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -874,33 +840,3 @@ def upload_files_for_samples(sample_files_dict, file_type_dict, uploaded_files_d
         progress.bar_style = "success"
         with out_widget:
             print("Done!")
-
-
-# ---------------------------------------------------------------------------
-# Guide
-# ---------------------------------------------------------------------------
-def display_guide():
-    """Render a collapsible quick-start guide widget."""
-    guide_button = widgets.Button(
-        description="Show Guide",
-        button_style="info",
-        layout=widgets.Layout(width="150px", height="40px"),
-    )
-    guide_output = widgets.Output()
-    guide_visible = [False]
-
-    def toggle_guide(b):
-        with guide_output:
-            guide_output.clear_output()
-            if not guide_visible[0]:
-                display(HTML(_GUIDE_HTML))
-                guide_button.description = "Hide Guide"
-                guide_button.button_style = "warning"
-                guide_visible[0] = True
-            else:
-                guide_button.description = "Show Guide"
-                guide_button.button_style = "info"
-                guide_visible[0] = False
-
-    guide_button.on_click(toggle_guide)
-    display(widgets.VBox([guide_button, guide_output], layout=widgets.Layout(margin="0 0 20px 0")))

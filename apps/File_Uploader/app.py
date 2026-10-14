@@ -30,6 +30,7 @@ from gui_components import (
 from IPython.display import HTML, display
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.manual import manual_panel
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,16 @@ def initialize_ui(
     search_field.observe(on_search_change, names="value")
 
     display(
-        widgets.VBox([batch_selection_container, load_button, out, upload_button_container, out2])
+        widgets.VBox(
+            [
+                manual_panel(__file__),
+                batch_selection_container,
+                load_button,
+                out,
+                upload_button_container,
+                out2,
+            ]
+        )
     )
 
     # Record every widget created during this call so the next run can clean them up.
