@@ -59,6 +59,65 @@ def _flatten_process_entry(entry: Dict, prefix: str = "") -> Dict:
     return out
 
 
+def _solution_columns(solution_details: Dict) -> Dict:
+    """Every per-solute and per-solvent scalar of a solution, one column each, named after
+    the chemical (falling back to its position). Used by the coating loaders so a
+    concentration or volume that differs between samples is never dropped."""
+    out: Dict = {}
+    for kind, fields in (
+        ("solute", {"concentration_mol": "concentration", "chemical_id": "chemical_id"}),
+        (
+            "solvent",
+            {
+                "amount_relative": "amount",
+                "chemical_volume": "volume",
+                "chemical_id": "chemical_id",
+            },
+        ),
+    ):
+        for i, item in enumerate(solution_details.get(kind, []) or []):
+            name = (
+                (item.get("chemical_2") or {}).get("name") or item.get("name") or f"{kind}{i + 1}"
+            )
+            for source, label in fields.items():
+                if source in item:
+                    out[f"{kind}_{label}_{name}"] = item[source]
+    return out
+
+
+def _remaining_fields(data: Dict, row_data: Dict, handled: set) -> None:
+    """Add every scalar the entry has that the loader did not already extract, so that no
+    recorded value is silently missing. Top-level keys in `handled` are fully covered by
+    the loader's own columns; the solution's own scalars (volume, age, ...) are kept and
+    its solutes/solvents are covered by _solution_columns."""
+    for key, value in data.items():
+        if key in handled or key == "solution":
+            continue
+        for flat_key, flat_value in _flatten_process_entry({key: value}).items():
+            row_data.setdefault(flat_key, flat_value)
+    for solution in (data.get("solution") or [])[:1]:
+        details = solution.get("solution_details") or {}
+        own = {k: v for k, v in solution.items() if k != "solution_details"}
+        own.update({k: v for k, v in details.items() if k not in ("solute", "solvent")})
+        for flat_key, flat_value in _flatten_process_entry({"solution": own}).items():
+            row_data.setdefault(flat_key, flat_value)
+        for column, value in _solution_columns(details).items():
+            row_data.setdefault(column, value)
+
+
+_COMMON_HANDLED = {
+    "name",
+    "datetime",
+    "description",
+    "location",
+    "positon_in_experimental_plan",
+    "operator",
+    "m_def",
+    "samples",
+    "lab_id",
+}
+
+
 class HySprintDataLoader:
     """
     A class to load and process different types of HySprint measurement data.
@@ -229,6 +288,7 @@ class HySprintDataLoader:
                             }
                         )
 
+                _remaining_fields(ijp_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
@@ -480,6 +540,7 @@ class HySprintDataLoader:
                     }
                 )
 
+                _remaining_fields(sdc_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
@@ -587,6 +648,7 @@ class HySprintDataLoader:
                         }
                     )
 
+                _remaining_fields(spin_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None

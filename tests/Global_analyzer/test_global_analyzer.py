@@ -201,6 +201,62 @@ def test_load_spin_coating_data_extracts_operator():
     assert df.loc[0, "operator"] == "Alice"
 
 
+def _spin_entry_with_solutes(concentrations):
+    return {
+        "name": "spin",
+        "solution": [
+            {
+                "solution_volume": 100,
+                "solution_details": {
+                    "solute": [
+                        {
+                            "chemical_2": {"name": f"S{i}"},
+                            "concentration_mol": c,
+                            "chemical_id": f"id{i}",
+                        }
+                        for i, c in enumerate(concentrations, start=1)
+                    ],
+                    "solvent": [
+                        {
+                            "chemical_2": {"name": "DMF"},
+                            "chemical_volume": 8,
+                            "amount_relative": 1.5,
+                        }
+                    ],
+                },
+            }
+        ],
+        "annealing": {"temperature": 100, "ramp": 3},
+    }
+
+
+def test_load_spin_coating_data_keeps_every_solute_concentration():
+    # a concentration that differs between samples must show up as a column of its own
+    fake_data = {
+        "s1": [[_spin_entry_with_solutes([1.0, 2.0, 3.0, 4.0])]],
+        "s2": [[_spin_entry_with_solutes([1.0, 2.0, 3.0, 8.0])]],
+    }
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_spin_coating_data(["s1", "s2"], {"s1": "a", "s2": "b"})
+
+    assert list(df["solute_concentration_S4"]) == [4.0, 8.0]
+    assert list(df["solute_concentration_S1"]) == [1.0, 1.0]
+    assert df.loc[0, "solute_chemical_id_S2"] == "id2"
+    assert df.loc[0, "solvent_volume_DMF"] == 8
+    # values the loader has no dedicated column for are kept as well
+    assert df.loc[0, "annealing.ramp"] == 3
+
+
+def test_load_slot_die_coating_data_keeps_solvent_volume():
+    fake_data = {"s1": [[_spin_entry_with_solutes([1.0])]]}
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_slot_die_coating_data(["s1"], {"s1": "a"})
+
+    assert df.loc[0, "solvent_volume_DMF"] == 8
+
+
 def test_load_slot_die_coating_data_extracts_operator():
     fake_data = {"s1": [[{"name": "sdc", "operator": "Bob"}]]}
     loader = _fake_loader(fake_data)

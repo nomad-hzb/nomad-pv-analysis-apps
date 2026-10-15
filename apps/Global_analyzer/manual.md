@@ -15,7 +15,10 @@ Batches of samples in NOMAD. For each sample the app reads the process steps (th
 metadata*: spin speeds, temperatures, materials and so on) and the measurement results it finds:
 JV, EQE, MPP tracking (and simple MPP tracking), SEM, AbsPL and XRD. The *Parameter Summary* tab
 lists which result types were found and which parameters exist. Alternatively you can upload
-your own table (see *Analysis Data*).
+your own table (see *Analysis Data*). For the coating steps (spin coating, slot die coating,
+inkjet printing) every recorded value is kept as a parameter, including the concentration,
+volume and chemical ID of each solute and solvent (for example `solute_concentration_<name>`),
+so a value that differs between samples can be selected and plotted.
 
 ## Step by step
 

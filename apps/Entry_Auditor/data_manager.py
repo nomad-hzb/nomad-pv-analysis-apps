@@ -162,6 +162,25 @@ def get_sample_links_chunked(
 _REF_PATTERN = re.compile(r"archive/([A-Za-z0-9_\-]+)(?:#|$)")
 
 
+def _is_number(value: Any) -> bool:
+    """int/float leaf (a bool is a flag, not a value to audit)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _number_from_text(text: str, like: Any) -> int | float | None:
+    """`text` as a number of the same kind as `like` (an int stays an int when it can),
+    or None when it is not a number."""
+    try:
+        if isinstance(like, int):
+            return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
     """Recursively flattens dicts to dot-path keys and unwraps single-item lists onto
     the same path (e.g. NOMAD's common "0-or-1 items" repeatable subsections). A list
@@ -182,6 +201,8 @@ def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
                 _flatten(item, f"{prefix}.{index}", out)
     elif isinstance(obj, str) and obj.strip():
         out[prefix] = obj
+    elif _is_number(obj):
+        out[prefix] = str(obj)
 
 
 def _extract_ref_ids(obj: Any, ref_ids: set[str]) -> None:
@@ -487,8 +508,9 @@ def _dump_archive_text(data: Any, mainfile: str, original_text: str) -> str:
 def _set_at_flat_path(
     obj: Any, parts: list[str], old_value: str, new_value: str
 ) -> tuple[Any, int]:
-    """Replace the string at the flattened path `parts` when it equals old_value; returns
-    (obj, n_changed) with n_changed 0 or 1. Mirrors _flatten: a single-item list is
+    """Replace the string (a number is written back as a number) at the flattened path
+    `parts` when it equals old_value; returns (obj, n_changed) with n_changed 0 or 1.
+    Mirrors _flatten: a single-item list is
     transparent (consumes no path part), a longer list consumes its 1-based index."""
     if isinstance(obj, list):
         if len(obj) == 1:
@@ -509,6 +531,9 @@ def _set_at_flat_path(
         return obj, 0
     if isinstance(obj, str) and not parts and obj == old_value:
         return new_value, 1
+    if _is_number(obj) and not parts and str(obj) == old_value:
+        number = _number_from_text(new_value, obj)
+        return (obj, 0) if number is None else (number, 1)
     return obj, 0
 
 

@@ -65,10 +65,40 @@ def test_flatten_list_of_dicts_keeps_shared_prefix():
     assert out == {"layer.layer_type": "ETL"}
 
 
-def test_flatten_skips_blank_and_non_string_leaves():
+def test_flatten_skips_blank_none_and_bool_leaves_but_keeps_numbers():
     out: dict = {}
-    dm._flatten({"a": "", "b": None, "c": 5, "d": "kept"}, "", out)
-    assert out == {"d": "kept"}
+    dm._flatten({"a": "", "b": None, "c": 5, "d": "kept", "e": 1.42, "f": True}, "", out)
+    assert out == {"c": "5", "d": "kept", "e": "1.42"}
+
+
+def test_flatten_keeps_a_varying_solute_concentration():
+    out: dict = {}
+    data = {"solution": [{"solution_details": {"solute": [{"concentration_mol": 1.42}]}}]}
+    dm._flatten(data, "", out)
+    assert out == {"solution.solution_details.solute.concentration_mol": "1.42"}
+
+
+def test_modify_file_field_writes_a_number_back_as_a_number():
+    file_text = '{"data": {"solute": [{"concentration_mol": 1.42}, {"concentration_mol": 2}]}}'
+    modified, count = dm.modify_file_field(
+        file_text, "entry.archive.json", "solute.1.concentration_mol", "1.42", "1.5"
+    )
+    assert count == 1
+    assert '"concentration_mol": 1.5' in modified
+    assert '"1.5"' not in modified
+    # an integer stays an integer when the new value is one
+    modified, count = dm.modify_file_field(
+        file_text, "entry.archive.json", "solute.2.concentration_mol", "2", "3"
+    )
+    assert count == 1
+    assert '"concentration_mol": 3}' in modified
+
+
+def test_modify_file_field_refuses_text_for_a_number():
+    file_text = '{"data": {"conc": 1.42}}'
+    modified, count = dm.modify_file_field(file_text, "e.archive.json", "conc", "1.42", "abc")
+    assert count == 0
+    assert modified == file_text
 
 
 def test_flatten_multi_item_list_numbers_each_item_instead_of_overwriting():
