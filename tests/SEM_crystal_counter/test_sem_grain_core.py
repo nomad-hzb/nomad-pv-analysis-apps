@@ -125,3 +125,18 @@ def test_read_points_rejects_calibrated_units(tmp_path):
     csv.write_text(" ,X,Y\n1,1500.5,20\n")
     with pytest.raises(ValueError, match="Remove Scale"):
         read_points(csv, (689, 1024), 1024)
+
+
+def test_merging_everything_into_one_region_does_not_crash(make_tiff, voronoi_film):
+    image, _ = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    result = analyze(sem, Params(merge_threshold=100.0))  # every boundary counts as weak
+    assert result.summary["n_grains"] == 1
+
+
+def test_featureless_image_does_not_crash(make_tiff):
+    rng = np.random.default_rng(0)
+    image = rng.normal(128, 3, size=(120, 160)).clip(0, 255).astype(np.uint8)
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    result = analyze(sem, Params(min_grain_diameter_nm=400.0))
+    assert result.summary["n_grains"] <= 1

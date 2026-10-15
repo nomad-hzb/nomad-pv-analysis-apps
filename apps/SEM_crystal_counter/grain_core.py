@@ -234,6 +234,8 @@ def merge_regions(
     relative to the median edge strength of the over-segmentation, so faint but real boundaries
     are judged against the image's own contrast rather than against its deepest pores.
     """
+    if len(np.unique(labels)) < 2:
+        return segmentation.relabel_sequential(labels)[0]
     sigma = max(_px(params.merge_sigma_nm, pixel_size_nm), 1.0)
     strength = filters.sato(clip_bright(img, params), sigmas=[sigma], black_ridges=True)
     rag = rag_boundary(labels, strength)
@@ -244,7 +246,10 @@ def merge_regions(
     labels = labels.copy()
     for _ in range(3):  # shared boundaries change after a merge, so re-evaluate a few times
         n_before = len(np.unique(labels))
-        labels = graph.cut_threshold(labels, rag_boundary(labels, strength), threshold)
+        if n_before < 2:  # rag_boundary fails without any boundary left
+            break
+        # cut_threshold numbers its output from 0, which regionprops treats as background
+        labels = graph.cut_threshold(labels, rag_boundary(labels, strength), threshold) + 1
         if len(np.unique(labels)) == n_before:
             break
     min_area_px = params.min_grain_area_nm2 / pixel_size_nm**2
@@ -257,7 +262,7 @@ def _absorb_small(labels: np.ndarray, strength: np.ndarray, min_area_px: float) 
     for _ in range(10):
         areas = np.bincount(labels.ravel())
         small = np.flatnonzero((areas > 0) & (areas < min_area_px))
-        if small.size == 0:
+        if small.size == 0 or np.count_nonzero(areas) < 2:
             break
         rag = rag_boundary(labels, strength)
         lut = np.arange(areas.size)
