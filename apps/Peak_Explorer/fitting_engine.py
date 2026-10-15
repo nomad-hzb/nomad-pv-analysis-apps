@@ -7,13 +7,13 @@ Contains peak detection, model definitions, and fitting orchestration
 import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import lru_cache
 
 import config
 import numpy as np
 from lmfit import Parameters
 from lmfit.lineshapes import skewed_gaussian, skewed_voigt
 from lmfit.models import (
-    ExponentialModel,
     GaussianModel,
     LinearModel,
     LorentzianModel,
@@ -74,15 +74,29 @@ def _shape_maximum(shape, width):
     return float(found.x), float(-found.fun)
 
 
-def unit_height_skewed_gaussian(sigma, gamma):
+# The unit heights below run a grid search plus a scalar minimisation, and lmfit re-evaluates
+# the height constraint on every residual call, mostly with parameters it has already seen
+# (a step in another parameter). An exact-value cache answers those without touching the
+# numbers: rounding the arguments would flatten the finite-difference steps lmfit takes.
+@lru_cache(maxsize=8192)
+def _unit_height_skewed_gaussian(sigma, gamma):
     # gamma is the skewness here; there is no closed form for the maximum
     return _shape_maximum(lambda x: skewed_gaussian(x, 1.0, 0.0, sigma, gamma), _tiny(sigma))[1]
 
 
-def unit_height_skewed_voigt(sigma, gamma, skew):
+@lru_cache(maxsize=8192)
+def _unit_height_skewed_voigt(sigma, gamma, skew):
     return _shape_maximum(
         lambda x: skewed_voigt(x, 1.0, 0.0, sigma, gamma, skew), _tiny(sigma) + gamma
     )[1]
+
+
+def unit_height_skewed_gaussian(sigma, gamma):
+    return _unit_height_skewed_gaussian(float(sigma), float(gamma))
+
+
+def unit_height_skewed_voigt(sigma, gamma, skew):
+    return _unit_height_skewed_voigt(float(sigma), float(gamma), float(skew))
 
 
 # Peak type -> (unit-height function, the parameters it takes, in order)
@@ -288,10 +302,12 @@ class FittingModels:
             "Skewed Voigt": SkewedVoigtModel,
         }
 
+        # The GUI fits peaks on data whose background was removed beforehand, so it always
+        # passes "None". An exponential background was dropped: lmfit starts it at decay=1,
+        # which underflows for x in nm, so it never moved from its start values.
         self.available_background_models = {
             "Linear": LinearModel,
             "Polynomial": PolynomialModel,
-            "Exponential": ExponentialModel,
         }
 
     def create_composite_model(self, fit_params):
@@ -318,10 +334,11 @@ class FittingModels:
                 bg_model = PolynomialModel(degree=fit_params["poly_degree"], prefix="bg_")
             elif fit_params["background_model"] == "Linear":
                 bg_model = LinearModel(prefix="bg_")
-            elif fit_params["background_model"] == "Exponential":
-                bg_model = ExponentialModel(prefix="bg_")
             else:
-                bg_model = LinearModel(prefix="bg_")  # Default fallback
+                raise ValueError(
+                    f"Unknown background model {fit_params['background_model']!r}; "
+                    f"use one of {['None', *self.available_background_models]}"
+                )
 
             model = bg_model
             params.update(bg_model.make_params())
@@ -375,11 +392,13 @@ class FittingModels:
 
             if peak_info["type"] == "Gaussian":
                 c = peak_info["center"]
+                # default window around the centre the user set, not around a seeded one
+                anchor = peak_info.get("anchor_center", c)
                 c_lo, c_hi = _bounds(
                     "center_min",
                     "center_max",
-                    max(c - center_bound, 1e-6),
-                    c + center_bound,
+                    max(anchor - center_bound, 1e-6),
+                    anchor + center_bound,
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
@@ -405,11 +424,13 @@ class FittingModels:
                 peak_params[f"p{i}_intercept"].set(value=0.0)
             elif peak_info["type"] == "Lorentzian":
                 c = peak_info["center"]
+                # default window around the centre the user set, not around a seeded one
+                anchor = peak_info.get("anchor_center", c)
                 c_lo, c_hi = _bounds(
                     "center_min",
                     "center_max",
-                    max(c - center_bound, 1e-6),
-                    c + center_bound,
+                    max(anchor - center_bound, 1e-6),
+                    anchor + center_bound,
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
@@ -417,11 +438,13 @@ class FittingModels:
                 peak_params[f"p{i}_sigma"].set(value=peak_info["sigma"], min=s_lo, max=s_hi)
             elif peak_info["type"] == "Voigt":
                 c = peak_info["center"]
+                # default window around the centre the user set, not around a seeded one
+                anchor = peak_info.get("anchor_center", c)
                 c_lo, c_hi = _bounds(
                     "center_min",
                     "center_max",
-                    max(c - center_bound, 1e-6),
-                    c + center_bound,
+                    max(anchor - center_bound, 1e-6),
+                    anchor + center_bound,
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
@@ -439,11 +462,13 @@ class FittingModels:
                 )
             elif peak_info["type"] == "Skewed Gaussian":
                 c = peak_info["center"]
+                # default window around the centre the user set, not around a seeded one
+                anchor = peak_info.get("anchor_center", c)
                 c_lo, c_hi = _bounds(
                     "center_min",
                     "center_max",
-                    max(c - center_bound, 1e-6),
-                    c + center_bound,
+                    max(anchor - center_bound, 1e-6),
+                    anchor + center_bound,
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
@@ -455,11 +480,13 @@ class FittingModels:
                 )
             elif peak_info["type"] == "Skewed Voigt":
                 c = peak_info["center"]
+                # default window around the centre the user set, not around a seeded one
+                anchor = peak_info.get("anchor_center", c)
                 c_lo, c_hi = _bounds(
                     "center_min",
                     "center_max",
-                    max(c - center_bound, 1e-6),
-                    c + center_bound,
+                    max(anchor - center_bound, 1e-6),
+                    anchor + center_bound,
                     floor=1e-6,
                 )
                 peak_params[f"p{i}_center"].set(value=c, min=c_lo, max=c_hi)
@@ -672,6 +699,10 @@ class FittingModels:
             center_key = f"{prefix}center"
             if center_key in fitted_params:
                 old_center = peak_model["center"]
+                # Keep the default centre window where the user put it: seeding from the previous
+                # frame would otherwise slide it along, and over a long series a peak could
+                # walk a long way from its start (typed bounds still apply as they are).
+                peak_model.setdefault("anchor_center", old_center)
                 peak_model["center"] = fitted_params[center_key]["value"]
                 debug_print(
                     f"Smart init p{i}: center {old_center:.2f} -> {peak_model['center']:.2f}",

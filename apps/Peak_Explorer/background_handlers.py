@@ -157,14 +157,38 @@ class BackgroundHandlersMixin:
             self.widgets["bg_autofit_btn"].disabled = True
             self.widgets["bg_autofit_btn"].layout.visibility = "hidden"
 
+    def _background_fit_points(self, wavelengths, spectrum):
+        """(x, y) of the finite points outside the windows of the current peak models (centre
+        +/- 3 widths, the Lorentzian width included for the Voigt types). With no peak models,
+        or when too little would be left to fit, every finite point is used."""
+        x = np.asarray(wavelengths, dtype=float)
+        y = np.asarray(spectrum, dtype=float)
+        keep = np.isfinite(x) & np.isfinite(y)
+        outside = keep.copy()
+        for row in self.peak_models:
+            fields = row._widgets
+            if fields["type"].value in ("Linear", "Polynomial"):
+                continue
+            half = 3.0 * abs(fields["sigma"].value)
+            if fields["type"].value in ("Voigt", "Skewed Voigt"):
+                half += 3.0 * abs(fields["gamma"].value)
+            outside &= np.abs(x - fields["center"].value) > half
+        if outside.sum() < max(10, 0.1 * keep.sum()):
+            outside = keep
+        return x[outside], y[outside]
+
     def on_background_autofit(self, button):
         """Auto-fit background model to current spectrum"""
         if not self.data_manager.is_data_loaded():
             return
 
         method = self.widgets["background_method"].value
-        current_spectrum = self.data_manager.get_current_spectrum()
-        wavelengths = self.data_manager.wavelengths
+        spectrum_all = self.data_manager.get_current_spectrum()
+        axis_all = self.data_manager.wavelengths
+        # fit on the points between the peaks: a fit through the peaks lets the "background"
+        # swallow part of the signal
+        wavelengths, current_spectrum = self._background_fit_points(axis_all, spectrum_all)
+        n_peak_points = int(np.isfinite(spectrum_all).sum()) - wavelengths.size
 
         try:
             debug_print(f"Auto-fitting background: {method}", "APP")
@@ -174,7 +198,7 @@ class BackgroundHandlersMixin:
                 coeffs = np.polyfit(wavelengths, current_spectrum, 1)
                 self.widgets["bg_linear_slope"].value = float(coeffs[0])
                 self.widgets["bg_linear_intercept"].value = float(coeffs[1])
-                self.background_model = coeffs[0] * wavelengths + coeffs[1]
+                self.background_model = coeffs[0] * axis_all + coeffs[1]
                 debug_print(
                     f"Background model set (Linear): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
                     "APP",
@@ -184,7 +208,7 @@ class BackgroundHandlersMixin:
                 degree = self.widgets["bg_poly_degree"].value
                 coeffs = np.polyfit(wavelengths, current_spectrum, degree)
                 self.widgets["bg_poly_coeffs"].value = ", ".join([f"{c:.2e}" for c in coeffs])
-                self.background_model = np.polyval(coeffs, wavelengths)
+                self.background_model = np.polyval(coeffs, axis_all)
                 debug_print(
                     f"Background model set (Polynomial): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
                     "APP",
@@ -204,7 +228,7 @@ class BackgroundHandlersMixin:
                 self.widgets["bg_exp_amplitude"].value = float(popt[0])
                 self.widgets["bg_exp_decay"].value = float(popt[1])
                 self.widgets["bg_exp_offset"].value = float(popt[2])
-                self.background_model = exp_func(wavelengths, *popt)
+                self.background_model = exp_func(axis_all, *popt)
                 debug_print(
                     f"Background model set (Exponential): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
                     "APP",
@@ -216,6 +240,8 @@ class BackgroundHandlersMixin:
             with self.widgets["status_output"]:
                 self.widgets["status_output"].clear_output()
                 print(f"✅ {method} background auto-fitted")
+                if n_peak_points > 0:
+                    print(f"   {n_peak_points} points inside the peak windows were left out")
                 print("   Adjust parameters if needed, then click 'Apply Background'")
 
             debug_print(f"Background auto-fit complete: {method}", "APP")

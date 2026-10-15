@@ -37,8 +37,9 @@ Two sources, both offered in the *Data Loading* box:
    - *Manual*: the mean of a number of curves, starting at a time index, is subtracted from all
      spectra.
    - *Linear*, *Polynomial*, *Exponential*: type the parameters, or press *Auto-Fit Background* to
-     fit them to the **current spectrum** (peaks included, so the result also takes part of the
-     signal; use a spectrum or range without peaks where you can).
+     fit them to the **current spectrum**, using only the points outside the windows of
+     your peak models (centre +/- 3 widths); define the peaks first so the background is fitted
+     between them. Without peak models, all points are used.
    - *Custom*: upload a two-column file (wavelength, intensity).
 
    One background is subtracted from every spectrum. Loading new data or switching the h5
@@ -87,7 +88,8 @@ converted along with the data. Fit results are removed on every conversion.
 
 - Absorbance is computed with the natural logarithm, so values are 2.303 times the optical
   density in log10.
-- The background is global and, with *Auto-Fit Background*, includes the peaks (see step 3).
+- The background is global: one curve, fitted on the current spectrum, is subtracted from every
+  spectrum.
 - Polynomial models have no parameter bounds.
 - CSV import replaces NaN/inf cells by 0.
 

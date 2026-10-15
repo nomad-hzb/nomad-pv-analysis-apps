@@ -14,7 +14,18 @@ warnings.filterwarnings("ignore", message="Using UFloat objects with std_dev==0"
 logger = logging.getLogger(__name__)
 
 
+def _significant(value, digits=6):
+    """value to `digits` significant figures. Rounding to 3 decimals turned a sigma of 0.0004
+    (q in 1/A) into 0.0, which the next fit then clipped to its lower bound."""
+    return float(f"{value:.{digits}g}")
+
+
 class FitHandlersMixin:
+    def _on_fit_progress(self, done, total):
+        """progress_callback of the batch fits: the bar follows the real count."""
+        bar = self.widgets["fit_progress"]
+        bar.value = 100 * done / max(total, 1)
+
     def prepare_fit_parameters(self):
         """Prepare fitting parameters from UI inputs"""
         params = {
@@ -274,7 +285,9 @@ class FitHandlersMixin:
                     # Update center
                     center_param = f"{prefix}center"
                     if center_param in fitted_params:
-                        model._widgets["center"].value = round(fitted_params[center_param].value, 3)
+                        model._widgets["center"].value = _significant(
+                            fitted_params[center_param].value
+                        )
                         report.append(
                             f"  Model {i + 1} center: {fitted_params[center_param].value:.3f}"
                         )
@@ -283,7 +296,9 @@ class FitHandlersMixin:
                     # Update sigma
                     sigma_param = f"{prefix}sigma"
                     if sigma_param in fitted_params:
-                        model._widgets["sigma"].value = round(fitted_params[sigma_param].value, 3)
+                        model._widgets["sigma"].value = _significant(
+                            fitted_params[sigma_param].value
+                        )
                         report.append(
                             f"  Model {i + 1} sigma: {fitted_params[sigma_param].value:.3f}"
                         )
@@ -293,8 +308,8 @@ class FitHandlersMixin:
                     if model_type in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
                         gamma_param = f"{prefix}gamma"
                         if gamma_param in fitted_params:
-                            model._widgets["gamma"].value = round(
-                                fitted_params[gamma_param].value, 3
+                            model._widgets["gamma"].value = _significant(
+                                fitted_params[gamma_param].value
                             )
                             report.append(
                                 f"  Model {i + 1} gamma: {fitted_params[gamma_param].value:.3f}"
@@ -306,7 +321,7 @@ class FitHandlersMixin:
                     height_param = f"{prefix}height"
                     if height_param in fitted_params:
                         height = fitted_params[height_param].value
-                        model._widgets["height"].value = round(height, 3)
+                        model._widgets["height"].value = _significant(height)
                         report.append(f"  Model {i + 1} height: {height:.3f}")
                         updated_count += 1
 
@@ -316,15 +331,17 @@ class FitHandlersMixin:
                     intercept_param = f"{prefix}intercept"
 
                     if slope_param in fitted_params:
-                        model._widgets["slope"].value = round(fitted_params[slope_param].value, 3)
+                        model._widgets["slope"].value = _significant(
+                            fitted_params[slope_param].value
+                        )
                         report.append(
                             f"  Model {i + 1} slope: {fitted_params[slope_param].value:.3f}"
                         )
                         updated_count += 1
 
                     if intercept_param in fitted_params:
-                        model._widgets["intercept"].value = round(
-                            fitted_params[intercept_param].value, 3
+                        model._widgets["intercept"].value = _significant(
+                            fitted_params[intercept_param].value
                         )
                         report.append(
                             f"  Model {i + 1} intercept: {fitted_params[intercept_param].value:.3f}"
@@ -427,6 +444,7 @@ class FitHandlersMixin:
                 data_matrix_fit,
                 self.data_manager.timestamps,
                 use_smart_init=fit_sequential,
+                progress_callback=self._on_fit_progress,
             )
 
             # Count successful fits
@@ -528,6 +546,7 @@ class FitHandlersMixin:
                 self.data_manager.timestamps,
                 fit_range=(start_idx, end_idx),
                 use_smart_init=fit_sequential,
+                progress_callback=self._on_fit_progress,
             )
 
             # Count successful fits
