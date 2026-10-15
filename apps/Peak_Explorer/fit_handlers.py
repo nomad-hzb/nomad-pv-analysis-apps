@@ -214,6 +214,7 @@ class FitHandlersMixin:
                     wavelength_range=wl_range_display,
                     wavelength_unit=self.wavelength_unit,
                     name_map=peak_name_map,
+                    background_model=self.background_model,
                 )
 
                 display(fig)
@@ -598,9 +599,10 @@ class FitHandlersMixin:
             debug_print("Exporting results", "APP")
 
             import base64
+            import json
             from datetime import datetime
 
-            from IPython.display import HTML, display
+            from IPython.display import Javascript, display
 
             # Create filename
             filename = f"pl_fitting_results_{datetime.now().strftime(config.TIMESTAMP_FORMAT)}.xlsx"
@@ -624,43 +626,30 @@ class FitHandlersMixin:
             # Encode to base64
             b64 = base64.b64encode(excel_data).decode()
 
-            # Create download link with JavaScript
+            # The file is handed to the browser as a Blob built in a script that runs once:
+            # several MB of base64 in the attribute of a button made the page heavy.
+            mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}';
-            link.download = '{filename}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            (function () {{
+                var bytes = Uint8Array.from(atob('{b64}'), function (c) {{ return c.charCodeAt(0); }});
+                var url = URL.createObjectURL(new Blob([bytes], {{type: '{mime}'}}));
+                var link = document.createElement('a');
+                link.href = url;
+                link.download = {json.dumps(filename)};
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(function () {{ URL.revokeObjectURL(url); }}, 10000);
+            }})();
             """
 
             with self.widgets["export_output"]:
                 self.widgets["export_output"].clear_output()
-                print("✅ Results prepared for download!")
-                print(f"📊 File: {filename}")
-                print()
-
-                # Display download button
-                download_button_html = f"""
-                <button onclick="{js_code}" style="
-                    background-color: #28a745;
-                    color: white;
-                    padding: 10px 20px;
-                    border: none;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    font-size: 14px;
-                    font-weight: bold;
-                ">
-                    📥 Download {filename}
-                </button>
-                """
-
-                display(HTML(download_button_html))
-                print()
+                print(f"✅ Results exported: {filename}")
                 print(
-                    "💡 Click the button above to download. If it doesn't work automatically, the download should start shortly."
+                    "💡 The download starts by itself; if your browser blocked it, click Export again."
                 )
+                display(Javascript(js_code))
 
             debug_print(f"Results prepared for download: {filename}", "APP")
 

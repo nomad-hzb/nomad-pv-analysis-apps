@@ -3,31 +3,45 @@
 Utility functions for Photoluminescence Analysis App
 """
 
+import logging
 from datetime import datetime
 
 import config
-import ipywidgets as widgets
 
-debug_output = widgets.Output(
-    layout=widgets.Layout(max_height="300px", overflow="auto", width="100%")
-)
+logger = logging.getLogger(__name__)
+
+_debug_output = None
 
 
 def debug_print(message, category="DEBUG"):
-    """
-    Print debug messages if DEBUG_MODE is enabled
+    """Log a debug message (logger.debug), tagged with its category ("DATA", "FITTING", "GUI").
 
-    Parameters:
-    -----------
-    message : str
-        Debug message to print
-    category : str, optional
-        Category/type of debug message (e.g., "DATA", "FITTING", "GUI")
-    """
-    if config.DEBUG_MODE:
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        with debug_output:
-            print(f"[{timestamp}] [{category}] {message}")
+    Shown in the app's debug panel when config.DEBUG_MODE is on (see get_debug_output), and
+    wherever the logging configuration sends DEBUG records."""
+    logger.debug("[%s] %s", category, message)
+
+
+def get_debug_output():
+    """The debug panel (an Output widget that shows the debug log), created on first use so
+    that importing this module needs no ipywidgets. Only meaningful with config.DEBUG_MODE."""
+    global _debug_output
+    if _debug_output is None:
+        import ipywidgets as widgets
+
+        _debug_output = widgets.Output(
+            layout=widgets.Layout(max_height="300px", overflow="auto", width="100%")
+        )
+
+        class _PanelHandler(logging.Handler):
+            def emit(self, record):
+                timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S.%f")[:-3]
+                with _debug_output:
+                    print(f"[{timestamp}] {record.getMessage()}")
+
+        handler = _PanelHandler(level=logging.DEBUG)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+    return _debug_output
 
 
 def format_timestamp(timestamp_format=None):

@@ -439,6 +439,11 @@ class PlotManager:
             with self.heatmap_fig.batch_update():
                 self.heatmap_fig.layout.shapes[0].x0 = current_time
                 self.heatmap_fig.layout.shapes[0].x1 = current_time
+                # the "t = ..." label of the line moves with it, in the unit it was drawn with
+                for annotation in self.heatmap_fig.layout.annotations:
+                    if str(annotation.text).startswith("t = "):
+                        annotation.x = current_time
+                        annotation.text = f"t = {current_time:.3f} {annotation.text.split(' ')[-1]}"
 
             return self.heatmap_fig
 
@@ -454,6 +459,7 @@ class PlotManager:
         wavelength_range=None,
         wavelength_unit="nm",
         name_map=None,
+        background_model=None,
     ):
         """
         Create spectrum plot with optional fit
@@ -468,6 +474,8 @@ class PlotManager:
             Fitting result to overlay
         wavelength_range : tuple, optional
             (min, max) wavelength range to highlight
+        background_model : array, optional
+            The background applied to the data, drawn under the spectrum
 
         Returns:
         --------
@@ -476,24 +484,6 @@ class PlotManager:
         debug_print(f"Creating spectrum plot (with_fit={fit_result is not None})", "PLOT")
 
         import plotly.graph_objects as go
-
-        # Get background model if one exists
-        background_model = None
-        if hasattr(self, "app_ref"):
-            debug_print(f"✓ app_ref exists: {self.app_ref is not None}", "PLOT")
-            if self.app_ref is not None and hasattr(self.app_ref, "background_model"):
-                background_model = self.app_ref.background_model
-                if background_model is not None:
-                    debug_print(
-                        f"✓ Background model retrieved: shape={background_model.shape}, min={background_model.min():.2f}, max={background_model.max():.2f}",
-                        "PLOT",
-                    )
-                else:
-                    debug_print("⚠ background_model attribute exists but is None", "PLOT")
-            else:
-                debug_print("⚠ app_ref exists but no background_model attribute", "PLOT")
-        else:
-            debug_print("✗ No app_ref attribute on PlotManager", "PLOT")
 
         fig = self.visualization._build_spectrum_figure(
             wavelengths,
