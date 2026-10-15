@@ -67,17 +67,17 @@ class Params(BaseModel):
         0.05, description="Depth for the 'hminima' seed method (boundary map is 0..1)"
     )
     min_grain_diameter_nm: float = Field(
-        40.0, description="Smallest grain to resolve; sets seed spacing"
+        100.0, description="Smallest grain to resolve; sets seed spacing"
     )
     compactness: float = Field(
         0.0, description="Compact watershed parameter (0 = classic watershed)"
     )
     # Region merging
     merge_threshold: float = Field(
-        0.6, description="Merge neighbours whose boundary is weaker than this x the median boundary"
+        0.3, description="Merge neighbours whose boundary is weaker than this x the median boundary"
     )
     merge_sigma_nm: float = Field(
-        8.0, description="Ridge scale of the map used to judge boundary strength"
+        16.0, description="Ridge scale of the map used to judge boundary strength"
     )
     # Measurement
     min_grain_area_nm2: float = Field(
@@ -88,9 +88,11 @@ class Params(BaseModel):
     )
 
 
+# Tuned 2026-10-15 by F1 against point annotations of VP317_01, VP352_03 (smooth) and
+# VP401_05, VP412_05 (striped); see evaluate.py. The defaults of Params are the smooth preset.
 PRESETS: dict[str, Params] = {
     "smooth": Params(),
-    "striped": Params(merge_threshold=0.8, merge_sigma_nm=12.0),
+    "striped": Params(ridge_sigmas_nm=[8.0, 24.0], min_grain_diameter_nm=300.0),
 }
 
 
