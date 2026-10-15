@@ -223,6 +223,7 @@ class AnalysisPanel:
     def __init__(self, data_manager: TRPLDataManager, param_panel: ParameterPanel) -> None:
         self._dm = data_manager
         self._pp = param_panel
+        self._plots: list = []  # plot boxes of the last run, closed when the next run starts
         # Full width and no fixed height: a scrollable Output has a fixed pixel size, which
         # boxed every plot into a few hundred pixels.
         self._output = WidgetFactory.create_output(min_height="large")
@@ -233,7 +234,17 @@ class AnalysisPanel:
         btn.on_click(self._run)
         self.widget = widgets.VBox([btn, self._output], layout=widgets.Layout(width="100%"))
 
+    def _keep(self, widget):
+        self._plots.append(widget)
+        return widget
+
     def _run(self, _b) -> None:
+        # clear_output only hides widgets: close the plots of the previous run
+        for old in self._plots:
+            for child in old.children:
+                child.close()
+            old.close()
+        self._plots = []
         with self._output:
             self._output.clear_output()
             try:
@@ -247,7 +258,7 @@ class AnalysisPanel:
                 fig_raw = pm.TRPLPlotManager.trpl_traces(
                     frame, y_col="counts", y_title="PL rate [counts/s]"
                 )
-                ipydisplay(_responsive(fig_raw))
+                ipydisplay(self._keep(_responsive(fig_raw)))
 
                 done = [r for r in results if not r.error]
                 for failed in (r for r in results if r.error):
@@ -260,16 +271,20 @@ class AnalysisPanel:
                     tau_diffs = [r.tau_diff_s for r in done]
                     labels = [r.sample_id for r in done]
                     ipydisplay(
-                        _responsive(
-                            pm.TRPLPlotManager.differential_lifetime_time(
-                                tau_diffs, [r.time_s for r in done], labels
+                        self._keep(
+                            _responsive(
+                                pm.TRPLPlotManager.differential_lifetime_time(
+                                    tau_diffs, [r.time_s for r in done], labels
+                                )
                             )
                         )
                     )
                     ipydisplay(
-                        _responsive(
-                            pm.TRPLPlotManager.differential_lifetime_density(
-                                tau_diffs, [r.density_cm3 for r in done], labels
+                        self._keep(
+                            _responsive(
+                                pm.TRPLPlotManager.differential_lifetime_density(
+                                    tau_diffs, [r.density_cm3 for r in done], labels
+                                )
                             )
                         )
                     )

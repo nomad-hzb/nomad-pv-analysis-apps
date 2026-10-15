@@ -184,3 +184,15 @@ class TestCreateCorrelationPlot:
             filtered_info=filtered_info,
         )
         assert isinstance(fig, go.Figure)
+
+
+def test_showing_plots_again_closes_the_previous_ones():
+    import plotly.graph_objects as go
+    from resizable_plot_utility import ResizablePlotManager
+
+    ResizablePlotManager.display_plots_resizable([go.Figure()], ["first"])
+    first = list(ResizablePlotManager._live_widgets)
+    assert first
+    ResizablePlotManager.display_plots_resizable([go.Figure()], ["second"])
+    assert all(widget.comm is None for widget in first)  # closed
+    assert ResizablePlotManager._live_widgets and ResizablePlotManager._live_widgets[0] not in first
