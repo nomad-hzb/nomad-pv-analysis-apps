@@ -81,6 +81,12 @@ there.
 
 - `run_batch.py <folder> --out <dir>` runs every TIFF and writes overlays, per-grain CSVs,
   per-image and per-sample summaries, and `report.html` (a gallery of all overlays).
-- `streamlit run tuner.py --server.address localhost -- <folder>` opens the live tuning page
-  with sliders, intermediate stages, histograms, and params JSON download/upload. Install
-  the dev extras first: `pip install streamlit opencv-python-headless`.
+- `streamlit run tuner.py --server.address localhost -- <image folder> [<annotation folder>]`
+  opens the live tuning page.
+  - Each image starts from the preset chosen for it automatically.
+  - Every slider has a tooltip.
+  - **Auto** and **Reset** buttons get you back to tuned values.
+  - The grain outlines, seeds and your clicks can each be switched on and off.
+  - With an annotation folder, F1 and the grain-count/size error update live for images you
+    annotated.
+  - Install the dev extras first: `pip install streamlit opencv-python-headless`.

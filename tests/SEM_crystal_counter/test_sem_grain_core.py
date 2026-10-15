@@ -175,3 +175,16 @@ def test_summarize_samples_drops_flagged_images_when_others_exist():
     assert out.loc["A", "mean_area_planimetric_nm2_mean"] == pytest.approx(1.0)
     assert out.loc["A", "n_images_flagged"] == 1
     assert out.loc["B", "n_images"] == 1  # nothing reliable: keep what there is
+
+
+def test_overlay_toggles_outlines_and_seeds(make_tiff, voronoi_film):
+    from grain_core import overlay
+
+    image, _ = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    result = analyze(sem, PRESETS["smooth"])
+    plain = overlay(result, show_outlines=False)
+    assert np.array_equal(plain[..., 0], image)  # nothing drawn
+    assert not np.array_equal(overlay(result), plain)
+    seeded = overlay(result, show_seeds=True, show_outlines=False)
+    assert (seeded == (255, 40, 40)).all(axis=-1).any()

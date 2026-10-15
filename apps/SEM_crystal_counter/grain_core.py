@@ -430,26 +430,33 @@ def analyze_auto(sem: SemImage) -> Result:
     return result
 
 
-def overlay(result: Result, show_seeds: bool = False) -> np.ndarray:
-    """RGB uint8: image with grain outlines (interior green, edge grains orange)."""
+def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True) -> np.ndarray:
+    """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds."""
     rgb = np.repeat(result.sem.image[..., None], 3, axis=2).astype(np.uint8)
-    edge_ids = (
-        set(result.grains.loc[result.grains["touches_edge"], "grain_id"])
-        if len(result.grains)
-        else set()
-    )
-    bounds = segmentation.find_boundaries(result.labels, mode="inner")
-    on_edge = np.isin(result.labels, list(edge_ids)) & bounds
-    rgb[bounds & ~on_edge] = (40, 230, 60)
-    rgb[on_edge] = (255, 150, 0)
+    if show_outlines:
+        edge_ids = (
+            set(result.grains.loc[result.grains["touches_edge"], "grain_id"])
+            if len(result.grains)
+            else set()
+        )
+        bounds = segmentation.find_boundaries(result.labels, mode="inner")
+        on_edge = np.isin(result.labels, list(edge_ids)) & bounds
+        rgb[bounds & ~on_edge] = (40, 230, 60)
+        rgb[on_edge] = (255, 150, 0)
     if show_seeds:
         ys, xs = np.nonzero(result.seeds)
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                rgb[
-                    np.clip(ys + dy, 0, rgb.shape[0] - 1), np.clip(xs + dx, 0, rgb.shape[1] - 1)
-                ] = (255, 40, 40)
+        draw_dots(rgb, ys, xs, (255, 40, 40), radius=1)
     return rgb
+
+
+def draw_dots(rgb: np.ndarray, ys, xs, color: tuple, radius: int = 2) -> None:
+    """Paint square dots in place (clipped to the image)."""
+    ys, xs = np.asarray(ys, dtype=int), np.asarray(xs, dtype=int)
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            rgb[np.clip(ys + dy, 0, rgb.shape[0] - 1), np.clip(xs + dx, 0, rgb.shape[1] - 1)] = (
+                color
+            )
 
 
 def sample_name(image_name: str) -> str:
