@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 class ResizablePlotManager:
     """Enhanced plot manager that creates resizable plots"""
 
+    _live_widgets: list = []  # the boxes and figure widgets of the plots currently shown
+
     @staticmethod
     def display_plots_resizable(figs, names, container_widget=None):
         """
@@ -42,6 +44,15 @@ class ResizablePlotManager:
         from IPython.display import clear_output
 
         clear_output(wait=True)
+
+        # clear_output only hides widgets: close the previous set, or every "Plot Selection"
+        # leaves all its figures alive in the kernel and the browser
+        for old in ResizablePlotManager._live_widgets:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001 - freeing memory must never break the plot
+                pass
+        ResizablePlotManager._live_widgets = []
 
         for i, (fig, name) in enumerate(zip(figs, names)):
             try:
@@ -92,6 +103,7 @@ class ResizablePlotManager:
                     ),
                 )
                 box.add_class(resize_class)
+                ResizablePlotManager._live_widgets.extend([box, fig_widget])
                 display(box)
                 # IPython.display.HTML (not ipywidgets.HTML) is required here: ipywidgets.HTML
                 # renders by setting innerHTML on its DOM node, which never executes embedded
