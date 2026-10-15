@@ -19,7 +19,7 @@ from fitting_engine import FittingEngine
 from gui_components import GUIComponents
 from IPython.display import display
 from plot_manager import PlotManager
-from utils import debug_output, debug_print
+from utils import debug_print, get_debug_output
 
 from hysprint_utils.manual import manual_panel
 
@@ -390,8 +390,6 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
         self.data_manager = DataManager()
         self.fitting_engine = FittingEngine()
         self.plot_manager = PlotManager()
-        self.plot_manager.app_ref = self
-        debug_print("PlotManager app_ref set", "APP")
         self.export_utils = ResultExporter()
 
         # Initialize GUI components
@@ -411,6 +409,7 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
         self.last_fit_result = None
         self.original_data_matrix = None  # For background subtraction
         self.background_applied = False
+        self.background_model = None  # the background curve shown/applied, if any
         self.background_accordion = None  # Reference to background accordion
         self._fit_vis_indices = []  # Sorted list of successful fit result indices
 
@@ -635,14 +634,18 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
                 with self.widgets["status_output"]:
                     self.widgets["status_output"].clear_output()
                     print("✅ Successfully loaded data!")
+                    if str(mode).startswith("absorbance"):
+                        print(
+                            "ℹ️ Absorbance is A = -ln(T / T_ref), the natural logarithm: divide by 2.303 for log10."
+                        )
                     print(
                         f"📊 {data_info['time_points']} time points, {data_info['wavelengths']} wavelengths"
                     )
                     print(
-                        f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} s"
+                        f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} {self.data_manager.time_unit}"
                     )
                     print(
-                        f"🌈 Wavelength range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} nm"
+                        f"🌈 Range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} {self.data_manager.unit}"
                     )
                 return
 
@@ -737,10 +740,10 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
                     f"📊 {data_info['time_points']} time points, {data_info['wavelengths']} wavelengths"
                 )
                 print(
-                    f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} s"
+                    f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} {self.data_manager.time_unit}"
                 )
                 print(
-                    f"🌈 Wavelength range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} nm"
+                    f"🌈 Range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} {self.data_manager.unit}"
                 )
 
         except Exception as e:
@@ -1273,7 +1276,7 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
                     with self.widgets["status_output"]:
                         self.widgets["status_output"].clear_output()
                         print("✅ Converted to wavelength (nm)")
-                        print(f"   Range: {wl_min:.1f} - {wl_max:.1f} nm")
+                        print(f"   Range: {wl_min:.1f} - {wl_max:.1f} {self.wavelength_unit}")
             else:
                 debug_print("Unknown wavelength unit, cannot convert", "APP")
 
@@ -1387,7 +1390,9 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
 
         # Update time display
         current_time = self.data_manager.get_current_time_value()
-        self.widgets["time_display"].value = f"Time: {current_time:.3f}s"
+        self.widgets[
+            "time_display"
+        ].value = f"Time: {current_time:.3f} {self.data_manager.time_unit}"
 
         # Update heatmap
         self.update_heatmap(update_heatmap=update_heatmap)
@@ -1454,6 +1459,7 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
                 wavelength_range=wl_range_display,
                 wavelength_unit=self.wavelength_unit,
                 name_map=peak_name_map,
+                background_model=self.background_model,
             )
 
             # Apply current wavelength range visualization BEFORE displaying
@@ -1586,7 +1592,7 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
         self._store_accordion_reference()
 
         if config.DEBUG_MODE:
-            display(debug_output)
+            display(get_debug_output())
         display(header)
         display(manual_panel(__file__))
         display(main_content)

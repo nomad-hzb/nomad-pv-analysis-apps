@@ -878,8 +878,29 @@ def test_polynomial_peak_degree_field_is_bounded(gl):
     assert degree.value == 5
 
 
-def test_debug_panel_scrolls(gl):
-    assert gl.debug_output.layout.overflow == "auto"
+def test_debug_panel_scrolls_and_is_created_only_when_asked_for(gl):
+    import utils
+
+    assert utils._debug_output is None or utils._debug_output.layout.overflow == "auto"
+    assert gl.get_debug_output().layout.overflow == "auto"
+
+
+def test_importing_the_data_and_plot_layers_needs_no_widget_library(tmp_path):
+    """utils created an ipywidgets Output at import, so data_manager and plot_manager imported
+    widgets transitively."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; sys.path[:0] = [r'%s', r'%s']; import utils, data_manager, plot_manager; "
+        "print('ipywidgets' in sys.modules)"
+    )
+    app = Path(__file__).resolve().parents[2] / "apps" / "Peak_Explorer"
+    shared = app.parents[1] / "shared"
+    out = subprocess.run(
+        [sys.executable, "-P", "-c", code % (app, shared)], capture_output=True, text=True
+    )
+    assert out.stdout.strip() == "False", out.stdout + out.stderr
 
 
 def test_peak_detection_fields_explain_themselves(gl):
@@ -1269,3 +1290,32 @@ def test_update_from_fit_keeps_small_values(app):
     handlers = import_module("fit_handlers")
     assert handlers._significant(0.000412345678) == pytest.approx(0.000412346)
     assert handlers._significant(123456.789) == pytest.approx(123457.0)
+
+
+def test_heatmap_time_label_follows_the_red_line(pm):
+    manager = pm.PlotManager()
+    times = np.array([0.0, 10.0, 20.0])
+    wavelengths = np.linspace(400, 800, 8)
+    manager.create_heatmap(np.ones((3, 8)), wavelengths, times, 0, time_unit="min")
+    manager.update_heatmap_line(times, 2)
+    labels = [a for a in manager.heatmap_fig.layout.annotations if str(a.text).startswith("t = ")]
+    assert [a.text for a in labels] == ["t = 20.000 min"]
+    assert labels[0].x == 20.0
+
+
+def test_excel_export_starts_a_blob_download_without_embedding_the_file_in_an_attribute(
+    app, x_nm, capsys
+):
+    pytest.importorskip("openpyxl")
+    application = app([gaussian(x_nm, 1000, 600, 12) + 1], x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 598.0, "height": 30.0, "sigma": 10.0}
+    )
+    application.widgets["fit_sequential_checkbox"].value = True  # no worker processes here
+    application.on_fit_all(None)
+    capsys.readouterr()
+    application.on_export_results(None)
+    out = capsys.readouterr().out
+    assert "Results exported" in out
+    assert "onclick" not in out
