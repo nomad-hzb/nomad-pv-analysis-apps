@@ -929,3 +929,39 @@ def test_a_wrong_path_still_changes_nothing_in_a_wrapped_file():
     text = json.dumps(_wrapped_archive())
     modified, count = dm.modify_file_field(text, "e.archive.json", "data.location", "x", "y")
     assert count == 0 and modified == text
+
+
+def test_load_generic_data_keeps_a_field_that_only_some_entries_have(monkeypatch):
+    from hysprint_utils.consistency import get_string_columns
+
+    def entry(entry_id, solutes):
+        return {
+            "archive": {
+                "metadata": {"entry_id": entry_id, "upload_id": "u", "mainfile": entry_id},
+                "data": {
+                    "samples": [{"lab_id": "s1"}],
+                    "solution": [{"solution_details": {"solute": solutes}}],
+                },
+            }
+        }
+
+    entries = [
+        entry("e1", [{"concentration_mol": 0.1}, {"concentration_mol": 0.2}]),
+        entry("e2", [{"concentration_mol": 0.1}]),
+    ]
+
+    class _Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": entries}
+
+    monkeypatch.setattr(dm.requests, "post", lambda *a, **k: _Response())
+    monkeypatch.setattr(dm, "_resolve_sample_entry_ids", lambda *a, **k: [])
+
+    df = dm.load_generic_data("http://x/api/v1", "t", ["s1"], "HySprint_SpinCoating")
+
+    column = "solution.solution_details.solute.2.concentration_mol"
+    assert column in get_string_columns(df)
+    assert df[column].dropna().tolist() == ["0.2"]
