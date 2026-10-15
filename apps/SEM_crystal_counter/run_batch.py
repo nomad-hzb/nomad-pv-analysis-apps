@@ -47,7 +47,11 @@ def params_json(params: gc.Params | None) -> str:
 
 
 def summarize_samples(images: pd.DataFrame) -> pd.DataFrame:
-    """Per-sample mean and spread across images (images are the replicates, not grains)."""
+    """Per-sample mean and spread across images (images are the replicates, not grains).
+
+    Images flagged as unreliable (too few grains, see grain_core.MIN_GRAINS_FOR_STATS) are
+    left out when the sample has any reliable image; n_images_flagged reports them.
+    """
     cols = [
         "grains_per_um2",
         "mean_area_planimetric_nm2",
@@ -57,11 +61,17 @@ def summarize_samples(images: pd.DataFrame) -> pd.DataFrame:
         "mean_intercept_nm",
         "boundary_length_per_um2",
     ]
-    grouped = images.groupby("sample")
+    if "reliable" in images:
+        has_reliable = images.groupby("sample")["reliable"].transform("any")
+        used = images[images["reliable"].astype(bool) | ~has_reliable]
+    else:
+        used = images
+    grouped = used.groupby("sample")
     out = grouped[cols].agg(["mean", "std"])
     out.columns = [f"{c}_{stat}" for c, stat in out.columns]
     out.insert(0, "n_images", grouped.size())
-    out.insert(1, "n_grains_total", grouped["n_grains"].sum())
+    out.insert(1, "n_images_flagged", images.groupby("sample").size() - grouped.size())
+    out.insert(2, "n_grains_total", grouped["n_grains"].sum())
     return out.reset_index()
 
 
@@ -74,6 +84,11 @@ def write_report(out: Path, images: pd.DataFrame, params: gc.Params | None) -> N
             + (
                 f", preset <b>{row['preset']}</b> (ratio {row['preset_ratio']:.1f})"
                 if "preset" in row and isinstance(row["preset"], str)
+                else ""
+            )
+            + (
+                ' <b style="color:#c00">too few grains: excluded from sample statistics</b>'
+                if "reliable" in row and not bool(row["reliable"])
                 else ""
             )
             + "<br>"

@@ -151,3 +151,27 @@ def test_auto_preset_picks_smooth_for_plain_grains(make_tiff, voronoi_film):
     assert result.summary["preset"] == "smooth"
     assert result.summary["preset_ratio"] <= AUTO_RATIO_THRESHOLD
     assert abs(result.summary["n_grains"] - truth.max()) <= 0.2 * truth.max()
+
+
+def test_summarize_samples_drops_flagged_images_when_others_exist():
+    cols = [
+        "grains_per_um2",
+        "mean_area_planimetric_nm2",
+        "mean_area_ml_nm2",
+        "median_area_nm2",
+        "mean_eq_diameter_nm",
+        "mean_intercept_nm",
+        "boundary_length_per_um2",
+    ]
+    images = pd.DataFrame(
+        {
+            "sample": ["A", "A", "B"],
+            "n_grains": [50, 4, 3],
+            "reliable": [True, False, False],
+            **{c: [1.0, 100.0, 7.0] for c in cols},
+        }
+    )
+    out = summarize_samples(images).set_index("sample")
+    assert out.loc["A", "mean_area_planimetric_nm2_mean"] == pytest.approx(1.0)
+    assert out.loc["A", "n_images_flagged"] == 1
+    assert out.loc["B", "n_images"] == 1  # nothing reliable: keep what there is

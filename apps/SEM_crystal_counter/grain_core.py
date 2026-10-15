@@ -335,6 +335,12 @@ def intercept_grain_size(bmap: np.ndarray, pixel_size_nm: float, params: Params)
     return length * pixel_size_nm / crossings if crossings else float("nan")
 
 
+MIN_GRAINS_FOR_STATS = 20
+"""Images holding fewer grains (edge grains counted as half) give no usable mean: at 50kX a
+film with 500-1000 nm grains shows only about 5. They are flagged and left out of the
+per-sample statistics."""
+
+
 def summarize(
     grains: pd.DataFrame, labels: np.ndarray, pixel_size_nm: float, intercept_nm: float
 ) -> dict:
@@ -367,6 +373,8 @@ def summarize(
         else float("nan"),
         "mean_intercept_nm": intercept_nm,
         "boundary_length_per_um2": boundary_um / image_area_um2,
+        "n_planimetric": n_planimetric,
+        "reliable": n_planimetric >= MIN_GRAINS_FOR_STATS,
     }
 
 
