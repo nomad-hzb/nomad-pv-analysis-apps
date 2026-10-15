@@ -31,6 +31,10 @@ All tabs below use the loaded data.
 ### 2. Parameter Summary
 
 Overview of the loaded data: the result types and the parameters that exist.
+Only parameters that differ between samples are listed. A layer made of several
+materials also gets a table *all materials*, because the material name often carries the varied
+value (for example the concentration in "CsPbI1.4Br1.6 + 20 mmol CsCl"), which is constant inside
+one material. Time stamps are not listed.
 
 ### 3. Filters
 

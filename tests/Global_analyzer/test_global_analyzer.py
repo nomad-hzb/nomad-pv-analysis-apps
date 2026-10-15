@@ -610,6 +610,30 @@ def test_build_parameter_summary_markdown_excludes_batch_column():
     assert "batch" not in markdown
 
 
+def test_parameter_summary_shows_a_variation_that_the_material_name_carries():
+    """The concentration is part of the material name ("+ 20 mmol CsCl"), so it is constant
+    inside each material; the variation only shows in a table over all materials of a
+    layer. Time stamps are never listed."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_metadata = {
+        "spin_coating": pd.DataFrame(
+            {
+                "sample_id": ["S1", "S2", "S3", "S4"],
+                "layer_type": ["Active Layer"] * 4,
+                "layer_material_name": ["A + 20 mmol", "A + 20 mmol", "A + 50 mmol", "A + 50 mmol"],
+                "solute_concentration_FACl": [2e-5, 2e-5, 5e-5, 5e-5],
+                "solution.datetime": ["2026-06-04T14:10", "2026-06-04T14:11"] * 2,
+            }
+        )
+    }
+
+    markdown = dm.build_parameter_summary_markdown()
+
+    assert "Active Layer - all materials" in markdown
+    assert "solute_concentration_FACl" in markdown
+    assert "datetime" not in markdown
+
+
 def test_load_all_data_for_summary_keeps_every_entry_per_sample(monkeypatch):
     """Regression test for issue #34: a sample re-measured more than once for
     the same result type (e.g. JV measured on two different dates) must keep

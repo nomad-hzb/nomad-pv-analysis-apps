@@ -85,6 +85,11 @@ def _solution_columns(solution_details: Dict) -> Dict:
     return out
 
 
+def _is_datetime_key(key: str) -> bool:
+    """A time stamp (the entry's own or a nested one) is never a process parameter."""
+    return key.split(".")[-1] == "datetime"
+
+
 def _remaining_fields(data: Dict, row_data: Dict, handled: set) -> None:
     """Add every scalar the entry has that the loader did not already extract, so that no
     recorded value is silently missing. Top-level keys in `handled` are fully covered by
@@ -94,13 +99,15 @@ def _remaining_fields(data: Dict, row_data: Dict, handled: set) -> None:
         if key in handled or key == "solution":
             continue
         for flat_key, flat_value in _flatten_process_entry({key: value}).items():
-            row_data.setdefault(flat_key, flat_value)
+            if not _is_datetime_key(flat_key):
+                row_data.setdefault(flat_key, flat_value)
     for solution in (data.get("solution") or [])[:1]:
         details = solution.get("solution_details") or {}
         own = {k: v for k, v in solution.items() if k != "solution_details"}
         own.update({k: v for k, v in details.items() if k not in ("solute", "solvent")})
         for flat_key, flat_value in _flatten_process_entry({"solution": own}).items():
-            row_data.setdefault(flat_key, flat_value)
+            if not _is_datetime_key(flat_key):
+                row_data.setdefault(flat_key, flat_value)
         for column, value in _solution_columns(details).items():
             row_data.setdefault(column, value)
 

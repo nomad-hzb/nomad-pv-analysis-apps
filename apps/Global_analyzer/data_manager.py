@@ -1299,6 +1299,18 @@ class DataManager:
             if material_col and material_col in metadata_df.columns:
                 # Check if layer_type column exists
                 if "layer_type" in metadata_df.columns:
+                    # A material name often carries the varied value ("+ 20 mmol CsCl"), so
+                    # inside one material that parameter is constant: first one table per
+                    # layer over all its materials, which is where such a variation shows.
+                    for layer_type, layer_df in metadata_df.groupby("layer_type"):
+                        if layer_df[material_col].nunique() > 1:
+                            table = self._build_param_table_markdown(
+                                layer_df,
+                                f"{display_name} - {layer_type} - all materials",
+                                exclude_cols,
+                            )
+                            if table:
+                                sections.append(table)
                     # Split by both layer_type and material
                     for (layer_type, material_name), group_df in metadata_df.groupby(
                         ["layer_type", material_col]
@@ -1320,6 +1332,12 @@ class DataManager:
                             sections.append(table)
                 else:
                     # Split by material only (no layer_type column)
+                    if metadata_df[material_col].nunique() > 1:
+                        table = self._build_param_table_markdown(
+                            metadata_df, f"{display_name} - all materials", exclude_cols
+                        )
+                        if table:
+                            sections.append(table)
                     for material_name, material_df in metadata_df.groupby(material_col):
                         if pd.isna(material_name):
                             continue
@@ -1347,7 +1365,7 @@ class DataManager:
         # Collect varying parameters
         source_params = []
         for col in df.columns:
-            if col in exclude_cols:
+            if col in exclude_cols or col.split(".")[-1] == "datetime":
                 continue
 
             try:
