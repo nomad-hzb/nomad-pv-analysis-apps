@@ -272,38 +272,128 @@ def _absorb_small(labels: np.ndarray, strength: np.ndarray, min_area_px: float) 
 
 def measure_grains(labels: np.ndarray, pixel_size_nm: float) -> pd.DataFrame:
     """Per-grain table in nm. Edge grains are flagged; interior grains get a Miles-Lantuejoul
-    weight that corrects the bias against large grains (which touch the border more often)."""
+    weight that corrects the bias against large grains (which touch the border more often).
+
+    Solidity and maximum Feret diameter come from the convex hull of each grain's outer pixel
+    corners (scipy). skimage's own versions build a hull image per grain and took about 1 s per
+    100 grains, which made every interaction in the tuner slow.
+    """
+    columns = [
+        "grain_id",
+        "area_nm2",
+        "eq_diameter_nm",
+        "feret_max_nm",
+        "major_axis_nm",
+        "minor_axis_nm",
+        "aspect_ratio",
+        "perimeter_nm",
+        "circularity",
+        "solidity",
+        "orientation_deg",
+        "centroid_x_px",
+        "centroid_y_px",
+        "touches_edge",
+        "ml_weight",
+    ]
+    if labels.max() == 0:
+        return pd.DataFrame(columns=columns)
     height, width = labels.shape
-    rows = []
-    for region in measure.regionprops(labels):
-        minr, minc, maxr, maxc = region.bbox
-        touches_edge = minr == 0 or minc == 0 or maxr == height or maxc == width
-        bw, bh = maxc - minc, maxr - minr
-        ml_weight = (
-            np.nan if touches_edge else (width * height) / max((width - bw) * (height - bh), 1)
+    t = measure.regionprops_table(
+        labels,
+        properties=(
+            "label",
+            "area",
+            "bbox",
+            "centroid",
+            "equivalent_diameter_area",
+            "perimeter",
+            "axis_major_length",
+            "axis_minor_length",
+            "orientation",
+        ),
+    )
+    hull_area, feret = _hull_metrics(labels, t["label"])
+    minr, minc, maxr, maxc = t["bbox-0"], t["bbox-1"], t["bbox-2"], t["bbox-3"]
+    touches_edge = (minr == 0) | (minc == 0) | (maxr == height) | (maxc == width)
+    shrunk = np.maximum((width - (maxc - minc)) * (height - (maxr - minr)), 1)
+    area_nm2 = t["area"] * pixel_size_nm**2
+    perimeter_nm = t["perimeter"] * pixel_size_nm
+    return pd.DataFrame(
+        {
+            "grain_id": t["label"],
+            "area_nm2": area_nm2,
+            "eq_diameter_nm": t["equivalent_diameter_area"] * pixel_size_nm,
+            "feret_max_nm": feret * pixel_size_nm,
+            "major_axis_nm": t["axis_major_length"] * pixel_size_nm,
+            "minor_axis_nm": t["axis_minor_length"] * pixel_size_nm,
+            "aspect_ratio": t["axis_major_length"] / np.maximum(t["axis_minor_length"], 1e-9),
+            "perimeter_nm": perimeter_nm,
+            "circularity": 4 * np.pi * area_nm2 / np.maximum(perimeter_nm**2, 1e-9),
+            "solidity": t["area"] / np.maximum(hull_area, 1e-9),
+            "orientation_deg": np.degrees(t["orientation"]),
+            "centroid_x_px": t["centroid-1"],
+            "centroid_y_px": t["centroid-0"],
+            "touches_edge": touches_edge,
+            "ml_weight": np.where(touches_edge, np.nan, (width * height) / shrunk),
+        },
+        columns=columns,
+    )
+
+
+def _hull_metrics(labels: np.ndarray, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Convex-hull area (px²) and maximum Feret diameter (px) per label, from pixel corners.
+
+    Uses the outer corners of the leftmost and rightmost pixel of each row (enough for the
+    hull) and Andrew's monotone chain. scipy's ConvexHull (Qhull) creates a temporary file per
+    call on Windows, which cost seconds for a few hundred grains.
+    """
+    slices = ndi.find_objects(labels)
+    areas = np.zeros(len(ids))
+    ferets = np.zeros(len(ids))
+    for i, lab in enumerate(ids):
+        sl = slices[lab - 1]
+        region = labels[sl] == lab
+        rows = np.flatnonzero(region.any(axis=1))
+        first = region[rows].argmax(axis=1)
+        last = region.shape[1] - 1 - region[rows, ::-1].argmax(axis=1)
+        y = rows + sl[0].start
+        x0 = first + sl[1].start - 0.5
+        x1 = last + sl[1].start + 0.5
+        pts = np.concatenate(
+            [
+                np.column_stack([x0, y - 0.5]),
+                np.column_stack([x0, y + 0.5]),
+                np.column_stack([x1, y - 0.5]),
+                np.column_stack([x1, y + 0.5]),
+            ]
         )
-        area_nm2 = region.area * pixel_size_nm**2
-        perimeter_nm = region.perimeter * pixel_size_nm
-        rows.append(
-            {
-                "grain_id": region.label,
-                "area_nm2": area_nm2,
-                "eq_diameter_nm": region.equivalent_diameter_area * pixel_size_nm,
-                "feret_max_nm": region.feret_diameter_max * pixel_size_nm,
-                "major_axis_nm": region.axis_major_length * pixel_size_nm,
-                "minor_axis_nm": region.axis_minor_length * pixel_size_nm,
-                "aspect_ratio": region.axis_major_length / max(region.axis_minor_length, 1e-9),
-                "perimeter_nm": perimeter_nm,
-                "circularity": 4 * np.pi * area_nm2 / max(perimeter_nm**2, 1e-9),
-                "solidity": region.solidity,
-                "orientation_deg": np.degrees(region.orientation),
-                "centroid_x_px": region.centroid[1],
-                "centroid_y_px": region.centroid[0],
-                "touches_edge": touches_edge,
-                "ml_weight": ml_weight,
-            }
-        )
-    return pd.DataFrame(rows)
+        hull = _monotone_chain(pts)
+        hx, hy = hull[:, 0], hull[:, 1]
+        areas[i] = 0.5 * abs(np.dot(hx, np.roll(hy, -1)) - np.dot(hy, np.roll(hx, -1)))
+        diffs = hull[:, None, :] - hull[None, :, :]
+        ferets[i] = np.sqrt((diffs**2).sum(-1).max())
+    return areas, ferets
+
+
+def _monotone_chain(points: np.ndarray) -> np.ndarray:
+    """Convex hull vertices (counter-clockwise) of 2D points."""
+    pts = sorted(set(map(tuple, points.tolist())))
+    if len(pts) <= 2:
+        return np.array(pts)
+
+    def half(seq):
+        chain: list = []
+        for p in seq:
+            while len(chain) >= 2:
+                (ax, ay), (bx, by) = chain[-2], chain[-1]
+                if (bx - ax) * (p[1] - ay) - (by - ay) * (p[0] - ax) > 0:
+                    break
+                chain.pop()
+            chain.append(p)
+        return chain
+
+    lower, upper = half(pts), half(reversed(pts))
+    return np.array(lower[:-1] + upper[:-1])
 
 
 def intercept_grain_size(bmap: np.ndarray, pixel_size_nm: float, params: Params) -> float:
@@ -478,17 +568,25 @@ reference images smooth films gave 1.6-2.6 and striped films 3.2-27.8: grains wi
 terraces fall apart under the smooth preset, while plain grains barely change."""
 
 
-def analyze_auto(sem: SemImage) -> Result:
+def choose_preset(n_smooth: int, n_striped: int) -> tuple[str, float]:
+    """Preset for an image from its grain counts under both presets, plus the ratio."""
+    ratio = n_smooth / max(n_striped, 1)
+    return ("striped" if ratio > AUTO_RATIO_THRESHOLD else "smooth"), ratio
+
+
+def analyze_auto(sem: SemImage, pre: np.ndarray | None = None) -> Result:
     """Analyze with both presets and keep the one that fits the film type.
 
     Both presets share the preprocessing, so this costs less than two full runs. The chosen
     preset and the ratio are recorded in the summary so a borderline call is visible.
     """
     smooth, striped = PRESETS["smooth"], PRESETS["striped"]
-    pre = preprocess(sem.image, sem.pixel_size_nm, smooth) if sem.pixel_size_nm else None
+    if pre is None and sem.pixel_size_nm:
+        pre = preprocess(sem.image, sem.pixel_size_nm, smooth)
     results = {"smooth": analyze(sem, smooth, pre), "striped": analyze(sem, striped, pre)}
-    ratio = results["smooth"].summary["n_grains"] / max(results["striped"].summary["n_grains"], 1)
-    chosen = "striped" if ratio > AUTO_RATIO_THRESHOLD else "smooth"
+    chosen, ratio = choose_preset(
+        results["smooth"].summary["n_grains"], results["striped"].summary["n_grains"]
+    )
     result = results[chosen]
     result.summary.update({"preset": chosen, "preset_ratio": ratio})
     return result
@@ -498,13 +596,10 @@ def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True
     """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds."""
     rgb = np.repeat(result.sem.image[..., None], 3, axis=2).astype(np.uint8)
     if show_outlines:
-        edge_ids = (
-            set(result.grains.loc[result.grains["touches_edge"], "grain_id"])
-            if len(result.grains)
-            else set()
-        )
-        bounds = segmentation.find_boundaries(result.labels, mode="inner")
-        on_edge = np.isin(result.labels, list(edge_ids)) & bounds
+        lab = result.labels
+        edge_ids = np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))
+        bounds = segmentation.find_boundaries(lab, mode="inner")
+        on_edge = np.isin(lab, edge_ids[edge_ids > 0]) & bounds
         rgb[bounds & ~on_edge] = (40, 230, 60)
         rgb[on_edge] = (255, 150, 0)
     if show_seeds:

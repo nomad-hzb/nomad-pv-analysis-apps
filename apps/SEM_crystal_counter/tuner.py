@@ -17,6 +17,8 @@ the parameters it depends on, so moving a merge slider does not redo denoising.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -38,6 +40,8 @@ folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 ann_folder = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
 log_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path.home() / "sem_grain_training_log"
 files = sorted(p.name for p in folder.glob("*.tif"))
+CORE_VERSION = hashlib.sha256(Path(gc.__file__).read_bytes()).hexdigest()[:12]
+"""Part of every disk-cache key: any change to grain_core invalidates the cached results."""
 
 # Slider definitions: (field, label, min, max, step, help). The help text says what the
 # parameter does and which symptom each direction fixes.
@@ -155,17 +159,75 @@ def load(name: str) -> gc.SemImage:
     return gc.load_sem_tiff(folder / name)
 
 
-@st.cache_data(show_spinner="Choosing a preset for this image (runs both once)...")
+def file_stamp(name: str) -> tuple:
+    """Size and modification time: part of every disk-cache key, so a changed file is redone."""
+    stat = (folder / name).stat()
+    return stat.st_size, stat.st_mtime_ns
+
+
 def auto_choice(name: str) -> tuple[str, float]:
-    summary = gc.analyze_auto(load(name)).summary
-    return summary["preset"], summary["preset_ratio"]
+    return _auto_choice_cached(name, file_stamp(name), CORE_VERSION)
 
 
-@st.cache_data
-def stage_pre(name: str, bg: float, strength: float) -> np.ndarray:
+def final_result(name: str, params_json: str, edits_json: str):
+    return _final_cached(name, file_stamp(name), CORE_VERSION, params_json, edits_json)
+
+
+@st.cache_data(persist="disk", show_spinner="Choosing a preset for this image (runs both once)...")
+def _auto_choice_cached(name: str, stamp: tuple, core_version: str) -> tuple[str, float]:
+    # Same decision as gc.analyze_auto, but through the stage caches: only grain counts are
+    # needed, and the chosen preset's segmentation is then already cached for display.
+    counts = {}
+    for preset_name, p in gc.PRESETS.items():
+        counts[preset_name] = int(segment(name, p)[2].max())  # labels are 1..N, no gaps
+    return gc.choose_preset(counts["smooth"], counts["striped"])
+
+
+def segment(name: str, p: gc.Params):
+    """Cached stages for one image and parameter set: (seeds, raw labels, merged labels)."""
+    px = load(name).pixel_size_nm
+    pre = stage_pre(name, p.background_sigma_nm, p.denoise_strength)
+    bmap = stage_bmap(pre, px, tuple(p.ridge_sigmas_nm), p.clip_bright_percentile, p.ridge_weight)
+    return stage_segment(pre, bmap, px, p.model_dump_json())
+
+
+@st.cache_data(persist="disk", max_entries=200, show_spinner=False)
+def _final_cached(name: str, stamp: tuple, core_version: str, params_json: str, edits_json: str):
+    """Segmentation, measurement and replayed edits for one image, cached per settings and
+    edit list, so clicking or moving one slider does not redo everything."""
+    params = gc.Params.model_validate_json(params_json)
     sem = load(name)
+    px = sem.pixel_size_nm
+    pre = stage_pre(name, params.background_sigma_nm, params.denoise_strength)
+    bmap = stage_bmap(
+        pre, px, tuple(params.ridge_sigmas_nm), params.clip_bright_percentile, params.ridge_weight
+    )
+    seeds, raw, labels = stage_segment(pre, bmap, px, params_json)
+    grains = gc.measure_grains(labels, px)
+    auto_summary = gc.summarize(grains, labels, px, gc.intercept_grain_size(bmap, px, params))
+    auto_result = gc.Result(sem, params, pre, bmap, seeds, raw, labels, grains, auto_summary)
+    result, warnings = gc.apply_edits(auto_result, json.loads(edits_json))
+    return auto_summary, result, warnings
+
+
+_s, _t = gc.PRESETS["smooth"], gc.PRESETS["striped"]
+assert (_s.background_sigma_nm, _s.denoise_strength) == (
+    _t.background_sigma_nm,
+    _t.denoise_strength,
+)
+
+
+@st.cache_data(persist="disk", show_spinner="Denoising (cached on disk after the first time)...")
+def _pre_cached(path: str, file_stamp: tuple, core_version: str, bg: float, strength: float):
+    sem = gc.load_sem_tiff(path)
     p = gc.Params(background_sigma_nm=bg, denoise_strength=strength)
     return gc.preprocess(sem.image, sem.pixel_size_nm, p)
+
+
+def stage_pre(name: str, bg: float, strength: float) -> np.ndarray:
+    """Preprocessed image (the slowest stage, 2-7 s), cached on disk across tuner restarts.
+    The key includes the file's size and modification time and the core's source hash."""
+    return _pre_cached(str(folder / name), file_stamp(name), CORE_VERSION, bg, strength)
 
 
 @st.cache_data
@@ -316,23 +378,18 @@ if sem.pixel_size_nm is None:
     st.error(f"{name} has no 'Image Pixel Size' in its metadata; sizes in nm are impossible.")
     st.stop()
 px = sem.pixel_size_nm
-pre = stage_pre(name, params.background_sigma_nm, params.denoise_strength)
-bmap = stage_bmap(
-    pre, px, tuple(params.ridge_sigmas_nm), params.clip_bright_percentile, params.ridge_weight
-)
-seeds, raw, labels = stage_segment(pre, bmap, px, params.model_dump_json())
-grains = gc.measure_grains(labels, px)
-auto_summary = gc.summarize(grains, labels, px, gc.intercept_grain_size(bmap, px, params))
-auto_summary.update(
+# Manual edits are replayed on top of the automatic result, so they survive slider changes;
+# edits that no longer apply are reported, not silently dropped.
+edits = st.session_state.setdefault("edits", {}).setdefault(name, [])
+with st.spinner("Segmenting..."):
+    auto_summary, result, edit_warnings = final_result(
+        name, params.model_dump_json(), json.dumps(edits)
+    )
+result.summary.update(
     {"preset": preset, "preset_ratio": auto_choice(name)[1] if choice == "auto" else None}
 )
-auto_result = gc.Result(sem, params, pre, bmap, seeds, raw, labels, grains, auto_summary)
-
-# Manual edits are replayed on top of the automatic result on every run, so they survive
-# slider changes; edits that no longer apply are reported, not silently dropped.
-edits = st.session_state.setdefault("edits", {}).setdefault(name, [])
-result, edit_warnings = gc.apply_edits(auto_result, edits)
 grains, summary, labels = result.grains, result.summary, result.labels
+pre, bmap, seeds, raw = result.pre, result.bmap, result.seeds, result.raw_labels
 
 ann_path = find_annotation(name)
 points = read_points(ann_path, sem.image.shape, sem.image.shape[1]) if ann_path else None
@@ -492,7 +549,7 @@ with tab_stages:
     left, right = st.columns(2)
     left.image(pre, caption="Preprocessed", clamp=True, width="stretch")
     right.image(bmap, caption="Boundary map (bright = boundary)", clamp=True, width="stretch")
-    raw_view = gc.Result(sem, params, pre, bmap, seeds, raw, raw, gc.measure_grains(raw, px), {})
+    raw_view = gc.Result(sem, params, pre, bmap, seeds, raw, raw, grains.iloc[:0], {})
     left.image(gc.overlay(raw_view, show_seeds=True), caption="Before merging", width="stretch")
     right.image(gc.overlay(result), caption="Final (with your edits)", width="stretch")
 with tab_hist:
