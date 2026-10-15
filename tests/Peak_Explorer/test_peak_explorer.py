@@ -787,7 +787,6 @@ def test_unit_conversion_and_new_data_drop_old_fit_results(app, x_nm):
     assert not application.fitting_engine.has_fitting_results()
 
 
-@BUG("np.polyfit on a spectrum with NaN returns NaN coefficients")
 def test_background_autofit_ignores_nan(app, x_nm):
     y = 0.02 * x_nm + 3.0
     y[[5, 100, 700]] = np.nan
@@ -1194,3 +1193,79 @@ def test_update_from_fit_reports_every_parameter_in_the_status_output(app, x_nm,
     application.on_update_parameters(None)
     text = capsys.readouterr().out
     assert "Model 1 center" in text and "Updated" in text
+
+
+def test_an_unknown_background_model_is_refused_not_replaced_by_a_line(fe):
+    engine = fe.FittingEngine()
+    engine.create_fit_parameters(
+        [{"type": "Gaussian", "center": 600, "height": 10, "sigma": 5}],
+        background_model="Exponential",
+    )
+    with pytest.raises(ValueError, match="Unknown background model"):
+        engine.fitting_models.create_composite_model(engine.fit_params)
+
+
+def test_skewed_unit_height_is_cached_without_changing_its_value(fe):
+    first = fe.unit_height_skewed_gaussian(10.0, 2.0)
+    again = fe.unit_height_skewed_gaussian(10.0, 2.0)
+    assert first == again
+    assert fe._unit_height_skewed_gaussian.cache_info().hits >= 1
+    assert fe.unit_height_skewed_gaussian(10.0, 2.0 + 1e-9) != pytest.approx(first, abs=0, rel=0)
+
+
+def test_sequential_seeding_keeps_the_default_centre_window_where_the_user_put_it(fe):
+    engine = fe.FittingEngine()
+    peaks = [{"type": "Gaussian", "center": 600.0, "height": 10.0, "sigma": 5.0}]
+    engine.create_fit_parameters(peaks, background_model="None", center_bound=20)
+    previous = {"parameters": {"p0_center": {"value": 612.0}}, "index": 0, "time": 0.0}
+    seeded = engine.fitting_models._apply_smart_init(engine.fit_params, previous)
+    assert seeded["peak_models"][0]["center"] == 612.0
+    _, params = engine.fitting_models.create_composite_model(seeded)
+    assert params["p0_center"].value == 612.0
+    assert (params["p0_center"].min, params["p0_center"].max) == (580.0, 620.0)
+
+
+def test_background_autofit_ignores_the_peaks(app, x_nm):
+    """A line fitted through a spectrum with a big peak is lifted by it; fitted between the
+    peaks it recovers the real background."""
+    y = 0.02 * x_nm + 3.0 + gaussian(x_nm, 5000, 600, 15)
+    application = app([y], x_nm)
+    application.clear_peak_models()
+    application.add_peak_model(
+        peak_info={"type": "Gaussian", "center": 600.0, "height": 100.0, "sigma": 15.0}
+    )
+    application.widgets["background_method"].value = "Linear"
+    application.on_background_autofit(None)
+    assert application.widgets["bg_linear_slope"].value == pytest.approx(0.02, abs=2e-3)
+    assert application.widgets["bg_linear_intercept"].value == pytest.approx(3.0, abs=1.0)
+
+
+def test_two_saves_in_one_second_get_separate_h5_groups(fe, ex, x_nm, cfg, tmp_path, monkeypatch):
+    path = tmp_path / "run.h5"
+    _write_h5(path, cfg)
+    data = np.array([gaussian(x_nm, 1000, 600, 12)])
+    _, results = _batch(
+        fe, x_nm, data, [{"type": "Gaussian", "center": 600, "height": 30, "sigma": 10}]
+    )
+
+    class FrozenClock(ex.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 1, 1, 12, 0, 0)
+
+    monkeypatch.setattr(ex, "datetime", FrozenClock)
+    for _ in range(2):
+        ex.ResultExporter().export_to_isa_h5(
+            results, str(path), time_unit="s", h5_mode="pl_raw", wavelength_unit="nm"
+        )
+    with h5py.File(path) as h5:
+        assert sorted(h5["fitting_results"]) == ["fit_20260101_12_00_00", "fit_20260101_12_00_00_2"]
+
+
+def test_update_from_fit_keeps_small_values(app):
+    """A sigma of 0.0004 (q in 1/A) must not be rounded to 0.0."""
+    from importlib import import_module
+
+    handlers = import_module("fit_handlers")
+    assert handlers._significant(0.000412345678) == pytest.approx(0.000412346)
+    assert handlers._significant(123456.789) == pytest.approx(123457.0)

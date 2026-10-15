@@ -182,6 +182,12 @@ class ResultExporter:
         group_name = now.strftime("fit_%Y%m%d_%H_%M_%S")
 
         with h5py.File(h5_path, "a") as h5f:
+            # two saves within one second used to share a group and leave stale datasets of
+            # the first behind: a taken name gets a counter
+            base_name, counter = group_name, 1
+            while f"fitting_results/{group_name}" in h5f:
+                counter += 1
+                group_name = f"{base_name}_{counter}"
             grp = h5f.require_group(f"fitting_results/{group_name}")
 
             # Group-level attributes
