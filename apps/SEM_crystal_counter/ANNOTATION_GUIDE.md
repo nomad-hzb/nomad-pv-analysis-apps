@@ -81,12 +81,20 @@ there.
 
 - `run_batch.py <folder> --out <dir>` runs every TIFF and writes overlays, per-grain CSVs,
   per-image and per-sample summaries, and `report.html` (a gallery of all overlays).
-- `streamlit run tuner.py --server.address localhost -- <image folder> [<annotation folder>]`
+- `streamlit run tuner.py --server.address localhost -- <image folder> [<annotation folder> [<log folder>]]`
   opens the live tuning page.
   - Each image starts from the preset chosen for it automatically.
+  - Only the three settings that matter most are open. The rest sit under "Advanced
+    settings".
   - Every slider has a tooltip.
   - **Auto** and **Reset** buttons get you back to tuned values.
   - The grain outlines, seeds and your clicks can each be switched on and off.
   - With an annotation folder, F1 and the grain-count/size error update live for images you
     annotated.
-  - Install the dev extras first: `pip install streamlit opencv-python-headless`.
+  - Under "Overlay and editing" you can **merge** two grains or **split** one by clicking.
+    The edits survive slider changes, and Undo/Clear are there.
+  - **Save as reviewed** stores the final grain map, your edits and the settings in the
+    training log (default `~/sem_grain_training_log`, see `training_log.py`). Save also when
+    nothing needed fixing: confirmed results are training data too.
+  - Install the dev extras first:
+    `pip install streamlit opencv-python-headless streamlit-image-coordinates`.

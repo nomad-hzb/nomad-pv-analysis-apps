@@ -188,3 +188,78 @@ def test_overlay_toggles_outlines_and_seeds(make_tiff, voronoi_film):
     assert not np.array_equal(overlay(result), plain)
     seeded = overlay(result, show_seeds=True, show_outlines=False)
     assert (seeded == (255, 40, 40)).all(axis=-1).any()
+
+
+def _two_grain_result(make_tiff):
+    """A 60x80 film with a dark vertical groove at x=40: two grains, split correctly."""
+    from grain_core import Result, measure_grains
+
+    image = np.full((60, 80), 150, dtype=np.uint8)
+    image[:, 39:42] = 60
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    labels = np.where(np.arange(80) < 40, 1, 2)[None, :].repeat(60, axis=0).astype(np.int32)
+    bmap = (image < 100).astype(float)
+    seeds = np.zeros_like(labels)
+    seeds[30, 20], seeds[30, 60] = 1, 2
+    grains = measure_grains(labels, 5.0)
+    return Result(sem, Params(), image / 255.0, bmap, seeds, labels, labels, grains, {})
+
+
+def test_apply_edits_merges_two_clicked_grains(make_tiff):
+    from grain_core import apply_edits
+
+    result = _two_grain_result(make_tiff)
+    edited, warnings = apply_edits(result, [{"op": "merge", "points": [[10, 10], [10, 70]]}])
+    assert warnings == []
+    assert edited.summary["n_grains"] == 1
+    assert edited.summary["n_edits"] == 1
+
+
+def test_apply_edits_split_follows_the_groove(make_tiff):
+    from grain_core import apply_edits
+
+    result = _two_grain_result(make_tiff)
+    merged, _ = apply_edits(result, [{"op": "merge", "points": [[10, 10], [10, 70]]}])
+    resplit, warnings = apply_edits(merged, [{"op": "split", "point": [30, 70]}])
+    assert warnings == []
+    assert resplit.summary["n_grains"] == 2
+    left, right = resplit.labels[30, 10], resplit.labels[30, 70]
+    assert left != right
+    assert (resplit.labels[:, :38] == left).all() and (resplit.labels[:, 43:] == right).all()
+
+
+def test_apply_edits_reports_edits_that_no_longer_apply(make_tiff):
+    from grain_core import apply_edits
+
+    result = _two_grain_result(make_tiff)
+    edited, warnings = apply_edits(result, [{"op": "merge", "points": [[10, 10], [20, 20]]}])
+    assert len(warnings) == 1 and "same grain" in warnings[0]
+    assert edited.summary["n_grains"] == 2
+    assert edited.summary["n_edits_skipped"] == 1
+
+
+def test_training_log_round_trip(make_tiff, tmp_path):
+    from grain_core import apply_edits
+    from training_log import find_review, load_reviews, save_review
+
+    result = _two_grain_result(make_tiff)
+    edits = [{"op": "merge", "points": [[10, 10], [10, 70]]}]
+    edited, warnings = apply_edits(result, edits)
+    folder = save_review(tmp_path, edited, edits, warnings, raw_n_grains=2, note="test")
+    reviews = load_reviews(tmp_path)
+    assert len(reviews) == 1 and reviews[0].folder == folder
+    assert reviews[0].meta["edits"] == edits
+    assert reviews[0].meta["n_grains_before_edits"] == 2
+    assert reviews[0].meta["n_grains_after_edits"] == 1
+    assert np.array_equal(reviews[0].labels, edited.labels)
+    assert find_review(tmp_path, result.sem) is not None
+    save_review(tmp_path, edited, edits)  # saving again replaces, not duplicates
+    assert len(load_reviews(tmp_path)) == 1
+
+
+def test_params_files_with_removed_keys_still_load():
+    old = '{"denoise": "gaussian", "seed_method": "hminima", "hminima_h": 0.1, "compactness": 0.01,'
+    old += ' "min_grain_diameter_nm": 250.0}'
+    params = Params.model_validate_json(old)
+    assert params.min_grain_diameter_nm == 250.0
+    assert not hasattr(params, "seed_method")

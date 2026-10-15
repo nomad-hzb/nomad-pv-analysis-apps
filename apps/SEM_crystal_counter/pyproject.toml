@@ -14,10 +14,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Dev tools only (tuner.py, legacy.py baseline); never installed on the Oasis.
+# Dev tools only (tuner.py with click editing, legacy.py baseline); never installed on the Oasis.
 dev = [
     "streamlit>=1.40",
     "opencv-python-headless>=4.8",
+    "streamlit-image-coordinates>=0.4",
 ]
 
 [tool.hatch.metadata]

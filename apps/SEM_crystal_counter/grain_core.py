@@ -26,7 +26,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks
-from skimage import filters, graph, measure, morphology, restoration, segmentation
+from skimage import filters, graph, measure, restoration, segmentation
 from skimage.feature import peak_local_max
 from skimage.graph import rag_boundary
 
@@ -37,13 +37,17 @@ _UNIT_TO_NM = {"pm": 1e-3, "nm": 1.0, "\xb5m": 1e3, "um": 1e3, "mm": 1e6}
 
 
 class Params(BaseModel):
-    """All tunable parameters. Sizes in nm, everything else dimensionless."""
+    """All tunable parameters. Sizes in nm, everything else dimensionless.
+
+    Removed after a sensitivity study on the annotated images (2026-10-15): the denoise method
+    choice (gaussian/none only ever lowered F1), the h-minima seed method and compactness (no
+    consistent effect). Old params files that still hold these keys load; the keys are ignored.
+    """
 
     # Preprocessing
     background_sigma_nm: float = Field(
         1000.0, description="Gaussian sigma of the subtracted background (0 = off)"
     )
-    denoise: str = Field("nlm", description="'nlm', 'gaussian' or 'none'")
     denoise_strength: float = Field(
         0.8, description="NLM h as a multiple of the estimated noise sigma"
     )
@@ -57,20 +61,11 @@ class Params(BaseModel):
         1.0, description="Weight of the ridge response vs the gradient magnitude"
     )
     # Seeds and watershed
-    seed_method: str = Field(
-        "distance", description="'distance' (interior distance peaks) or 'hminima'"
-    )
     boundary_threshold: float = Field(
         1.0, description="Multiplier on the Otsu threshold of the boundary map"
     )
-    hminima_h: float = Field(
-        0.05, description="Depth for the 'hminima' seed method (boundary map is 0..1)"
-    )
     min_grain_diameter_nm: float = Field(
         100.0, description="Smallest grain to resolve; sets seed spacing"
-    )
-    compactness: float = Field(
-        0.0, description="Compact watershed parameter (0 = classic watershed)"
     )
     # Region merging
     merge_threshold: float = Field(
@@ -153,18 +148,15 @@ def preprocess(image: np.ndarray, pixel_size_nm: float, params: Params) -> np.nd
     if params.background_sigma_nm > 0:
         background = filters.gaussian(img, _px(params.background_sigma_nm, pixel_size_nm))
         img = img - background + background.mean()
-    if params.denoise == "nlm":
-        sigma = _noise_sigma(img)
-        img = restoration.denoise_nl_means(
-            img,
-            h=params.denoise_strength * sigma,
-            sigma=sigma,
-            patch_size=5,
-            patch_distance=6,
-            fast_mode=True,
-        )
-    elif params.denoise == "gaussian":
-        img = filters.gaussian(img, 1.0)
+    sigma = _noise_sigma(img)
+    img = restoration.denoise_nl_means(
+        img,
+        h=params.denoise_strength * sigma,
+        sigma=sigma,
+        patch_size=5,
+        patch_distance=6,
+        fast_mode=True,
+    )
     lo, hi = np.percentile(img, (0.5, 99.5))
     return np.clip((img - lo) / max(hi - lo, 1e-9), 0, 1)
 
@@ -200,10 +192,6 @@ def boundary_map(img: np.ndarray, pixel_size_nm: float, params: Params) -> np.nd
 def find_seeds(bmap: np.ndarray, pixel_size_nm: float, params: Params) -> np.ndarray:
     """Labelled seed image, one seed per (candidate) grain interior."""
     r_min = max(_px(params.min_grain_diameter_nm, pixel_size_nm) / 2, 1.0)
-    if params.seed_method == "hminima":
-        smooth = filters.gaussian(bmap, r_min / 2)
-        minima = morphology.h_minima(smooth, params.hminima_h)
-        return measure.label(minima)
     threshold = filters.threshold_otsu(bmap) * params.boundary_threshold
     interior = bmap < threshold
     interior_labels = measure.label(interior)
@@ -224,7 +212,7 @@ def find_seeds(bmap: np.ndarray, pixel_size_nm: float, params: Params) -> np.nda
 
 
 def watershed(bmap: np.ndarray, seeds: np.ndarray, params: Params) -> np.ndarray:
-    return segmentation.watershed(bmap, seeds, compactness=params.compactness).astype(np.int32)
+    return segmentation.watershed(bmap, seeds).astype(np.int32)
 
 
 def merge_regions(
@@ -406,6 +394,82 @@ def analyze(sem: SemImage, params: Params, pre: np.ndarray | None = None) -> Res
     summary = summarize(grains, labels, px, intercept_grain_size(bmap, px, params))
     summary.update({"image": sem.name, "pixel_size_nm": px, "n_seeds": int(seeds.max())})
     return Result(sem, params, pre, bmap, seeds, raw_labels, labels, grains, summary)
+
+
+def merge_at(labels: np.ndarray, first: tuple[int, int], second: tuple[int, int]) -> str | None:
+    """Merge the grains under two clicked (y, x) points, in place. Returns a warning or None."""
+    a, b = int(labels[first]), int(labels[second])
+    if a == b:
+        return f"merge at {first} and {second}: both clicks are in the same grain"
+    labels[labels == b] = a
+    return None
+
+
+def split_at(labels: np.ndarray, bmap: np.ndarray, point: tuple[int, int]) -> str | None:
+    """Split the grain under a clicked (y, x) point, in place, so that the click becomes a grain
+    of its own. Returns a warning or None.
+
+    The watershed runs on the boundary map inside that grain only, between two markers: the
+    click and the grain pixel farthest from it. It therefore divides along the strongest
+    groove between them. A region holding three merged grains needs a second split click.
+    """
+    region = int(labels[point])
+    mask = labels == region
+    ys, xs = np.nonzero(mask)
+    far = np.argmax((ys - point[0]) ** 2 + (xs - point[1]) ** 2)
+    markers = np.zeros(labels.shape, dtype=np.int32)
+    markers[ys[far], xs[far]] = 1
+    markers[point] = 2
+    parts = segmentation.watershed(bmap, markers, mask=mask)
+    new_part = parts == 2
+    if not new_part.any() or new_part.sum() == mask.sum():
+        return f"split at {point}: no boundary found inside this grain"
+    labels[new_part] = labels.max() + 1
+    return None
+
+
+def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
+    """Replay manual edits on a result and re-measure.
+
+    Edits are recorded as clicked image positions, not grain ids:
+        {"op": "merge", "points": [[y1, x1], [y2, x2]]}
+        {"op": "split", "point": [y, x]}
+    so they still apply after a parameter change renumbers the grains. Edits that no longer
+    make sense (both merge clicks in one grain, a split with no boundary) are skipped and
+    reported.
+    """
+    if not edits:
+        return result, []
+    labels = result.labels.copy()
+    warnings = []
+    for edit in edits:
+        if edit["op"] == "merge":
+            first, second = (tuple(map(int, pt)) for pt in edit["points"])
+            warning = merge_at(labels, first, second)
+        elif edit["op"] == "split":
+            warning = split_at(labels, result.bmap, tuple(map(int, edit["point"])))
+        else:
+            warning = f"unknown edit {edit!r}"
+        if warning:
+            warnings.append(warning)
+    labels = segmentation.relabel_sequential(labels)[0]
+    px = result.sem.pixel_size_nm
+    grains = measure_grains(labels, px)
+    summary = summarize(grains, labels, px, result.summary.get("mean_intercept_nm", float("nan")))
+    summary.update({k: v for k, v in result.summary.items() if k not in summary})
+    summary.update({"n_edits": len(edits), "n_edits_skipped": len(warnings)})
+    edited = Result(
+        result.sem,
+        result.params,
+        result.pre,
+        result.bmap,
+        result.seeds,
+        result.raw_labels,
+        labels,
+        grains,
+        summary,
+    )
+    return edited, warnings
 
 
 AUTO_RATIO_THRESHOLD = 3.0

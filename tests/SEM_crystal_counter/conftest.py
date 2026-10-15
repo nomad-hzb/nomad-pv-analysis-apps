@@ -14,8 +14,8 @@ from skimage import segmentation
 
 APP_DIR = Path(__file__).parent.parent.parent / "apps" / "SEM_crystal_counter"
 
-# Load order matters: run_batch imports grain_core, evaluate imports both, by bare name.
-for _name in ("grain_core", "run_batch", "evaluate"):
+# Load order matters: later modules import earlier ones by bare name.
+for _name in ("grain_core", "run_batch", "evaluate", "training_log"):
     _spec = importlib.util.spec_from_file_location(_name, APP_DIR / f"{_name}.py")
     _module = importlib.util.module_from_spec(_spec)
     sys.modules[_name] = _module

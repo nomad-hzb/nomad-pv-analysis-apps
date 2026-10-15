@@ -1,10 +1,15 @@
 """Interactive parameter tuner (dev tool, not part of the Voila app).
 
-    streamlit run tuner.py --server.address localhost -- "D:/.../SEM images" ["D:/.../annotations"]
+    streamlit run tuner.py --server.address localhost -- <images> [<annotations> [<log dir>]]
 
-The optional second folder holds ImageJ/Fiji point annotations (`<image>_Results.csv` or
-`<image>_points.csv`); when one exists for the selected image, the clicks can be drawn and the
-current settings are scored against them live.
+The optional annotations folder holds ImageJ/Fiji point annotations (`<image>_Results.csv`
+or `<image>_points.csv`); when one exists for the selected image, the clicks can be drawn
+and the current settings are scored against them live. Pass "" to skip it but still set
+a log dir.
+
+Grains can be merged and split by clicking (needs streamlit-image-coordinates). "Save as
+reviewed" writes the final grain map, the edits and the settings to the training log
+(default ~/sem_grain_training_log, see training_log.py).
 
 Opening an image loads the preset the automatic choice picks for it. Each stage is cached on
 the parameters it depends on, so moving a merge slider does not redo denoising.
@@ -19,12 +24,19 @@ import grain_core as gc
 import numpy as np
 import pandas as pd
 import streamlit as st
+import training_log
 from evaluate import annotation_stem, read_points, score
+
+try:  # click-to-edit needs this small component; the rest of the tuner works without it
+    from streamlit_image_coordinates import streamlit_image_coordinates as image_coordinates
+except ImportError:
+    image_coordinates = None
 
 st.set_page_config(page_title="Grain tuner", layout="wide")
 
 folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
-ann_folder = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+ann_folder = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+log_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else Path.home() / "sem_grain_training_log"
 files = sorted(p.name for p in folder.glob("*.tif"))
 
 # Slider definitions: (field, label, min, max, step, help). The help text says what the
@@ -94,24 +106,6 @@ SLIDERS = {
             "Too many small pieces inside grains: RAISE it. Neighbouring grains glued "
             "together: LOWER it. Smooth films work around 100 nm, striped around 300 nm.",
         ),
-        (
-            "hminima_h",
-            "h-minima depth (h-minima method only)",
-            0.005,
-            0.3,
-            0.005,
-            "Only used with seed method 'hminima': how deep a dip in the boundary map must "
-            "be to get its own seed. Higher: fewer seeds.",
-        ),
-        (
-            "compactness",
-            "Compactness",
-            0.0,
-            0.01,
-            0.0005,
-            "0 = regions follow the boundaries exactly. Higher values make regions rounder "
-            "and more equal in size, which helps when boundaries have gaps.",
-        ),
     ],
     "Merging (removes false boundaries)": [
         (
@@ -144,18 +138,15 @@ SLIDERS = {
         ),
     ],
 }
-SELECTS = {
-    "denoise": (["nlm", "gaussian", "none"], "Noise filter applied before anything else."),
-    "seed_method": (
-        ["distance", "hminima"],
-        "'distance': seeds at the centres of grain interiors (recommended). "
-        "'hminima': seeds at dips of the boundary map, tuned with the h-minima slider.",
-    ),
-}
 RIDGE_HELP = (
     "Widths (nm) of the dark grooves searched for, comma separated. 8 fits thin boundaries; "
     "adding 24 also catches wide grooves, which helps on striped films."
 )
+GROUP_EXTRAS = {"Boundary map": ["ridge_sigmas_nm"]}  # non-slider widgets shown with a group
+MAIN_FIELDS = ("min_grain_diameter_nm", "merge_threshold", "boundary_threshold")
+"""Shown open in the sidebar; everything else sits in the collapsed Advanced section. Chosen
+by a one-at-a-time sensitivity study on the annotated images (2026-10-15): these three moved
+F1 the most in both directions; the others changed it by about 0.05 or less."""
 PRESET_OPTIONS = ["auto", *sorted(gc.PRESETS)]
 
 
@@ -171,9 +162,9 @@ def auto_choice(name: str) -> tuple[str, float]:
 
 
 @st.cache_data
-def stage_pre(name: str, bg: float, denoise: str, strength: float) -> np.ndarray:
+def stage_pre(name: str, bg: float, strength: float) -> np.ndarray:
     sem = load(name)
-    p = gc.Params(background_sigma_nm=bg, denoise=denoise, denoise_strength=strength)
+    p = gc.Params(background_sigma_nm=bg, denoise_strength=strength)
     return gc.preprocess(sem.image, sem.pixel_size_nm, p)
 
 
@@ -209,8 +200,6 @@ def apply_params(params: gc.Params) -> None:
     for group in SLIDERS.values():
         for field, *_ in group:
             st.session_state[f"p_{field}"] = float(values[field])
-    for field in SELECTS:
-        st.session_state[f"p_{field}"] = values[field]
     st.session_state["p_ridge_sigmas_nm"] = ", ".join(f"{v:g}" for v in values["ridge_sigmas_nm"])
 
 
@@ -287,23 +276,30 @@ with st.sidebar:
             "- Lost? Press **Reset**."
         )
 
-    for group, sliders in SLIDERS.items():
-        st.header(group)
-        if group == "Preprocess":
-            st.selectbox(
-                "Denoise", SELECTS["denoise"][0], key="p_denoise", help=SELECTS["denoise"][1]
-            )
-        if group == "Boundary map":
+    slider_specs = {spec[0]: spec for group in SLIDERS.values() for spec in group}
+
+    def render(field: str) -> None:
+        if field == "ridge_sigmas_nm":
             st.text_input("Groove widths (nm)", key="p_ridge_sigmas_nm", help=RIDGE_HELP)
-        if group.startswith("Seeds"):
-            st.selectbox(
-                "Seed method",
-                SELECTS["seed_method"][0],
-                key="p_seed_method",
-                help=SELECTS["seed_method"][1],
-            )
-        for field, label, lo, hi, step, help_text in sliders:
+        else:
+            _, label, lo, hi, step, help_text = slider_specs[field]
             st.slider(label, lo, hi, step=step, key=f"p_{field}", help=help_text)
+
+    st.header("Main settings")
+    for field in MAIN_FIELDS:
+        render(field)
+    with st.expander("Advanced settings", expanded=False):
+        st.caption(
+            "These barely changed the result on the annotated images; the preset values "
+            "are fine for normal use."
+        )
+        for group, sliders in SLIDERS.items():
+            fields = GROUP_EXTRAS.get(group, []) + [spec[0] for spec in sliders]
+            fields = [f for f in fields if f not in MAIN_FIELDS]
+            if fields:
+                st.markdown(f"**{group}**")
+                for field in fields:
+                    render(field)
 
 try:
     sigmas = tuple(float(v) for v in st.session_state["p_ridge_sigmas_nm"].split(",") if v.strip())
@@ -312,7 +308,6 @@ except ValueError:
     st.stop()
 params = gc.Params(
     **{field: st.session_state[f"p_{field}"] for group in SLIDERS.values() for field, *_ in group},
-    **{field: st.session_state[f"p_{field}"] for field in SELECTS},
     ridge_sigmas_nm=list(sigmas) or [8.0],
 )
 
@@ -321,14 +316,23 @@ if sem.pixel_size_nm is None:
     st.error(f"{name} has no 'Image Pixel Size' in its metadata; sizes in nm are impossible.")
     st.stop()
 px = sem.pixel_size_nm
-pre = stage_pre(name, params.background_sigma_nm, params.denoise, params.denoise_strength)
+pre = stage_pre(name, params.background_sigma_nm, params.denoise_strength)
 bmap = stage_bmap(
     pre, px, tuple(params.ridge_sigmas_nm), params.clip_bright_percentile, params.ridge_weight
 )
 seeds, raw, labels = stage_segment(pre, bmap, px, params.model_dump_json())
 grains = gc.measure_grains(labels, px)
-result = gc.Result(sem, params, pre, bmap, seeds, raw, labels, grains, {})
-summary = gc.summarize(grains, labels, px, gc.intercept_grain_size(bmap, px, params))
+auto_summary = gc.summarize(grains, labels, px, gc.intercept_grain_size(bmap, px, params))
+auto_summary.update(
+    {"preset": preset, "preset_ratio": auto_choice(name)[1] if choice == "auto" else None}
+)
+auto_result = gc.Result(sem, params, pre, bmap, seeds, raw, labels, grains, auto_summary)
+
+# Manual edits are replayed on top of the automatic result on every run, so they survive
+# slider changes; edits that no longer apply are reported, not silently dropped.
+edits = st.session_state.setdefault("edits", {}).setdefault(name, [])
+result, edit_warnings = gc.apply_edits(auto_result, edits)
+grains, summary, labels = result.grains, result.summary, result.labels
 
 ann_path = find_annotation(name)
 points = read_points(ann_path, sem.image.shape, sem.image.shape[1]) if ann_path else None
@@ -341,12 +345,18 @@ cols[2].metric(
     "Mean area", f"{summary.get('mean_area_planimetric_nm2', float('nan')) / 1e3:.1f}e3 nm²"
 )
 cols[3].metric("Mean eq. diameter", f"{summary.get('mean_eq_diameter_nm', float('nan')):.0f} nm")
-cols[4].metric("Seeds / before merge", f"{int(seeds.max())} / {int(raw.max())}")
+cols[4].metric(
+    "Manual edits",
+    len(edits),
+    help=f"Automatic result: {auto_summary['n_grains']} grains. Edits are kept per image.",
+)
 if not summary.get("reliable", True):
     st.warning(
         f"Only about {summary['n_planimetric']:.0f} grains in this image: too few for a reliable "
         "mean. Use a lower magnification for grain statistics."
     )
+for warning in edit_warnings:
+    st.warning(f"Edit skipped: {warning}")
 
 if points is not None:
     m = score(labels, points, px)
@@ -377,8 +387,23 @@ if points is not None:
 elif ann_folder is not None:
     st.caption(f"No annotation file for {name} in {ann_folder}")
 
+
+def undo_edit() -> None:
+    if st.session_state["edits"].get(name):
+        st.session_state["edits"][name].pop()
+
+
+def clear_edits() -> None:
+    st.session_state["edits"][name] = []
+    st.session_state.setdefault("pending_merge", {}).pop(name, None)
+
+
+def load_saved_edits(saved: list[dict]) -> None:
+    st.session_state["edits"][name] = [dict(e) for e in saved]
+
+
 tab_overlay, tab_stages, tab_hist, tab_table = st.tabs(
-    ["Overlay", "Stages", "Histograms", "Grains"]
+    ["Overlay and editing", "Stages", "Histograms", "Grains"]
 )
 with tab_overlay:
     toggles = st.columns(3)
@@ -387,21 +412,89 @@ with tab_overlay:
     show_clicks = toggles[2].toggle(
         "My clicks (cyan, unsure yellow)", value=points is not None, disabled=points is None
     )
+    mode = st.radio(
+        "Clicking on the image will",
+        ["do nothing", "merge two grains", "split a grain"],
+        horizontal=True,
+        key="click_mode",
+        help="Merge: click two neighbouring grains (removes the boundary between them). "
+        "Split: click inside a grain where a second grain should be; the new boundary follows "
+        "the darkest groove between your click and the far side of the grain.",
+    )
+    pending = st.session_state.setdefault("pending_merge", {}).get(name)
+    if mode != "merge two grains" and pending is not None:
+        st.session_state["pending_merge"].pop(name)
+        pending = None
+
     image = gc.overlay(result, show_seeds=show_seeds, show_outlines=show_outlines)
     if show_clicks and points is not None:
         sure = points[~points["unsure"]]
         unsure = points[points["unsure"]]
         gc.draw_dots(image, sure["y"].round(), sure["x"].round(), (0, 220, 255), radius=3)
         gc.draw_dots(image, unsure["y"].round(), unsure["x"].round(), (255, 220, 0), radius=3)
-    st.image(image, width="stretch")
-    st.caption("Green: grains counted. Orange: grains cut by the image edge (counted as half).")
+    if pending is not None:
+        gc.draw_dots(image, [pending[0]], [pending[1]], (255, 0, 255), radius=5)
+        st.info("First grain selected (magenta). Now click the grain to merge it with.")
+
+    if mode == "do nothing" or image_coordinates is None:
+        if mode != "do nothing":
+            st.error("Click editing needs: pip install streamlit-image-coordinates")
+        st.image(image, width="stretch")
+    else:
+        click = image_coordinates(image, key=f"click_{name}", width="stretch", cursor="crosshair")
+        if click and click != st.session_state.get("last_click"):
+            st.session_state["last_click"] = click
+            scale = sem.image.shape[1] / click.get("width", sem.image.shape[1])
+            y = min(int(click["y"] * scale), sem.image.shape[0] - 1)
+            x = min(int(click["x"] * scale), sem.image.shape[1] - 1)
+            if mode == "split a grain":
+                edits.append({"op": "split", "point": [y, x]})
+            elif pending is None:
+                st.session_state["pending_merge"][name] = (y, x)
+            else:
+                edits.append({"op": "merge", "points": [list(pending), [y, x]]})
+                st.session_state["pending_merge"].pop(name)
+            st.rerun()
+    st.caption(
+        "Green: grains counted. Orange: grains cut by the image edge (counted as half). "
+        "Magenta: first grain of a merge."
+    )
+
+    buttons = st.columns(3)
+    buttons[0].button("Undo last edit", on_click=undo_edit, disabled=not edits)
+    buttons[1].button("Clear all edits", on_click=clear_edits, disabled=not edits)
+
+    st.subheader("Save as reviewed (training log)")
+    previous = training_log.find_review(log_dir, sem)
+    if previous is not None:
+        meta = previous.meta
+        st.caption(
+            f"Saved before: {meta['saved_at']} by {meta['user']}, {len(meta['edits'])} edits, "
+            f"{meta['n_grains_after_edits']} grains."
+        )
+        if meta["edits"] and not edits:
+            st.button("Load the saved edits", on_click=load_saved_edits, args=(meta["edits"],))
+    note = st.text_input(
+        "Note (optional)", key=f"note_{name}", placeholder="e.g. unsure about the top-left grains"
+    )
+    if st.button(
+        "Save as reviewed",
+        type="primary",
+        help="Store this image's final grain map, your edits and the settings in the training "
+        f"log ({log_dir}). Saving again replaces the earlier review of this image. Save also "
+        "when no edit was needed: confirmed results are training data too.",
+    ):
+        folder = training_log.save_review(
+            log_dir, result, edits, edit_warnings, raw_n_grains=auto_summary["n_grains"], note=note
+        )
+        st.success(f"Saved to {folder}")
 with tab_stages:
     left, right = st.columns(2)
     left.image(pre, caption="Preprocessed", clamp=True, width="stretch")
     right.image(bmap, caption="Boundary map (bright = boundary)", clamp=True, width="stretch")
     raw_view = gc.Result(sem, params, pre, bmap, seeds, raw, raw, gc.measure_grains(raw, px), {})
     left.image(gc.overlay(raw_view, show_seeds=True), caption="Before merging", width="stretch")
-    right.image(gc.overlay(result), caption="After merging", width="stretch")
+    right.image(gc.overlay(result), caption="Final (with your edits)", width="stretch")
 with tab_hist:
     interior = grains[~grains["touches_edge"]] if len(grains) else grains
     if len(interior):
@@ -411,7 +504,7 @@ with tab_hist:
             .rename(index=lambda iv: f"{iv.mid:.0f}")
             .rename_axis("eq. diameter (nm)"),
         )
-    st.write(pd.Series(summary).to_frame("value"))
+    st.dataframe(pd.Series(summary).astype(str).to_frame("value"), width="stretch")
 with tab_table:
     st.dataframe(grains, width="stretch")
 
