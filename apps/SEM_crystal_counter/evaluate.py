@@ -5,6 +5,7 @@ Annotation files are the Results tables saved from Fiji (see ANNOTATION_GUIDE.md
 X and Y columns in pixels. A `Counter` column is optional: counter 0 = clear grain,
 1 = unsure (unsure points are reported separately).
 
+    python evaluate.py "D:/.../SEM images" "D:/.../annotations"    # auto preset per image
     python evaluate.py "D:/.../SEM images" "D:/.../annotations" --preset smooth
     python evaluate.py "D:/.../SEM images" "D:/.../annotations" --params p.json
 
@@ -27,7 +28,7 @@ from pathlib import Path
 import grain_core as gc
 import numpy as np
 import pandas as pd
-from run_batch import load_params
+from run_batch import load_params, run_one
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def main() -> None:
     )
     parser.add_argument("images")
     parser.add_argument("annotations")
-    parser.add_argument("--preset", default="smooth", choices=sorted(gc.PRESETS))
+    parser.add_argument("--preset", default="auto", choices=["auto", *sorted(gc.PRESETS)])
     parser.add_argument("--params")
     parser.add_argument(
         "--legacy", action="store_true", help="Also score the old notebook pipeline"
@@ -124,7 +125,7 @@ def main() -> None:
             continue
         sem = gc.load_sem_tiff(image_path)
         points = read_points(ann, sem.image.shape, sem.image.shape[1])
-        result = gc.analyze(sem, params)
+        result = run_one(sem, params)
         rows.append(
             {"image": stem, "method": "new", **score(result.labels, points, sem.pixel_size_nm)}
         )

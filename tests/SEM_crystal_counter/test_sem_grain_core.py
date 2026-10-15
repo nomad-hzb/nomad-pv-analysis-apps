@@ -140,3 +140,14 @@ def test_featureless_image_does_not_crash(make_tiff):
     sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
     result = analyze(sem, Params(min_grain_diameter_nm=400.0))
     assert result.summary["n_grains"] <= 1
+
+
+def test_auto_preset_picks_smooth_for_plain_grains(make_tiff, voronoi_film):
+    from grain_core import AUTO_RATIO_THRESHOLD, analyze_auto
+
+    image, truth = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    result = analyze_auto(sem)
+    assert result.summary["preset"] == "smooth"
+    assert result.summary["preset_ratio"] <= AUTO_RATIO_THRESHOLD
+    assert abs(result.summary["n_grains"] - truth.max()) <= 0.2 * truth.max()

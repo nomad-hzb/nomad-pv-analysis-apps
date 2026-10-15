@@ -383,11 +383,13 @@ class Result:
     summary: dict
 
 
-def analyze(sem: SemImage, params: Params) -> Result:
+def analyze(sem: SemImage, params: Params, pre: np.ndarray | None = None) -> Result:
+    """Run the full pipeline. `pre` may pass an already preprocessed image (same params)."""
     if sem.pixel_size_nm is None:
         raise ValueError(f"{sem.name}: pixel size unknown; set it explicitly before analysis")
     px = sem.pixel_size_nm
-    pre = preprocess(sem.image, px, params)
+    if pre is None:
+        pre = preprocess(sem.image, px, params)
     bmap = boundary_map(pre, px, params)
     seeds = find_seeds(bmap, px, params)
     raw_labels = watershed(bmap, seeds, params)
@@ -396,6 +398,28 @@ def analyze(sem: SemImage, params: Params) -> Result:
     summary = summarize(grains, labels, px, intercept_grain_size(bmap, px, params))
     summary.update({"image": sem.name, "pixel_size_nm": px, "n_seeds": int(seeds.max())})
     return Result(sem, params, pre, bmap, seeds, raw_labels, labels, grains, summary)
+
+
+AUTO_RATIO_THRESHOLD = 3.0
+"""Grain-count ratio smooth/striped above which an image is treated as striped. On the 47
+reference images smooth films gave 1.6-2.6 and striped films 3.2-27.8: grains with internal
+terraces fall apart under the smooth preset, while plain grains barely change."""
+
+
+def analyze_auto(sem: SemImage) -> Result:
+    """Analyze with both presets and keep the one that fits the film type.
+
+    Both presets share the preprocessing, so this costs less than two full runs. The chosen
+    preset and the ratio are recorded in the summary so a borderline call is visible.
+    """
+    smooth, striped = PRESETS["smooth"], PRESETS["striped"]
+    pre = preprocess(sem.image, sem.pixel_size_nm, smooth) if sem.pixel_size_nm else None
+    results = {"smooth": analyze(sem, smooth, pre), "striped": analyze(sem, striped, pre)}
+    ratio = results["smooth"].summary["n_grains"] / max(results["striped"].summary["n_grains"], 1)
+    chosen = "striped" if ratio > AUTO_RATIO_THRESHOLD else "smooth"
+    result = results[chosen]
+    result.summary.update({"preset": chosen, "preset_ratio": ratio})
+    return result
 
 
 def overlay(result: Result, show_seeds: bool = False) -> np.ndarray:
