@@ -76,3 +76,10 @@ def test_summarize_field_values_row_indices_map_back_to_dataframe():
     summary = summarize_field_values(df, "glovebox")
     row = next(r for r in summary if r["value"] == "HySpinBox")
     assert row["row_indices"] == [0, 1]
+
+
+def test_get_string_columns_keeps_a_text_column_with_missing_cells():
+    df = pd.DataFrame(
+        {"solvent": ["DMF", float("nan"), "DMSO"], "volume": [1.0, float("nan"), 2.0]}
+    )
+    assert get_string_columns(df) == ["solvent"]

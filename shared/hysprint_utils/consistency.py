@@ -41,10 +41,12 @@ def get_string_columns(
     for column in df.columns:
         if column in exclude_columns:
             continue
-        if not pd.api.types.is_string_dtype(df[column]):
-            continue
+        # judge the type on the filled cells only: one NaN (a field some rows lack) would
+        # otherwise make a text column look non-text
         series = df[column].replace("", None).dropna()
-        if series.empty or series.nunique() > max_unique:
+        if series.empty or not pd.api.types.is_string_dtype(series):
+            continue
+        if series.nunique() > max_unique:
             continue
         try:
             if series.astype(str).str.startswith("../uploads/").any():

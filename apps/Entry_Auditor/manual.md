@@ -2,8 +2,8 @@
 
 ## What the app is for
 
-Check how consistently the text fields of your NOMAD entries are filled in (for example the
-spelling of a material, solvent or tool name across all the samples of a batch), and correct a
+Check how consistently the fields of your NOMAD entries are filled in (for example the
+spelling of a material, solvent or tool name, or a concentration, across all the samples of a batch), and correct a
 wrong value in all entries at once instead of editing every entry by hand.
 
 **Corrections change entries in NOMAD.** Read the section on corrections before you use them.
@@ -14,7 +14,8 @@ The batches you select. For every sample in them the app reads the entries of 24
 Basic Sample, ALD, Annealing, Blade Coating, Chemical, Cleaning, Deposition, Dip Coating,
 Electrode, Environment, Evaporation, Experimental Plan, Ink, Inkjet Printing, Laser Scribing,
 Process, Sample, Slot Die Coating, Solution, Spin Coating, SpinCoating Recipe, Storage and
-Substrate. Only text fields are audited; identifiers and NOMAD's own schema references are left
+Substrate. Text and number fields are audited (a number is shown as text, for example a
+concentration of 1.42); yes/no flags are not; identifiers and NOMAD's own schema references are left
 out.
 
 ## Tab *Audit*
@@ -63,8 +64,10 @@ the correction log. *Refresh* reloads it and *Export CSV* gives a `corrections.c
 
 ## Known limits
 
-- Only text fields are audited, and a correction replaces whole values (it does not search
-  inside longer texts).
+- Text and number fields are audited, and a correction replaces whole values (it does not search
+  inside longer texts). A number field only accepts a number as its corrected value and is
+  written back as a number. A field with more than 50 different values is not listed. A field that only some entries
+  have (for example the fourth solute) is listed too; the other entries count as empty.
 - A correction needs write access to the uploads of the entries; entries you cannot change are
   reported as errors.
 - The demo data cannot be corrected.
