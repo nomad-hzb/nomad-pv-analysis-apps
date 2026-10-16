@@ -123,7 +123,9 @@ class AnalysisPanel:
             tooltip="'automatic' chooses smooth or striped per image from its grain counts.",
         )
         self._analyse_btn = WidgetFactory.create_button("Analyse new images", "primary")
-        self._reanalyse_btn = WidgetFactory.create_button("Re-analyse all with this preset")
+        self._reanalyse_btn = WidgetFactory.create_button(
+            "Re-analyse all with this preset", min_width=False
+        )
         self._analyse_btn.on_click(lambda _b: self.analyse(only_new=True))
         self._reanalyse_btn.on_click(lambda _b: self.analyse(only_new=False))
         self._progress = widgets.IntProgress(value=0, min=0, max=1, layout={"width": "300px"})
@@ -188,7 +190,7 @@ class AnalysisPanel:
                 ipydisplay(widgets.HTML("<i>No images loaded yet.</i>"))
                 return
             ipydisplay(widgets.HTML("<h4>Images</h4>"))
-            ipydisplay(images.round(3))
+            ipydisplay(_readable(images, IMAGE_COLUMNS))
             unreliable = images[images.get("reliable", True) == False]  # noqa: E712
             if len(unreliable):
                 ipydisplay(
@@ -200,7 +202,7 @@ class AnalysisPanel:
                 )
             if not samples.empty:
                 ipydisplay(widgets.HTML("<h4>Samples</h4>"))
-                ipydisplay(samples.round(3))
+                ipydisplay(_readable(samples, SAMPLE_COLUMNS))
         with self._plots:
             self._plots.clear_output(wait=True)
             if not samples.empty:
@@ -239,11 +241,14 @@ class ReviewPanel:
                 "The program finds the grains; fix mistakes by merging or splitting.",
                 "Click the centre of every grain; the program finds the borders.",
             ],
+            style={"button_width": "220px"},
         )
-        self._action = widgets.ToggleButtons(description="A click")
+        self._action = widgets.ToggleButtons(description="A click", style={"button_width": "160px"})
         self._outlines = widgets.Checkbox(value=True, description="Grain outlines", indent=False)
         self._seeds = widgets.Checkbox(value=False, description="Seeds", indent=False)
-        self._start_btn = WidgetFactory.create_button("Start from the automatic grains")
+        self._start_btn = WidgetFactory.create_button(
+            "Start from the automatic grains", min_width=False
+        )
         self._undo_btn = WidgetFactory.create_button("Undo")
         self._clear_btn = WidgetFactory.create_button("Clear corrections", "warning")
         self._note = widgets.Text(placeholder="Note (optional)", layout={"width": "320px"})
@@ -405,6 +410,43 @@ class ReviewPanel:
             ErrorHandler.log_error("Could not save the review", exc, output_widget=self._messages)
             return
         ErrorHandler.log_success(f"Saved {name} to {folder}", output_widget=self._messages)
+
+
+# Columns shown on the page, with readable names; the downloads hold every column.
+IMAGE_COLUMNS = {
+    "image": "Image",
+    "sample": "Sample",
+    "preset": "Preset",
+    "n_grains": "Grains",
+    "mean_eq_diameter_nm": "Mean diameter (nm)",
+    "grains_per_um2": "Grains per µm²",
+    "hole_area_fraction": "Hole area",
+    "reliable": "Reliable",
+    "corrected": "Corrected",
+    "status": "Status",
+}
+SAMPLE_COLUMNS = {
+    "sample": "Sample",
+    "n_images": "Images used",
+    "n_images_flagged": "Images left out",
+    "n_grains_total": "Grains",
+    "mean_eq_diameter_nm_mean": "Mean diameter (nm)",
+    "mean_eq_diameter_nm_std": "± between images",
+    "grains_per_um2_mean": "Grains per µm²",
+    "magnification_spread": "Magnification spread",
+}
+
+
+def _readable(table, columns: dict):
+    """The listed columns that exist, renamed and rounded, without the index."""
+    shown = table[[c for c in columns if c in table.columns]].rename(columns=columns)
+    numeric = shown.select_dtypes("number").columns
+    shown[numeric] = shown[numeric].round(2)
+    if "Hole area" in shown:
+        shown["Hole area"] = shown["Hole area"].map(
+            lambda v: f"{100 * v:.1f}%" if v == v and v is not None else ""
+        )
+    return shown.style.hide(axis="index").format(precision=2, na_rep="")
 
 
 def _blank():

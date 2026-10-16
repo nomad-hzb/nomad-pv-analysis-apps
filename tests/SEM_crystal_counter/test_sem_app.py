@@ -110,3 +110,23 @@ def test_app_demo_load_end_to_end(monkeypatch):
     assert len(sem_app._dm.entries) == 3
     assert all(e.analysed for e in sem_app._dm.entries.values())
     assert list(sem_app._review._image.options) == sem_app._dm.names
+
+
+def test_app_still_works_when_nomad_is_unreachable(monkeypatch):
+    class FakeAuth:
+        def __init__(self, url_base, api_endpoint):
+            self.api_client = SimpleNamespace(get_api_url=lambda: "https://e.test/api")
+            self.current_token = "expired"
+
+        def authenticate_with_token(self, token):
+            pass
+
+    def refuse(url, token, on_load):
+        raise PermissionError("401 Unauthorized")
+
+    monkeypatch.setattr(app_module, "AuthenticationManager", FakeAuth)
+    monkeypatch.setattr(gui, "create_batch_selection", refuse)
+    sem_app = app_module.SEMApp("https://e.test", "/api", "expired")
+    assert "Could not get the batch list" in sem_app._sources.children[0].value
+    sem_app._on_demo_load(None)  # demo (and upload) still work
+    assert len(sem_app._dm.entries) == 3

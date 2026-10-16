@@ -39,9 +39,8 @@ class SEMApp:
             description="Load demo data", button_style="warning", icon="database"
         )
         self._demo_btn.on_click(self._on_demo_load)
-        self._batch_panel = gui.BatchFilterPanel(self._url, self._token, self._on_batch_load)
         self._upload_panel = gui.UploadPanel(self._on_upload)
-        self._sources = widgets.Tab(children=[self._batch_panel.widget, self._upload_panel.widget])
+        self._sources = widgets.Tab(children=[self._nomad_panel(), self._upload_panel.widget])
         self._sources.titles = ("From NOMAD", "Upload TIFFs")
 
         self._analysis = gui.AnalysisPanel(self._dm)
@@ -64,6 +63,19 @@ class SEMApp:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+    def _nomad_panel(self) -> widgets.Widget:
+        """The batch selector, or the reason it is unavailable. Upload and demo do not need
+        NOMAD, so a failing batch query (expired token, no connection) must not stop them."""
+        try:
+            return gui.BatchFilterPanel(self._url, self._token, self._on_batch_load).widget
+        except Exception as exc:
+            logger.warning("NOMAD batch list unavailable: %s", exc)
+            return widgets.HTML(
+                "<p style='color:#b00'>Could not get the batch list from NOMAD "
+                f"({type(exc).__name__}). Check your login; uploading TIFFs and the demo "
+                "still work.</p>"
+            )
+
     def _on_demo_load(self, _b) -> None:
         self._load(lambda: self._dm.load_offline(DEMO_FIXTURE_PATH), "demo images")
 
