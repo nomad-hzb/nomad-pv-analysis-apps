@@ -11,7 +11,6 @@ include = ["*.py", "*.pyi", "*.ipynb", "**/pyproject.toml"]
 # gaps"). Everything else is linted and format-checked in CI.
 extend-exclude = [
     "apps/Electrochemical_analysis",
-    "apps/SEM_crystal_counter",
     "apps/XPS-Automated",
     "Learning",
 ]

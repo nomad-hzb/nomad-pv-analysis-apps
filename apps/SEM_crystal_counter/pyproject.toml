@@ -1,7 +1,7 @@
 [project]
 name = "sem-crystal-counter"
-version = "0.1.0"
-description = "HySPRINT SEM crystal counter app"
+version = "0.2.0"
+description = "Grain size analysis of top-view SEM images of perovskite films"
 requires-python = ">=3.10"
 dependencies = [
     "hysprint-utils",
@@ -11,6 +11,9 @@ dependencies = [
     "pillow>=10.0",
     "pydantic>=2.0",
     "scikit-image>=0.22",
+    "ipywidgets>=8.0",
+    "plotly>=5.0",
+    "anywidget>=0.9",  # go.FigureWidget needs it
 ]
 
 [project.optional-dependencies]

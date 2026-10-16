@@ -21,7 +21,16 @@ if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
 # Load order matters: later modules import earlier ones by bare name.
-for _name in ("grain_core", "run_batch", "evaluate", "training_log", "data_manager"):
+for _name in (
+    "grain_core",
+    "run_batch",
+    "evaluate",
+    "training_log",
+    "data_manager",
+    "plot_manager",
+    "gui_components",
+    "app",
+):
     _spec = importlib.util.spec_from_file_location(_name, APP_DIR / f"{_name}.py")
     _module = importlib.util.module_from_spec(_spec)
     sys.modules[_name] = _module
