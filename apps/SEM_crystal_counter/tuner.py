@@ -188,10 +188,9 @@ def clicked_result(name: str, params_json: str, clicks_json: str):
 def _auto_choice_cached(name: str, stamp: tuple, core_version: str) -> tuple[str, float]:
     # Same decision as gc.analyze_auto, but through the stage caches: only grain counts are
     # needed, and the chosen preset's segmentation is then already cached for display.
-    counts = {}
-    for preset_name, p in gc.PRESETS.items():
-        counts[preset_name] = int(segment(name, p)[2].max())  # labels are 1..N, no gaps
-    return gc.choose_preset(counts["smooth"], counts["striped"])
+    smooth = int(segment(name, gc.PRESETS["smooth"])[2].max())  # labels are 1..N, no gaps
+    probe = int(segment(name, gc.CLASSIFIER_PROBE)[2].max())
+    return gc.choose_preset(smooth, probe)
 
 
 def segment(name: str, p: gc.Params):

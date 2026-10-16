@@ -87,7 +87,7 @@ class Params(BaseModel):
 # VP401_05, VP412_05 (striped); see evaluate.py. The defaults of Params are the smooth preset.
 PRESETS: dict[str, Params] = {
     "smooth": Params(),
-    "striped": Params(ridge_sigmas_nm=[8.0, 24.0], min_grain_diameter_nm=300.0),
+    "striped": Params(ridge_sigmas_nm=[8.0, 24.0], min_grain_diameter_nm=250.0),
 }
 
 
@@ -635,9 +635,15 @@ def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
 
 
 AUTO_RATIO_THRESHOLD = 3.0
-"""Grain-count ratio smooth/striped above which an image is treated as striped. On the 47
+"""Grain-count ratio smooth/probe above which an image is treated as striped. On the 47
 reference images smooth films gave 1.6-2.6 and striped films 3.2-27.8: grains with internal
 terraces fall apart under the smooth preset, while plain grains barely change."""
+
+CLASSIFIER_PROBE = Params(ridge_sigmas_nm=[8.0, 24.0], min_grain_diameter_nm=300.0)
+"""Fixed setting whose grain count, compared with the smooth preset's, decides the film type.
+It is the striped preset the threshold was calibrated with, kept separate so the striped
+preset can be retuned without moving the decision (with the 250 nm preset as probe, VP411
+overlapped the smooth films)."""
 
 
 def choose_preset(n_smooth: int, n_striped: int) -> tuple[str, float]:
@@ -647,21 +653,29 @@ def choose_preset(n_smooth: int, n_striped: int) -> tuple[str, float]:
 
 
 def analyze_auto(sem: SemImage, pre: np.ndarray | None = None) -> Result:
-    """Analyze with both presets and keep the one that fits the film type.
+    """Analyze with the preset that fits the film type, decided by grain counts under the
+    smooth preset and CLASSIFIER_PROBE.
 
-    Both presets share the preprocessing, so this costs less than two full runs. The chosen
-    preset and the ratio are recorded in the summary so a borderline call is visible.
+    Everything shares the preprocessing. The chosen preset and the ratio are recorded in the
+    summary so a borderline call is visible.
     """
-    smooth, striped = PRESETS["smooth"], PRESETS["striped"]
+    smooth = PRESETS["smooth"]
     if pre is None and sem.pixel_size_nm:
         pre = preprocess(sem.image, sem.pixel_size_nm, smooth)
-    results = {"smooth": analyze(sem, smooth, pre), "striped": analyze(sem, striped, pre)}
-    chosen, ratio = choose_preset(
-        results["smooth"].summary["n_grains"], results["striped"].summary["n_grains"]
-    )
-    result = results[chosen]
+    smooth_result = analyze(sem, smooth, pre)
+    probe_count = count_grains(sem, CLASSIFIER_PROBE, pre)
+    chosen, ratio = choose_preset(smooth_result.summary["n_grains"], probe_count)
+    result = smooth_result if chosen == "smooth" else analyze(sem, PRESETS[chosen], pre)
     result.summary.update({"preset": chosen, "preset_ratio": ratio})
     return result
+
+
+def count_grains(sem: SemImage, params: Params, pre: np.ndarray) -> int:
+    """Number of grains a parameter set finds, without measuring them."""
+    px = sem.pixel_size_nm
+    bmap = boundary_map(pre, px, params)
+    labels = merge_regions(watershed(bmap, find_seeds(bmap, px, params), params), pre, px, params)
+    return int(labels.max())
 
 
 def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True) -> np.ndarray:
