@@ -19,6 +19,7 @@ from pathlib import Path
 
 import grain_core as gc
 import pandas as pd
+from grain_core import magnification_spread, summarize_samples  # noqa: F401 (re-exported)
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -43,56 +44,6 @@ def params_json(params: gc.Params | None) -> str:
     presets = {name: p.model_dump() for name, p in gc.PRESETS.items()}
     return json.dumps(
         {"auto_ratio_threshold": gc.AUTO_RATIO_THRESHOLD, "presets": presets}, indent=2
-    )
-
-
-def summarize_samples(images: pd.DataFrame) -> pd.DataFrame:
-    """Per-sample mean and spread across images (images are the replicates, not grains).
-
-    Images flagged as unreliable (too few grains, see grain_core.MIN_GRAINS_FOR_STATS) are
-    left out when the sample has any reliable image; n_images_flagged reports them.
-    """
-    cols = [
-        "grains_per_um2",
-        "mean_area_planimetric_nm2",
-        "mean_area_ml_nm2",
-        "median_area_nm2",
-        "mean_eq_diameter_nm",
-        "mean_intercept_nm",
-        "boundary_length_per_um2",
-    ]
-    if "reliable" in images:
-        has_reliable = images.groupby("sample")["reliable"].transform("any")
-        used = images[images["reliable"].astype(bool) | ~has_reliable]
-    else:
-        used = images
-    grouped = used.groupby("sample")
-    out = grouped[cols].agg(["mean", "std"])
-    out.columns = [f"{c}_{stat}" for c, stat in out.columns]
-    out.insert(0, "n_images", grouped.size())
-    out.insert(1, "n_images_flagged", images.groupby("sample").size() - grouped.size())
-    out.insert(2, "n_grains_total", grouped["n_grains"].sum())
-    if "pixel_size_nm" in used:
-        out = out.join(magnification_spread(used))
-    return out.reset_index()
-
-
-def magnification_spread(images: pd.DataFrame) -> pd.DataFrame:
-    """Per sample: how much the mean grain area differs between magnifications.
-
-    A sample's grains do not change with zoom, so the mean area per magnification should agree;
-    the spread ((max - min) / mean of the per-magnification means) is an accuracy check that
-    needs no annotation. NaN when a sample was imaged at a single magnification.
-    """
-    mag = images.assign(magnification=images["pixel_size_nm"].round(1))
-    per_mag = mag.groupby(["sample", "magnification"])["mean_area_planimetric_nm2"].mean()
-    stats = per_mag.groupby("sample").agg(["count", "min", "max", "mean"])
-    spread = (stats["max"] - stats["min"]) / stats["mean"]
-    return pd.DataFrame(
-        {
-            "n_magnifications": stats["count"],
-            "magnification_spread": spread.where(stats["count"] > 1),
-        }
     )
 
 

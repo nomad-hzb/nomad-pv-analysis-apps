@@ -13,9 +13,15 @@ from scipy.spatial import cKDTree
 from skimage import segmentation
 
 APP_DIR = Path(__file__).parent.parent.parent / "apps" / "SEM_crystal_counter"
+_SHARED_DIR = Path(__file__).parent.parent.parent / "shared"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+# shared/ first, so hysprint_utils is this checkout's and not an older installed copy.
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
 
 # Load order matters: later modules import earlier ones by bare name.
-for _name in ("grain_core", "run_batch", "evaluate", "training_log"):
+for _name in ("grain_core", "run_batch", "evaluate", "training_log", "data_manager"):
     _spec = importlib.util.spec_from_file_location(_name, APP_DIR / f"{_name}.py")
     _module = importlib.util.module_from_spec(_spec)
     sys.modules[_name] = _module
