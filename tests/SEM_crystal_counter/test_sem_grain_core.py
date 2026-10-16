@@ -343,3 +343,53 @@ def test_training_log_stores_clicks_as_imagej_table(make_tiff, tmp_path):
     assert meta["grain_source"] == "clicks" and meta["n_clicks"] == 2
     save_review(tmp_path, result, [])  # re-saved without clicks: no stale points file
     assert not (folder / "points.csv").exists()
+
+
+def test_counter_two_is_a_hole_not_a_grain(tmp_path):
+    from evaluate import read_points
+
+    csv = tmp_path / "img_Results.csv"
+    csv.write_text(" ,X,Y,Counter\n1,10,10,0\n2,30,10,1\n3,50,10,2\n")
+    points = read_points(csv, (60, 80), 80)
+    assert list(points["unsure"]) == [False, True, False]
+    assert list(points["hole"]) == [False, False, True]
+
+
+def test_score_ignores_hole_clicks_and_hole_regions():
+    labels = np.array([[1, 1, 2, 2, 3, 3]], dtype=np.int32)
+    points = pd.DataFrame(
+        {"x": [0, 2, 4], "y": [0, 0, 0], "unsure": [False] * 3, "hole": [False, False, True]}
+    )
+    metrics = score(labels, points, 1.0)
+    assert metrics["n_true"] == 2 and metrics["n_holes"] == 1
+    assert metrics["n_pred"] == 2  # region 3 holds only the hole click: not a grain
+    assert metrics["split_rate"] == 0.0
+    assert metrics["f1"] == pytest.approx(1.0)
+
+
+def test_hole_clicks_are_left_out_of_the_grains(make_tiff, voronoi_film):
+    from grain_core import result_from_points
+
+    image, truth = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    auto = analyze(sem, PRESETS["smooth"])
+    centres = [tuple(np.argwhere(truth == lab).mean(axis=0)) for lab in range(1, truth.max() + 1)]
+    with_hole = result_from_points(auto, centres[1:], holes=[centres[0]])
+    assert with_hole.summary["n_grains"] == truth.max() - 1
+    assert with_hole.summary["n_holes"] == 1
+    hole_fraction = (truth == 1).mean()
+    assert with_hole.summary["hole_area_fraction"] == pytest.approx(hole_fraction, abs=0.01)
+    assert (with_hole.labels[truth == 1] == 0).mean() > 0.95
+
+
+def test_training_log_writes_holes_with_imagej_counter(make_tiff, tmp_path):
+    from evaluate import read_points
+    from grain_core import result_from_points
+    from training_log import load_reviews, save_review
+
+    result = _two_grain_result(make_tiff)
+    clicked = result_from_points(result, [(30.0, 20.0)], holes=[(30.0, 60.0)])
+    folder = save_review(tmp_path, clicked, [], points=[(30.0, 20.0)], holes=[(30.0, 60.0)])
+    points = read_points(folder / "points.csv", (60, 80), 80)
+    assert list(points["hole"]) == [False, True]
+    assert load_reviews(tmp_path)[0].meta["n_hole_clicks"] == 1

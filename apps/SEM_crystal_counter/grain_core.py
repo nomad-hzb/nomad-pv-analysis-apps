@@ -422,10 +422,20 @@ per-sample statistics."""
 def summarize(
     grains: pd.DataFrame, labels: np.ndarray, pixel_size_nm: float, intercept_nm: float
 ) -> dict:
-    """Image-level statistics. Planimetric (Jeffries) density: interior + half the edge grains."""
+    """Image-level statistics. Planimetric (Jeffries) density: interior + half the edge grains.
+
+    Densities and the planimetric mean area use the film area, i.e. without holes (label 0,
+    only present when holes were clicked); hole_area_fraction reports the rest.
+    """
     image_area_um2 = labels.size * pixel_size_nm**2 / 1e6
+    hole_fraction = float((labels == 0).mean())
+    film_area_um2 = image_area_um2 * (1 - hole_fraction)
     if grains.empty:
-        return {"n_grains": 0, "image_area_um2": image_area_um2}
+        return {
+            "n_grains": 0,
+            "image_area_um2": image_area_um2,
+            "hole_area_fraction": hole_fraction,
+        }
     interior = grains[~grains["touches_edge"]]
     n_edge = int(grains["touches_edge"].sum())
     n_planimetric = len(interior) + 0.5 * n_edge
@@ -439,8 +449,9 @@ def summarize(
         "n_interior": len(interior),
         "n_edge": n_edge,
         "image_area_um2": image_area_um2,
-        "grains_per_um2": n_planimetric / image_area_um2,
-        "mean_area_planimetric_nm2": image_area_um2 * 1e6 / n_planimetric,
+        "hole_area_fraction": hole_fraction,
+        "grains_per_um2": n_planimetric / film_area_um2,
+        "mean_area_planimetric_nm2": film_area_um2 * 1e6 / n_planimetric,
         "mean_area_ml_nm2": mean_area_ml,
         "median_area_nm2": float(a.median()) if len(interior) else float("nan"),
         "area_weighted_mean_area_nm2": float((a**2).sum() / a.sum())
@@ -450,7 +461,7 @@ def summarize(
         if len(interior)
         else float("nan"),
         "mean_intercept_nm": intercept_nm,
-        "boundary_length_per_um2": boundary_um / image_area_um2,
+        "boundary_length_per_um2": boundary_um / film_area_um2,
         "n_planimetric": n_planimetric,
         "reliable": n_planimetric >= MIN_GRAINS_FOR_STATS,
     }
@@ -486,13 +497,21 @@ def analyze(sem: SemImage, params: Params, pre: np.ndarray | None = None) -> Res
     return Result(sem, params, pre, bmap, seeds, raw_labels, labels, grains, summary)
 
 
-def segment_from_points(bmap: np.ndarray, points) -> tuple[np.ndarray, np.ndarray]:
+def segment_from_points(bmap: np.ndarray, points, holes=()) -> tuple[np.ndarray, np.ndarray]:
     """Grains from user clicks: one seed per clicked (y, x) point, grown by a watershed on the
     boundary map until the seeds meet at the darkest grooves. Returns (seeds, labels).
 
     No merging step: the clicks decide what a grain is. A grain nobody clicked is absorbed by
-    its neighbours, so every grain needs a click (as in the point annotations).
+    its neighbours, so every grain needs a click (as in the point annotations). Hole clicks
+    grow their own region too, which is then set to 0 (no grain) so it neither joins a grain
+    nor counts as one. The returned seeds hold grain clicks only.
     """
+    hole_seeds = np.zeros(bmap.shape, dtype=bool)
+    for y, x in holes:
+        hole_seeds[
+            int(np.clip(round(y), 0, bmap.shape[0] - 1)),
+            int(np.clip(round(x), 0, bmap.shape[1] - 1)),
+        ] = True
     seeds = np.zeros(bmap.shape, dtype=np.int32)
     n = 0
     for y, x in points:
@@ -502,20 +521,25 @@ def segment_from_points(bmap: np.ndarray, points) -> tuple[np.ndarray, np.ndarra
             n += 1
             seeds[y, x] = n
     if n == 0:
-        return seeds, np.ones(bmap.shape, dtype=np.int32)
-    labels = segmentation.watershed(bmap, seeds).astype(np.int32)
+        return seeds, np.where(hole_seeds.any(), 0, 1) * np.ones(bmap.shape, dtype=np.int32)
+    markers = seeds.copy()
+    markers[hole_seeds & (seeds == 0)] = n + 1  # all holes share one marker label
+    labels = segmentation.watershed(bmap, markers).astype(np.int32)
+    labels[labels == n + 1] = 0
     return seeds, labels
 
 
-def result_from_points(result: Result, points) -> Result:
+def result_from_points(result: Result, points, holes=()) -> Result:
     """A Result whose grains come from user clicks instead of the automatic seeds and merging.
-    Reuses the preprocessing and boundary map of `result`."""
+    Reuses the preprocessing and boundary map of `result`. `holes` are (y, x) hole clicks."""
     px = result.sem.pixel_size_nm
-    seeds, labels = segment_from_points(result.bmap, points)
+    seeds, labels = segment_from_points(result.bmap, points, holes)
     grains = measure_grains(labels, px)
     summary = summarize(grains, labels, px, result.summary.get("mean_intercept_nm", float("nan")))
     summary.update({k: v for k, v in result.summary.items() if k not in summary})
-    summary.update({"grain_source": "clicks", "n_seeds": int(seeds.max())})
+    summary.update(
+        {"grain_source": "clicks", "n_seeds": int(seeds.max()), "n_holes": len(list(holes))}
+    )
     return Result(
         result.sem, result.params, result.pre, result.bmap, seeds, labels, labels, grains, summary
     )
@@ -650,6 +674,9 @@ def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True
         on_edge = np.isin(lab, edge_ids[edge_ids > 0]) & bounds
         rgb[bounds & ~on_edge] = (40, 230, 60)
         rgb[on_edge] = (255, 150, 0)
+    holes = result.labels == 0
+    if holes.any():  # clicked holes: tint red
+        rgb[holes] = (0.55 * rgb[holes] + 0.45 * np.array([220, 30, 30])).astype(np.uint8)
     if show_seeds:
         ys, xs = np.nonzero(result.seeds)
         draw_dots(rgb, ys, xs, (255, 40, 40), radius=1)

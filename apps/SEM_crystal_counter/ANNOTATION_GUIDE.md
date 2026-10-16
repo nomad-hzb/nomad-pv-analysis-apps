@@ -17,6 +17,9 @@ You do not need to trace boundaries.
 - Do not click inside the info banner at the bottom.
 - If you cannot decide whether something is one grain or two, use the "unsure" counter
   (step 3). Unsure points are reported separately and do not count against the algorithm.
+- **Holes** (pinholes, voids: dark spots where there is no crystal) get counter **2**. They
+  are not counted as grains, and in the tuner's click mode their area is reported as the hole
+  area fraction.
 
 ## Steps
 
@@ -33,7 +36,7 @@ You do not need to trace boundaries.
    - Type: **Dot** (or Circle), Color: something visible (yellow or cyan), Size: Medium
    - Tick **"Label points"** so you can see the numbering
    - **Counter**: leave it at **0** for normal grains. When you meet an unsure grain, switch
-     the Counter dropdown to **1**, click it, then switch back to 0.
+     the Counter dropdown to **1**, click it, then switch back to 0. For a hole use **2**.
 
 4. **Click once inside each grain.**
    - Zoom: `+` and `-` keys (or the mouse wheel with Ctrl). Pan: hold the **space bar** and

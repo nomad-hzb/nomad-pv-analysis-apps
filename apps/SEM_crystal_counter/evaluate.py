@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 
 def read_points(path: Path, image_shape: tuple[int, int], full_width: int) -> pd.DataFrame:
-    """Fiji Results CSV -> DataFrame[x, y, unsure], restricted to the image above the banner.
+    """Fiji Results CSV -> DataFrame[x, y, unsure, hole], restricted to the image above the
+    banner. Counter 0 = grain, 1 = unsure grain, 2 = hole (not a grain); no Counter column
+    means all grains.
 
     full_width is the TIFF width; a point beyond it means Fiji still had a scale set and saved
     calibrated units instead of pixels.
@@ -43,11 +45,13 @@ def read_points(path: Path, image_shape: tuple[int, int], full_width: int) -> pd
     cols = {c.strip().lower(): c for c in table.columns}
     if "x" not in cols or "y" not in cols:
         raise ValueError(f"{path.name}: needs X and Y columns, found {list(table.columns)}")
+    counter = table[cols["counter"]].astype(int) if "counter" in cols else 0
     points = pd.DataFrame(
         {
             "x": table[cols["x"]].astype(float),
             "y": table[cols["y"]].astype(float),
-            "unsure": table[cols["counter"]].astype(int) > 0 if "counter" in cols else False,
+            "unsure": counter == 1,
+            "hole": counter == 2,
         }
     )
     if len(points) and points["x"].max() > full_width:
@@ -69,11 +73,25 @@ def annotation_stem(file_name: str) -> str | None:
 
 
 def score(labels: np.ndarray, points: pd.DataFrame, pixel_size_nm: float) -> dict:
+    """Hole clicks (counter 2) are not grains: they do not count as annotated grains, and a
+    predicted region holding only hole clicks is neither a grain nor a fragment."""
+    holes = points["hole"].to_numpy() if "hole" in points else np.zeros(len(points), bool)
+    hole_pts, points = points[holes], points[~holes]
     rows = np.clip(points["y"].round().astype(int), 0, labels.shape[0] - 1)
     cols = np.clip(points["x"].round().astype(int), 0, labels.shape[1] - 1)
     hit = labels[rows.to_numpy(), cols.to_numpy()]
     clicks_per_region = np.bincount(hit, minlength=labels.max() + 1)[1:]
-    n_pred = int((np.bincount(labels.ravel())[1:] > 0).sum())
+    present = np.bincount(labels.ravel(), minlength=labels.max() + 1)[1:] > 0
+    hole_hit = labels[
+        np.clip(hole_pts["y"].round().astype(int), 0, labels.shape[0] - 1).to_numpy(),
+        np.clip(hole_pts["x"].round().astype(int), 0, labels.shape[1] - 1).to_numpy(),
+    ]
+    hole_region = np.zeros_like(present)
+    hole_region[hole_hit[hole_hit > 0] - 1] = True
+    hole_region &= clicks_per_region == 0  # a hole inside a clicked grain stays that grain
+    present &= ~hole_region
+    clicks_per_region = np.where(present, clicks_per_region, -1)  # -1: not a grain region
+    n_pred = int(present.sum())
     sure = ~points["unsure"].to_numpy()
     single = (hit > 0) & (clicks_per_region[np.maximum(hit - 1, 0)] == 1)  # label 0 = no region
     # A region "matches" when exactly one click falls in it. Precision penalises fragments
@@ -87,6 +105,7 @@ def score(labels: np.ndarray, points: pd.DataFrame, pixel_size_nm: float) -> dic
     return {
         "n_true": len(points),
         "n_true_unsure": int((~sure).sum()),
+        "n_holes": len(hole_pts),
         "n_pred": n_pred,
         "split_rate": float((clicks_per_region == 0).sum() / max(n_pred, 1)),
         "merge_rate": float((clicks_per_region >= 2).sum() / max(n_pred, 1)),

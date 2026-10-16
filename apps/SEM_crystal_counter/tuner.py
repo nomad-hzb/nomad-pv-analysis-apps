@@ -175,9 +175,13 @@ def final_result(name: str, params_json: str, edits_json: str):
 
 @st.cache_data(max_entries=64, show_spinner=False)
 def clicked_result(name: str, params_json: str, clicks_json: str):
-    """Grains grown from the user's clicks on the current boundary map."""
+    """Grains grown from the user's clicks (kind 0 = grain, 2 = hole) on the current
+    boundary map."""
     _, auto, _ = final_result(name, params_json, "[]")
-    return gc.result_from_points(auto, [tuple(c) for c in json.loads(clicks_json)])
+    clicks = json.loads(clicks_json)
+    grains = [(y, x) for y, x, kind in clicks if kind != HOLE]
+    holes = [(y, x) for y, x, kind in clicks if kind == HOLE]
+    return gc.result_from_points(auto, grains, holes)
 
 
 @st.cache_data(persist="disk", show_spinner="Choosing a preset for this image (runs both once)...")
@@ -396,6 +400,7 @@ result.summary.update(
     {"preset": preset, "preset_ratio": auto_choice(name)[1] if choice == "auto" else None}
 )
 SOURCES = ["automatic detection", "my clicks (one per grain)"]
+HOLE = 2  # same number as the ImageJ counter for holes
 source = st.session_state.get("grain_source", SOURCES[0])
 clicks = st.session_state.setdefault("clicks", {}).setdefault(name, [])
 by_clicks = source == SOURCES[1]
@@ -410,7 +415,7 @@ ann_path = find_annotation(name)
 points = read_points(ann_path, sem.image.shape, sem.image.shape[1]) if ann_path else None
 
 st.title(name)
-no_clicks_yet = by_clicks and not clicks
+no_clicks_yet = by_clicks and not any(kind != HOLE for _, _, kind in clicks)
 if no_clicks_yet:
     st.info(
         "No grain clicks yet. Under 'Overlay and editing', click the centre of every grain, "
@@ -428,7 +433,7 @@ if not no_clicks_yet:
     )
     cols[4].metric(
         "Your clicks" if by_clicks else "Manual edits",
-        len(clicks) if by_clicks else len(edits),
+        sum(kind != HOLE for _, _, kind in clicks) if by_clicks else len(edits),
         help=f"Automatic result: {auto_summary['n_grains']} grains. Kept per image.",
     )
 if not no_clicks_yet and not summary.get("reliable", True):
@@ -484,7 +489,17 @@ def load_saved_edits(saved: list[dict]) -> None:
 
 
 def set_clicks(new_clicks: list) -> None:
-    st.session_state["clicks"][name] = [(float(y), float(x)) for y, x in new_clicks]
+    """Store clicks as (y, x, kind); plain (y, x) pairs are grains."""
+    st.session_state["clicks"][name] = [
+        (float(c[0]), float(c[1]), int(c[2]) if len(c) > 2 else 0) for c in new_clicks
+    ]
+
+
+def clicks_from_table(table) -> list:
+    """ImageJ-style points (read_points) -> clicks: grains and unsure grains, plus holes."""
+    return [
+        (y, x, HOLE if hole else 0) for y, x, hole in zip(table["y"], table["x"], table["hole"])
+    ]
 
 
 def undo_click() -> None:
@@ -521,6 +536,14 @@ with tab_overlay:
     )
     if by_clicks:
         mode = "add or remove grains"
+        kind = st.radio(
+            "A click on the image adds a",
+            ["grain", "hole"],
+            horizontal=True,
+            key="click_kind",
+            help="Hole: a pinhole or void, not a crystal. Its area is left out of the grain "
+            "statistics and reported as hole area fraction.",
+        )
         st.caption(
             "Click a grain centre to add a grain (blue dot). Click on a blue dot to remove it. "
             "Every grain needs a dot: a grain without one is absorbed by its neighbours."
@@ -533,9 +556,10 @@ with tab_overlay:
         )
         starts[1].button(
             "Load my ImageJ clicks",
-            on_click=lambda: set_clicks(list(zip(points["y"], points["x"]))),
+            on_click=lambda: set_clicks(clicks_from_table(points)),
             disabled=points is None,
-            help="Uses your annotation for this image (unsure clicks included).",
+            help="Uses your annotation for this image: grains and unsure grains become grain "
+            "clicks, counter-2 points become holes.",
         )
     else:
         mode = st.radio(
@@ -559,7 +583,9 @@ with tab_overlay:
         gc.draw_dots(image, sure["y"].round(), sure["x"].round(), (0, 220, 255), radius=3)
         gc.draw_dots(image, unsure["y"].round(), unsure["x"].round(), (255, 220, 0), radius=3)
     if by_clicks and clicks:
-        gc.draw_dots(image, [c[0] for c in clicks], [c[1] for c in clicks], (40, 110, 255), 3)
+        for wanted, color in ((0, (40, 110, 255)), (HOLE, (255, 40, 40))):
+            dots = [c for c in clicks if (c[2] == HOLE) == (wanted == HOLE)]
+            gc.draw_dots(image, [c[0] for c in dots], [c[1] for c in dots], color, 3)
     if pending is not None:
         gc.draw_dots(image, [pending[0]], [pending[1]], (255, 0, 255), radius=5)
         st.info("First grain selected (magenta). Now click the grain to merge it with.")
@@ -577,12 +603,12 @@ with tab_overlay:
             x = min(int(click["x"] * scale), sem.image.shape[1] - 1)
             if mode == "add or remove grains":
                 near = [
-                    i for i, (cy, cx) in enumerate(clicks) if (cy - y) ** 2 + (cx - x) ** 2 <= 49
+                    i for i, (cy, cx, _) in enumerate(clicks) if (cy - y) ** 2 + (cx - x) ** 2 <= 49
                 ]
                 if near:  # clicked on an existing dot: remove it
                     clicks.pop(near[-1])
                 else:
-                    clicks.append((float(y), float(x)))
+                    clicks.append((float(y), float(x), HOLE if kind == "hole" else 0))
             elif mode == "split a grain":
                 edits.append({"op": "split", "point": [y, x]})
             elif pending is None:
@@ -593,7 +619,7 @@ with tab_overlay:
             st.rerun()
     st.caption(
         "Green: grains counted. Orange: grains cut by the image edge (counted as half). "
-        "Magenta: first grain of a merge. Blue: your grain clicks."
+        "Magenta: first grain of a merge. Blue: your grain clicks. Red: holes."
     )
 
     buttons = st.columns(3)
@@ -620,7 +646,7 @@ with tab_overlay:
             st.button(
                 "Load the saved clicks",
                 on_click=set_clicks,
-                args=(list(zip(saved["y"], saved["x"])),),
+                args=(clicks_from_table(saved),),
             )
     note = st.text_input(
         "Note (optional)", key=f"note_{name}", placeholder="e.g. unsure about the top-left grains"
@@ -639,7 +665,8 @@ with tab_overlay:
             edit_warnings,
             raw_n_grains=auto_summary["n_grains"],
             note=note,
-            points=clicks if by_clicks else None,
+            points=[(y, x) for y, x, k in clicks if k != HOLE] if by_clicks else None,
+            holes=[(y, x) for y, x, k in clicks if k == HOLE] if by_clicks else None,
         )
         st.success(f"Saved to {folder}")
 with tab_stages:

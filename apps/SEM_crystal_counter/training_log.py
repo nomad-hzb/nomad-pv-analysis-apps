@@ -5,8 +5,8 @@ same image is replaced):
 
     <log dir>/<image stem>__<image sha256[:12]>/
         labels.png     final grain map after manual edits, 16-bit, 0 = no grain (lossless)
-        points.csv     only when the grains came from clicks: X, Y (pixels) per grain centre,
-                       the same columns as an ImageJ/Fiji Results table
+        points.csv     only when the grains came from clicks: X, Y (pixels) and Counter
+                       (0 = grain, 2 = hole) per click, as in an ImageJ/Fiji Results table
         review.json    image name + sha256, pixel size, automatic preset choice and ratio,
                        the parameters used, the edit list, grain counts before and after the
                        edits, summary statistics, user, time
@@ -52,6 +52,7 @@ def save_review(
     raw_n_grains: int | None = None,
     note: str = "",
     points: list[tuple[float, float]] | None = None,
+    holes: list[tuple[float, float]] | None = None,
 ) -> Path:
     """Write (or replace) the review of one image. `result` is the edited result; `points`
     are the (y, x) grain-centre clicks when the grains came from clicks."""
@@ -63,8 +64,10 @@ def save_review(
         raise ValueError("more than 65535 grains cannot be stored as a 16-bit PNG")
     Image.fromarray(labels.astype(np.uint16)).save(folder / "labels.png")
     points_file = folder / "points.csv"
-    if points:
-        lines = ["X,Y"] + [f"{x:.1f},{y:.1f}" for y, x in points]
+    if points or holes:
+        lines = ["X,Y,Counter"]
+        lines += [f"{x:.1f},{y:.1f},0" for y, x in points or []]
+        lines += [f"{x:.1f},{y:.1f},2" for y, x in holes or []]
         points_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     elif points_file.exists():  # a re-save without clicks must not keep stale ones
         points_file.unlink()
@@ -78,8 +81,9 @@ def save_review(
         "preset": summary.get("preset"),
         "preset_ratio": summary.get("preset_ratio"),
         "params": result.params.model_dump(),
-        "grain_source": "clicks" if points else "automatic",
-        "n_clicks": len(points) if points else 0,
+        "grain_source": "clicks" if points or holes else "automatic",
+        "n_clicks": len(points or []),
+        "n_hole_clicks": len(holes or []),
         "edits": edits,
         "edit_warnings": edit_warnings or [],
         "n_grains_before_edits": raw_n_grains,
