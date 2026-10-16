@@ -173,6 +173,13 @@ def final_result(name: str, params_json: str, edits_json: str):
     return _final_cached(name, file_stamp(name), CORE_VERSION, params_json, edits_json)
 
 
+@st.cache_data(max_entries=64, show_spinner=False)
+def clicked_result(name: str, params_json: str, clicks_json: str):
+    """Grains grown from the user's clicks on the current boundary map."""
+    _, auto, _ = final_result(name, params_json, "[]")
+    return gc.result_from_points(auto, [tuple(c) for c in json.loads(clicks_json)])
+
+
 @st.cache_data(persist="disk", show_spinner="Choosing a preset for this image (runs both once)...")
 def _auto_choice_cached(name: str, stamp: tuple, core_version: str) -> tuple[str, float]:
     # Same decision as gc.analyze_auto, but through the stage caches: only grain counts are
@@ -388,6 +395,14 @@ with st.spinner("Segmenting..."):
 result.summary.update(
     {"preset": preset, "preset_ratio": auto_choice(name)[1] if choice == "auto" else None}
 )
+SOURCES = ["automatic detection", "my clicks (one per grain)"]
+source = st.session_state.get("grain_source", SOURCES[0])
+clicks = st.session_state.setdefault("clicks", {}).setdefault(name, [])
+by_clicks = source == SOURCES[1]
+if by_clicks:
+    # Your clicks decide what a grain is; the program only finds the borders.
+    result = clicked_result(name, params.model_dump_json(), json.dumps(clicks))
+    edit_warnings = []
 grains, summary, labels = result.grains, result.summary, result.labels
 pre, bmap, seeds, raw = result.pre, result.bmap, result.seeds, result.raw_labels
 
@@ -395,19 +410,28 @@ ann_path = find_annotation(name)
 points = read_points(ann_path, sem.image.shape, sem.image.shape[1]) if ann_path else None
 
 st.title(name)
-cols = st.columns(5)
-cols[0].metric("Pixel size", f"{px:.3f} nm")
-cols[1].metric("Grains (at edge)", f"{summary['n_grains']} ({summary.get('n_edge', 0)})")
-cols[2].metric(
-    "Mean area", f"{summary.get('mean_area_planimetric_nm2', float('nan')) / 1e3:.1f}e3 nm²"
-)
-cols[3].metric("Mean eq. diameter", f"{summary.get('mean_eq_diameter_nm', float('nan')):.0f} nm")
-cols[4].metric(
-    "Manual edits",
-    len(edits),
-    help=f"Automatic result: {auto_summary['n_grains']} grains. Edits are kept per image.",
-)
-if not summary.get("reliable", True):
+no_clicks_yet = by_clicks and not clicks
+if no_clicks_yet:
+    st.info(
+        "No grain clicks yet. Under 'Overlay and editing', click the centre of every grain, "
+        "or start from the automatic grain centres or your ImageJ clicks."
+    )
+if not no_clicks_yet:
+    cols = st.columns(5)
+    cols[0].metric("Pixel size", f"{px:.3f} nm")
+    cols[1].metric("Grains (at edge)", f"{summary['n_grains']} ({summary.get('n_edge', 0)})")
+    cols[2].metric(
+        "Mean area", f"{summary.get('mean_area_planimetric_nm2', float('nan')) / 1e3:.1f}e3 nm²"
+    )
+    cols[3].metric(
+        "Mean eq. diameter", f"{summary.get('mean_eq_diameter_nm', float('nan')):.0f} nm"
+    )
+    cols[4].metric(
+        "Your clicks" if by_clicks else "Manual edits",
+        len(clicks) if by_clicks else len(edits),
+        help=f"Automatic result: {auto_summary['n_grains']} grains. Kept per image.",
+    )
+if not no_clicks_yet and not summary.get("reliable", True):
     st.warning(
         f"Only about {summary['n_planimetric']:.0f} grains in this image: too few for a reliable "
         "mean. Use a lower magnification for grain statistics."
@@ -415,7 +439,7 @@ if not summary.get("reliable", True):
 for warning in edit_warnings:
     st.warning(f"Edit skipped: {warning}")
 
-if points is not None:
+if points is not None and not no_clicks_yet:
     m = score(labels, points, px)
     st.subheader("Score against your clicks")
     sc = st.columns(4)
@@ -459,6 +483,20 @@ def load_saved_edits(saved: list[dict]) -> None:
     st.session_state["edits"][name] = [dict(e) for e in saved]
 
 
+def set_clicks(new_clicks: list) -> None:
+    st.session_state["clicks"][name] = [(float(y), float(x)) for y, x in new_clicks]
+
+
+def undo_click() -> None:
+    if st.session_state["clicks"].get(name):
+        st.session_state["clicks"][name].pop()
+
+
+def automatic_centres() -> list:
+    _, auto, _ = final_result(name, params.model_dump_json(), "[]")
+    return gc.grain_centres(auto)
+
+
 tab_overlay, tab_stages, tab_hist, tab_table = st.tabs(
     ["Overlay and editing", "Stages", "Histograms", "Grains"]
 )
@@ -467,17 +505,48 @@ with tab_overlay:
     show_outlines = toggles[0].toggle("Grain outlines", value=True)
     show_seeds = toggles[1].toggle("Seeds (red)")
     show_clicks = toggles[2].toggle(
-        "My clicks (cyan, unsure yellow)", value=points is not None, disabled=points is None
+        "My ImageJ clicks (cyan, unsure yellow)",
+        value=points is not None and not by_clicks,
+        disabled=points is None,
     )
-    mode = st.radio(
-        "Clicking on the image will",
-        ["do nothing", "merge two grains", "split a grain"],
+    st.radio(
+        "Grains come from",
+        SOURCES,
         horizontal=True,
-        key="click_mode",
-        help="Merge: click two neighbouring grains (removes the boundary between them). "
-        "Split: click inside a grain where a second grain should be; the new boundary follows "
-        "the darkest groove between your click and the far side of the grain.",
+        key="grain_source",
+        help="Automatic: the program finds the grains; fix mistakes by merging or splitting. "
+        "My clicks: click the centre of every grain, the program finds the borders. Use this "
+        "when the automatic result is not good enough. You can start from the automatic "
+        "centres and only add missing grains or remove wrong ones.",
     )
+    if by_clicks:
+        mode = "add or remove grains"
+        st.caption(
+            "Click a grain centre to add a grain (blue dot). Click on a blue dot to remove it. "
+            "Every grain needs a dot: a grain without one is absorbed by its neighbours."
+        )
+        starts = st.columns(2)
+        starts[0].button(
+            "Start from the automatic grain centres",
+            on_click=lambda: set_clicks(automatic_centres()),
+            help="Fills in one dot per automatically found grain; then only fix what is wrong.",
+        )
+        starts[1].button(
+            "Load my ImageJ clicks",
+            on_click=lambda: set_clicks(list(zip(points["y"], points["x"]))),
+            disabled=points is None,
+            help="Uses your annotation for this image (unsure clicks included).",
+        )
+    else:
+        mode = st.radio(
+            "Clicking on the image will",
+            ["do nothing", "merge two grains", "split a grain"],
+            horizontal=True,
+            key="click_mode",
+            help="Merge: click two neighbouring grains (removes the boundary between them). "
+            "Split: click inside a grain where a second grain should be; the new boundary "
+            "follows the darkest groove between your click and the far side of the grain.",
+        )
     pending = st.session_state.setdefault("pending_merge", {}).get(name)
     if mode != "merge two grains" and pending is not None:
         st.session_state["pending_merge"].pop(name)
@@ -489,6 +558,8 @@ with tab_overlay:
         unsure = points[points["unsure"]]
         gc.draw_dots(image, sure["y"].round(), sure["x"].round(), (0, 220, 255), radius=3)
         gc.draw_dots(image, unsure["y"].round(), unsure["x"].round(), (255, 220, 0), radius=3)
+    if by_clicks and clicks:
+        gc.draw_dots(image, [c[0] for c in clicks], [c[1] for c in clicks], (40, 110, 255), 3)
     if pending is not None:
         gc.draw_dots(image, [pending[0]], [pending[1]], (255, 0, 255), radius=5)
         st.info("First grain selected (magenta). Now click the grain to merge it with.")
@@ -504,7 +575,15 @@ with tab_overlay:
             scale = sem.image.shape[1] / click.get("width", sem.image.shape[1])
             y = min(int(click["y"] * scale), sem.image.shape[0] - 1)
             x = min(int(click["x"] * scale), sem.image.shape[1] - 1)
-            if mode == "split a grain":
+            if mode == "add or remove grains":
+                near = [
+                    i for i, (cy, cx) in enumerate(clicks) if (cy - y) ** 2 + (cx - x) ** 2 <= 49
+                ]
+                if near:  # clicked on an existing dot: remove it
+                    clicks.pop(near[-1])
+                else:
+                    clicks.append((float(y), float(x)))
+            elif mode == "split a grain":
                 edits.append({"op": "split", "point": [y, x]})
             elif pending is None:
                 st.session_state["pending_merge"][name] = (y, x)
@@ -514,12 +593,16 @@ with tab_overlay:
             st.rerun()
     st.caption(
         "Green: grains counted. Orange: grains cut by the image edge (counted as half). "
-        "Magenta: first grain of a merge."
+        "Magenta: first grain of a merge. Blue: your grain clicks."
     )
 
     buttons = st.columns(3)
-    buttons[0].button("Undo last edit", on_click=undo_edit, disabled=not edits)
-    buttons[1].button("Clear all edits", on_click=clear_edits, disabled=not edits)
+    if by_clicks:
+        buttons[0].button("Undo last click", on_click=undo_click, disabled=not clicks)
+        buttons[1].button("Clear all clicks", on_click=set_clicks, args=([],), disabled=not clicks)
+    else:
+        buttons[0].button("Undo last edit", on_click=undo_edit, disabled=not edits)
+        buttons[1].button("Clear all edits", on_click=clear_edits, disabled=not edits)
 
     st.subheader("Save as reviewed (training log)")
     previous = training_log.find_review(log_dir, sem)
@@ -529,8 +612,16 @@ with tab_overlay:
             f"Saved before: {meta['saved_at']} by {meta['user']}, {len(meta['edits'])} edits, "
             f"{meta['n_grains_after_edits']} grains."
         )
-        if meta["edits"] and not edits:
+        if meta["edits"] and not edits and not by_clicks:
             st.button("Load the saved edits", on_click=load_saved_edits, args=(meta["edits"],))
+        saved_points = previous.folder / "points.csv"
+        if by_clicks and not clicks and saved_points.exists():
+            saved = read_points(saved_points, sem.image.shape, sem.image.shape[1])
+            st.button(
+                "Load the saved clicks",
+                on_click=set_clicks,
+                args=(list(zip(saved["y"], saved["x"])),),
+            )
     note = st.text_input(
         "Note (optional)", key=f"note_{name}", placeholder="e.g. unsure about the top-left grains"
     )
@@ -542,7 +633,13 @@ with tab_overlay:
         "when no edit was needed: confirmed results are training data too.",
     ):
         folder = training_log.save_review(
-            log_dir, result, edits, edit_warnings, raw_n_grains=auto_summary["n_grains"], note=note
+            log_dir,
+            result,
+            [] if by_clicks else edits,
+            edit_warnings,
+            raw_n_grains=auto_summary["n_grains"],
+            note=note,
+            points=clicks if by_clicks else None,
         )
         st.success(f"Saved to {folder}")
 with tab_stages:

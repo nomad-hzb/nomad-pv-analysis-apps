@@ -281,3 +281,65 @@ def test_magnification_spread_compares_zoom_levels():
     assert out.loc["A", "magnification_spread"] == pytest.approx(0.0)
     assert out.loc["B", "n_magnifications"] == 1
     assert np.isnan(out.loc["B", "magnification_spread"])
+
+
+def test_clicked_centres_reproduce_the_true_grains(make_tiff, voronoi_film):
+    from grain_core import result_from_points
+
+    image, truth = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    auto = analyze(sem, PRESETS["smooth"])
+    centres = [tuple(np.argwhere(truth == lab).mean(axis=0)) for lab in range(1, truth.max() + 1)]
+    clicked = result_from_points(auto, centres)
+    assert clicked.summary["n_grains"] == truth.max()
+    assert clicked.summary["grain_source"] == "clicks"
+    # each true grain is (almost) exactly one clicked grain: grooves are 3 px wide
+    agree = (
+        sum(
+            np.bincount(clicked.labels[truth == lab]).max() / (truth == lab).sum()
+            for lab in range(1, truth.max() + 1)
+        )
+        / truth.max()
+    )
+    assert agree > 0.95
+
+
+def test_segment_from_points_handles_duplicates_and_no_clicks():
+    from grain_core import segment_from_points
+
+    bmap = np.zeros((20, 30))
+    bmap[:, 15] = 1.0  # one vertical boundary
+    seeds, labels = segment_from_points(bmap, [(10, 5), (10, 5), (10, 25)])
+    assert seeds.max() == 2  # the duplicate click gives one seed
+    assert labels[10, 2] != labels[10, 28]
+    seeds, labels = segment_from_points(bmap, [])
+    assert seeds.max() == 0 and (labels == 1).all()
+
+
+def test_grain_centres_lie_inside_their_grains(make_tiff, voronoi_film):
+    from grain_core import grain_centres
+
+    image, _ = voronoi_film
+    sem = load_sem_tiff(make_tiff(image, b"Image Pixel Size = 5.0 nm"))
+    result = analyze(sem, PRESETS["smooth"])
+    centres = grain_centres(result)
+    assert len(centres) == result.summary["n_grains"]
+    hit = {int(result.labels[int(y), int(x)]) for y, x in centres}
+    assert hit == set(range(1, result.summary["n_grains"] + 1))
+
+
+def test_training_log_stores_clicks_as_imagej_table(make_tiff, tmp_path):
+    from evaluate import read_points
+    from grain_core import result_from_points
+    from training_log import load_reviews, save_review
+
+    result = _two_grain_result(make_tiff)
+    clicks = [(30.0, 20.0), (30.0, 60.0)]
+    clicked = result_from_points(result, clicks)
+    folder = save_review(tmp_path, clicked, [], points=clicks)
+    points = read_points(folder / "points.csv", (60, 80), 80)
+    assert list(zip(points["y"], points["x"])) == clicks
+    meta = load_reviews(tmp_path)[0].meta
+    assert meta["grain_source"] == "clicks" and meta["n_clicks"] == 2
+    save_review(tmp_path, result, [])  # re-saved without clicks: no stale points file
+    assert not (folder / "points.csv").exists()

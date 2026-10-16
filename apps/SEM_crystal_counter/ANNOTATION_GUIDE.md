@@ -91,8 +91,16 @@ there.
   - The grain outlines, seeds and your clicks can each be switched on and off.
   - With an annotation folder, F1 and the grain-count/size error update live for images you
     annotated.
-  - Under "Overlay and editing" you can **merge** two grains or **split** one by clicking.
-    The edits survive slider changes, and Undo/Clear are there.
+  - Under "Overlay and editing" there are two ways to get grains:
+    - **Automatic detection**: fix mistakes by clicking to **merge** two grains or **split**
+      one. The edits survive slider changes, and Undo/Clear are there.
+    - **My clicks (one per grain)**, for images where the automatic result is not good
+      enough. Click the centre of every grain and the program finds the borders. Clicking on a
+      dot removes it.
+      - You can start from the automatic grain centres and only fix what is wrong, or load your
+        ImageJ clicks for that image.
+      - Saving stores the clicks as `points.csv` in the same format as ImageJ, so this doubles
+        as annotation for later tuning.
   - **Save as reviewed** stores the final grain map, your edits and the settings in the
     training log (default `~/sem_grain_training_log`, see `training_log.py`). Save also when
     nothing needed fixing: confirmed results are training data too.

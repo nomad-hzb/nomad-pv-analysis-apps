@@ -486,6 +486,54 @@ def analyze(sem: SemImage, params: Params, pre: np.ndarray | None = None) -> Res
     return Result(sem, params, pre, bmap, seeds, raw_labels, labels, grains, summary)
 
 
+def segment_from_points(bmap: np.ndarray, points) -> tuple[np.ndarray, np.ndarray]:
+    """Grains from user clicks: one seed per clicked (y, x) point, grown by a watershed on the
+    boundary map until the seeds meet at the darkest grooves. Returns (seeds, labels).
+
+    No merging step: the clicks decide what a grain is. A grain nobody clicked is absorbed by
+    its neighbours, so every grain needs a click (as in the point annotations).
+    """
+    seeds = np.zeros(bmap.shape, dtype=np.int32)
+    n = 0
+    for y, x in points:
+        y = int(np.clip(round(y), 0, bmap.shape[0] - 1))
+        x = int(np.clip(round(x), 0, bmap.shape[1] - 1))
+        if seeds[y, x] == 0:  # two clicks on one pixel give one seed
+            n += 1
+            seeds[y, x] = n
+    if n == 0:
+        return seeds, np.ones(bmap.shape, dtype=np.int32)
+    labels = segmentation.watershed(bmap, seeds).astype(np.int32)
+    return seeds, labels
+
+
+def result_from_points(result: Result, points) -> Result:
+    """A Result whose grains come from user clicks instead of the automatic seeds and merging.
+    Reuses the preprocessing and boundary map of `result`."""
+    px = result.sem.pixel_size_nm
+    seeds, labels = segment_from_points(result.bmap, points)
+    grains = measure_grains(labels, px)
+    summary = summarize(grains, labels, px, result.summary.get("mean_intercept_nm", float("nan")))
+    summary.update({k: v for k, v in result.summary.items() if k not in summary})
+    summary.update({"grain_source": "clicks", "n_seeds": int(seeds.max())})
+    return Result(
+        result.sem, result.params, result.pre, result.bmap, seeds, labels, labels, grains, summary
+    )
+
+
+def grain_centres(result: Result) -> list[tuple[float, float]]:
+    """(y, x) of a point inside each grain, to pre-fill the clicks from the automatic result.
+    Uses the interior point farthest from the grain's border (the centroid can lie outside a
+    curved grain)."""
+    points = []
+    for region in measure.regionprops(result.labels):
+        minr, minc, _, _ = region.bbox
+        dist = ndi.distance_transform_edt(np.pad(region.image, 1))[1:-1, 1:-1]
+        y, x = np.unravel_index(np.argmax(dist), dist.shape)
+        points.append((float(minr + y), float(minc + x)))
+    return points
+
+
 def merge_at(labels: np.ndarray, first: tuple[int, int], second: tuple[int, int]) -> str | None:
     """Merge the grains under two clicked (y, x) points, in place. Returns a warning or None."""
     a, b = int(labels[first]), int(labels[second])
