@@ -13,6 +13,10 @@ You do not need to trace boundaries.
 - One grain is one region enclosed by the **outer** boundary groove.
 - Stripes, terraces or steps *inside* a grain (as in VP401 and VP412) are **not** boundaries.
   A striped grain gets one click.
+- Likewise, faceted domains inside one large grain are **not** separate grains: one click for
+  the whole region inside the deep outer groove. (Decided 2026-10-16. A VP412_05 annotation
+  that counted the domains found 301 grains instead of 91. The tool measures outer grains, so
+  annotations must too.)
 - Click grains that are cut by the image edge too.
 - Do not click inside the info banner at the bottom.
 - If you cannot decide whether something is one grain or two, use the "unsure" counter

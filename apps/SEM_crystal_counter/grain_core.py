@@ -83,11 +83,19 @@ class Params(BaseModel):
     )
 
 
-# Tuned 2026-10-15 by F1 against point annotations of VP317_01, VP352_03 (smooth) and
-# VP401_05, VP412_05 (striped); see evaluate.py. The defaults of Params are the smooth preset.
+# Tuned against point annotations (evaluate.py), 2026-10-16: smooth on VP317_01, VP352_03 and
+# VP352_08 (leave-one-out F1 0.73, |size error| about 14%); striped on VP401_03/05/09,
+# VP411_06, VP412_05/06/08, chosen for an unbiased mean size (F1 0.57, |size error| 18%, bias
+# -1%) over the highest F1 (0.60, but sizes about 25% too small). The defaults of Params are
+# the smooth preset.
 PRESETS: dict[str, Params] = {
     "smooth": Params(),
-    "striped": Params(ridge_sigmas_nm=[8.0, 24.0], min_grain_diameter_nm=250.0),
+    "striped": Params(
+        ridge_sigmas_nm=[8.0, 24.0],
+        min_grain_diameter_nm=250.0,
+        merge_threshold=0.2,
+        boundary_threshold=1.2,
+    ),
 }
 
 
