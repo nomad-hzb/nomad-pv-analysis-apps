@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APPS = ROOT / "apps"
-PARKED = {"Electrochemical_analysis", "SEM_crystal_counter", "XPS-Automated"}
+PARKED = {"Electrochemical_analysis", "XPS-Automated"}
 
 BOOTSTRAP_CELL = 'import runpy\n\n_ = runpy.run_path("../../bootstrap.py")'
 OASIS_HOSTS = ("nomad-hzb-se", "helmholtz-berlin.de")
