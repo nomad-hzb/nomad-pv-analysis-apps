@@ -263,3 +263,21 @@ def test_params_files_with_removed_keys_still_load():
     params = Params.model_validate_json(old)
     assert params.min_grain_diameter_nm == 250.0
     assert not hasattr(params, "seed_method")
+
+
+def test_magnification_spread_compares_zoom_levels():
+    from run_batch import magnification_spread
+
+    images = pd.DataFrame(
+        {
+            "sample": ["A", "A", "A", "B", "B"],
+            "pixel_size_nm": [2.233, 5.582, 5.583, 3.722, 3.722],
+            "mean_area_planimetric_nm2": [100.0, 80.0, 120.0, 50.0, 70.0],
+        }
+    )
+    out = magnification_spread(images)
+    # A: 2.2 -> 100, 5.6 -> mean(80, 120) = 100: the two zooms agree
+    assert out.loc["A", "n_magnifications"] == 2
+    assert out.loc["A", "magnification_spread"] == pytest.approx(0.0)
+    assert out.loc["B", "n_magnifications"] == 1
+    assert np.isnan(out.loc["B", "magnification_spread"])

@@ -72,7 +72,28 @@ def summarize_samples(images: pd.DataFrame) -> pd.DataFrame:
     out.insert(0, "n_images", grouped.size())
     out.insert(1, "n_images_flagged", images.groupby("sample").size() - grouped.size())
     out.insert(2, "n_grains_total", grouped["n_grains"].sum())
+    if "pixel_size_nm" in used:
+        out = out.join(magnification_spread(used))
     return out.reset_index()
+
+
+def magnification_spread(images: pd.DataFrame) -> pd.DataFrame:
+    """Per sample: how much the mean grain area differs between magnifications.
+
+    A sample's grains do not change with zoom, so the mean area per magnification should agree;
+    the spread ((max - min) / mean of the per-magnification means) is an accuracy check that
+    needs no annotation. NaN when a sample was imaged at a single magnification.
+    """
+    mag = images.assign(magnification=images["pixel_size_nm"].round(1))
+    per_mag = mag.groupby(["sample", "magnification"])["mean_area_planimetric_nm2"].mean()
+    stats = per_mag.groupby("sample").agg(["count", "min", "max", "mean"])
+    spread = (stats["max"] - stats["min"]) / stats["mean"]
+    return pd.DataFrame(
+        {
+            "n_magnifications": stats["count"],
+            "magnification_spread": spread.where(stats["count"] > 1),
+        }
+    )
 
 
 def write_report(out: Path, images: pd.DataFrame, params: gc.Params | None) -> None:
