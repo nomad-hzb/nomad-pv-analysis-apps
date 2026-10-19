@@ -83,11 +83,24 @@ measurement under *All Points*.
 - *Variable Selection*: tick the result columns (the **targets**), the process-metadata columns
   (the **supporting variables**) and the categorical parameters to use. Targets are always
   results; supporting variables are always process metadata. Click *Recalculate* after changing
-  anything. *Show data used for analysis* previews the table and downloads it as CSV.
+  anything. *Show data used for analysis* previews the table and downloads it as CSV. Its column
+  headers carry the role of each column: `result: efficiency` is a result, `process: ...` a
+  process parameter.
+- *Missing values*: not every sample records every parameter, and Random Forest, Bayesian
+  Optimization and the Experimental tools leave out every row with a missing value. *Keep as
+  missing* (default) changes nothing; *Process parameters -> 0* fills missing process parameters
+  with 0 (for example an additive a sample did not get); *All columns -> 0* also fills missing
+  results. A missing result is usually not a measured 0, so filling results can bias the
+  analysis. The option applies at once to the five linked tabs; row filters still see the
+  original values. The preview says how many values were filled.
 - *Use your own data (optional)*: upload a CSV (one row per sample, one column per parameter or
   result; the CSV exported from this tab works as it is). It replaces the loaded data for the
-  five linked tabs until you load NOMAD batches again. A missing `sample_id` column is generated;
-  text columns become options for ANOVA; a column named `datetime` enables Process Drift.
+  five linked tabs until you load NOMAD batches again. Columns whose header starts with
+  `result: ` are preselected as results and `process: ` columns become process parameters (the
+  prefixes are removed); a CSV without these prefixes has only its last numeric column
+  preselected. Check the *Result columns* list after uploading. A missing `sample_id` column is
+  generated; text columns become options for ANOVA; a column named `datetime` enables Process
+  Drift.
 
 ### 6. Correlations
 

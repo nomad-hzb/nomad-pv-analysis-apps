@@ -11,14 +11,17 @@ from data_manager import (
     apply_row_filters,
     average_rows_per_sample,
     exclude_samples,
+    fill_missing_with_zero,
     get_categorical_columns,
     get_layer_type_options,
+    label_column_roles,
     merge_results_per_sample,
     merged_result_column_names,
     parse_uploaded_analysis_csv,
     process_type_label,
     result_type_label,
     select_layer_row_per_sample,
+    split_column_roles,
     uploaded_numeric_columns,
     variation_warning,
 )
@@ -782,6 +785,78 @@ def test_uploaded_numeric_columns_skips_sample_id_text_and_constant_columns():
     )
 
     assert uploaded_numeric_columns(df) == ["temp", "pce"]
+
+
+def test_exported_column_roles_survive_a_csv_round_trip():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2"],
+            "temp": [100, 120],
+            "voc": [1.1, 1.2],
+            "efficiency": [15.0, 17.5],
+        }
+    )
+
+    labelled = label_column_roles(df, ["voc", "efficiency"], ["temp"])
+    assert list(labelled.columns) == [
+        "sample_id",
+        "process: temp",
+        "result: voc",
+        "result: efficiency",
+    ]
+
+    uploaded = parse_uploaded_analysis_csv(labelled.to_csv(index=False).encode())
+    restored, results, process = split_column_roles(uploaded)
+    assert list(restored.columns) == ["sample_id", "temp", "voc", "efficiency"]
+    assert results == ["voc", "efficiency"]
+    assert process == ["temp"]
+
+
+def test_split_column_roles_leaves_unlabelled_csv_alone():
+    df = pd.DataFrame({"sample_id": ["S1"], "temp": [100], "pce": [15.0]})
+
+    restored, results, process = split_column_roles(df)
+
+    assert list(restored.columns) == ["sample_id", "temp", "pce"]
+    assert results == [] and process == []
+
+
+def test_split_column_roles_keeps_prefix_when_name_collides():
+    df = pd.DataFrame({"sample_id": ["S1"], "pce": [1.0], "result: pce": [15.0]})
+
+    restored, results, _ = split_column_roles(df)
+
+    assert list(restored.columns) == ["sample_id", "pce", "result: pce"]
+    assert results == ["result: pce"]
+
+
+def test_fill_missing_with_zero_only_touches_the_given_numeric_columns():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", None],
+            "additive_conc": [0.5, None, None],
+            "material": ["a", None, "b"],
+            "pce": [15.0, None, 16.0],
+        }
+    )
+
+    filled, n_filled = fill_missing_with_zero(df, ["additive_conc", "material"])
+
+    assert n_filled == 2
+    assert list(filled["additive_conc"]) == [0.5, 0.0, 0.0]
+    assert filled["pce"].isna().sum() == 1
+    assert filled["material"].isna().sum() == 1
+    assert filled["sample_id"].isna().sum() == 1
+    assert df["additive_conc"].isna().sum() == 2  # the input is not modified
+
+
+def test_fill_missing_with_zero_without_missing_values_returns_input():
+    df = pd.DataFrame({"x": [1.0, 2.0]})
+
+    filled, n_filled = fill_missing_with_zero(df, ["x"])
+
+    assert n_filled == 0
+    assert filled is df
 
 
 def _bo_dataset():

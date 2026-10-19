@@ -9,7 +9,7 @@ import config
 import ipywidgets as widgets
 import plotly.graph_objects as go
 import utils
-from data_manager import RESULT_TYPE_LABELS
+from data_manager import MISSING_VALUE_MODES, RESULT_TYPE_LABELS
 from natsort import natsorted
 
 from hysprint_utils.api_calls import get_batch_ids_with_authors
@@ -265,6 +265,17 @@ class GUIManager:
             description="Aggregate pixels via:",
             style={"description_width": "140px"},
             layout={"width": "300px"},
+        )
+
+        # NaN handling of the shared analysis dataset (data_manager.MISSING_VALUE_MODES):
+        # the models drop every row with a missing value, so a parameter only some
+        # samples record can throw most rows away.
+        self.missing_values_selector = widgets.Dropdown(
+            options=list(MISSING_VALUE_MODES),
+            value="Keep as missing",
+            description="Missing values:",
+            style={"description_width": "140px"},
+            layout={"width": "360px"},
         )
 
         self.results_checklist_box = widgets.VBox(
@@ -916,6 +927,8 @@ class GUIManager:
             self.recalculate_button.on_click(callbacks["recalculate_analysis_data"])
         if "upload_analysis_csv" in callbacks:
             self.analysis_data_upload.observe(callbacks["upload_analysis_csv"], names="value")
+        if "missing_values_changed" in callbacks:
+            self.missing_values_selector.observe(callbacks["missing_values_changed"], names="value")
         if "upload_results_columns_changed" in callbacks:
             self.analysis_data_upload_results_selector.observe(
                 callbacks["upload_results_columns_changed"], names="value"
@@ -1431,7 +1444,8 @@ class GUIManager:
                     "<p style='color:#666; margin:0;'>Upload a CSV to run Correlations, "
                     "Random Forest, Bayesian Optimization and Experimental on data that "
                     "never came from a NOMAD batch load. One row per sample, one column per "
-                    "parameter/result (this tab's own 'Download CSV' export works as-is). "
+                    "parameter/result (this tab's own 'Download CSV' export works as-is: its "
+                    "'result: ' and 'process: ' header prefixes set each column's role). "
                     "It replaces the loaded dataset for every \U0001f517 tab until you load "
                     "NOMAD batches again. A missing sample_id column is generated (row_1, "
                     "row_2, ...); text columns (e.g. a material name) become ANOVA grouping "
@@ -1480,6 +1494,16 @@ class GUIManager:
                 ),
                 self.layer_selector_box,
                 self.results_aggregation_selector,
+                widgets.HTML(
+                    "<p style='color:#666;'>Not every sample records every parameter, and "
+                    "Random Forest, Bayesian Optimization and the Experimental tools leave out "
+                    "every row with a missing value. <b>Missing values</b> can fill them with 0 "
+                    "instead: for process parameters (e.g. an additive a sample did not get) "
+                    "or for all columns. A missing result is usually not a measured 0, so "
+                    "filling results can bias the analysis. Applies at once; row filters still "
+                    "see the original values.</p>"
+                ),
+                self.missing_values_selector,
                 widgets.Accordion(
                     children=[
                         widgets.VBox(

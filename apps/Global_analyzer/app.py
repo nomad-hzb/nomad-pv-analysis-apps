@@ -140,6 +140,7 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
         # instead of rebuilding from (possibly empty) NOMAD data.
         self._uploaded_df = None
         self._updating_upload_roles = False
+        self._n_filled_missing = 0
 
         # Connect callbacks
         self._connect_callbacks()
@@ -163,6 +164,7 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
                 "recalculate_analysis_data": self._on_recalculate_analysis_data,
                 "upload_analysis_csv": self._on_upload_analysis_csv,
                 "upload_results_columns_changed": self._on_upload_results_columns_changed,
+                "missing_values_changed": self._on_missing_values_changed,
                 "add_row_filter": self._on_add_row_filter,
                 "confirm_filters": self._on_confirm_filters,
                 "download_analysis_data_preview": self._on_download_analysis_data_preview,

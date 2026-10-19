@@ -7,10 +7,14 @@ from typing import Optional
 
 import pandas as pd
 from data_manager import (
+    MISSING_VALUE_MODES,
     apply_row_filters,
     exclude_samples,
+    fill_missing_with_zero,
     filter_plot_data,
+    label_column_roles,
     parse_uploaded_analysis_csv,
+    split_column_roles,
     uploaded_numeric_columns,
     variation_warning,
 )
@@ -29,12 +33,20 @@ class AnalysisDataHandlersMixin:
         Experimental) actually reads - only ever contains rows the user has
         chosen to keep. Row filters combine with AND; a filter referencing a
         column no longer present (e.g. after unchecking it) is skipped rather
-        than erroring."""
+        than erroring. Missing values are filled with 0 afterwards when the
+        Missing values option asks for it, so filters still see the real data."""
+        self._n_filled_missing = 0
         if self.full_analysis_df is None:
             self.analysis_df = None
         else:
             filtered = apply_row_filters(self.full_analysis_df, self._applied_filters)
             filtered = exclude_samples(filtered, self._applied_excluded)
+            mode = MISSING_VALUE_MODES[self.gui.missing_values_selector.value]
+            if mode != "keep":
+                columns = list(self.analysis_metadata_cols)
+                if mode == "all":
+                    columns += self.analysis_results_cols
+                filtered, self._n_filled_missing = fill_missing_with_zero(filtered, columns)
             self.analysis_df = filtered
 
         self.gui.render_active_filters(self.row_filters, self._on_remove_row_filter)
@@ -104,7 +116,11 @@ class AnalysisDataHandlersMixin:
             + [c for c in self.analysis_results_cols if c in checked_results_set]
         )
         preview_cols = [c for c in preview_cols if c in self.analysis_df.columns]
-        return self.analysis_df[preview_cols]
+        # Role prefixes in the headers, so the table says which column is which and an
+        # exported CSV re-uploads with the same results/process split.
+        return label_column_roles(
+            self.analysis_df[preview_cols], self.analysis_results_cols, self.analysis_metadata_cols
+        )
 
     def _render_analysis_data_preview(self):
         """Render the exact rows/columns currently feeding Correlations/Random
@@ -127,6 +143,8 @@ class AnalysisDataHandlersMixin:
                 f"{len(preview_df)} of {n_total} row(s) x {len(preview_df.columns)} column(s) "
                 "currently feeding the analysis:"
             )
+            if self._n_filled_missing:
+                print(f"{self._n_filled_missing} missing value(s) filled with 0.")
             table_html = preview_df.to_html(index=False, max_rows=None, max_cols=None)
             ipy_display(
                 HTML(
@@ -254,6 +272,7 @@ class AnalysisDataHandlersMixin:
             clear_output()
             try:
                 df = parse_uploaded_analysis_csv(bytes(file_info["content"]))
+                df, labelled_results, _ = split_column_roles(df)
             except Exception as e:
                 logger.exception("Failed to parse uploaded analysis CSV")
                 print(f"❌ Could not read CSV: {e}")
@@ -272,7 +291,10 @@ class AnalysisDataHandlersMixin:
             try:
                 selector = self.gui.analysis_data_upload_results_selector
                 selector.options = numeric_cols
-                selector.value = (numeric_cols[-1],)
+                # Columns exported as "result: ..." are results; an unlabelled CSV
+                # falls back to its last numeric column.
+                preselected = [c for c in numeric_cols if c in labelled_results]
+                selector.value = tuple(preselected) or (numeric_cols[-1],)
             finally:
                 self._updating_upload_roles = False
             self.gui.analysis_data_upload_roles_box.layout.display = None
@@ -282,10 +304,15 @@ class AnalysisDataHandlersMixin:
             self._refresh_experimental_options()
             print(
                 f"✓ Loaded {len(df)} row(s), {len(numeric_cols)} usable numeric column(s) "
-                "from the uploaded CSV. Pick the result column(s) below."
+                "from the uploaded CSV. Check the result column(s) below."
             )
         # Reset so picking the same (edited) file again still fires a change.
         self.gui.analysis_data_upload.value = ()
+        self._rerun_active_analyses()
+
+    def _on_missing_values_changed(self, change):
+        """The Missing values option changed: refill and re-run the open analyses."""
+        self._apply_filters()
         self._rerun_active_analyses()
 
     def _on_upload_results_columns_changed(self, change):
