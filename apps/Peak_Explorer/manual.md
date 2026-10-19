@@ -78,8 +78,10 @@ The button *nm <-> eV* switches the wavelength axis to energy and back, with E =
 and hc = 1239.84 eV nm. A PL spectrum is a density per wavelength interval, so its intensity is
 multiplied by lambda squared / hc on the way to eV (and back by E squared / hc). The integral of
 the spectrum is the same in both units, and fitted peak positions, widths and areas in eV are
-correct. Transmission and absorbance are not rescaled. For a CSV file the app cannot know
-which one it is: the checkbox *CSV intensity is a PL spectrum* decides (on by default).
+correct. Transmission and absorbance are not rescaled. The button is shown only for data on a
+wavelength axis, so not for GIWAXS (q in 1/Å). For a CSV file the app cannot know
+which one it is: the checkbox *CSV intensity is a PL spectrum*, shown once a CSV is loaded,
+decides (on by default).
 The start values of the peak models are converted too (centre, sigma, Voigt gamma, and the
 height of PL data); bounds typed in the old unit are cleared. An applied background is
 converted along with the data. Fit results are removed on every conversion.

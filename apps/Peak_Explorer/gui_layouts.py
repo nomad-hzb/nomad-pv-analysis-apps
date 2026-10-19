@@ -825,17 +825,22 @@ class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
             if getattr(self, "background_model", None) is not None:
                 self.background_model = self.background_model * factor
 
+    def _update_source_widgets(self):
+        """Show the CSV PL checkbox only for CSV data, and the nm <-> eV button only for
+        data on a wavelength axis (nm, or eV after a conversion): PL, transmission and
+        absorbance, not GIWAXS (1/Å)."""
+        is_csv = self.data_manager.data_source == "csv"
+        on_wavelength_axis = self.wavelength_unit in ("nm", "eV")
+        self.widgets["csv_density_checkbox"].layout.display = None if is_csv else "none"
+        self.widgets["convert_energy_btn"].layout.display = None if on_wavelength_axis else "none"
+        self.widgets["convert_energy_btn"].disabled = not on_wavelength_axis
+
     def update_ui_after_data_load(self):
         """Update UI controls after data is loaded"""
         debug_print("Updating UI after data load", "update_ui_after_data_load")
         self._reset_background_state()
         self._clear_fit_results()
-
-        # Enable energy conversion button for PL data
-        if self.wavelength_unit in ["nm", "eV"]:
-            self.widgets["convert_energy_btn"].disabled = False
-        else:
-            self.widgets["convert_energy_btn"].disabled = True
+        self._update_source_widgets()
 
         # change display of energy unit
         self.widgets["energy_unit_display"].value = f"Current unit: {self.wavelength_unit}"

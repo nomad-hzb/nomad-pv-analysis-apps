@@ -47,7 +47,8 @@ class GUIComponents:
                 "multiplies it by lambda^2/hc to keep peak shapes and areas right. Untick for "
                 "transmission or absorbance values, which are not rescaled."
             ),
-            layout=widgets.Layout(width="auto"),
+            # shown once a CSV is loaded (GUILayouts._update_source_widgets)
+            layout=widgets.Layout(width="auto", display="none"),
         )
         debug_print("Created ipyvuetify file upload widget", "GUI")
 
@@ -59,7 +60,8 @@ class GUIComponents:
             description="🔄 nm ↔ eV",
             button_style="info",
             tooltip="Convert between wavelength (nm) and energy (eV)",
-            layout=widgets.Layout(width="120px"),
+            # shown for CSV and h5 PL data only (GUILayouts._update_source_widgets)
+            layout=widgets.Layout(width="120px", display="none"),
             disabled=True,
         )
 

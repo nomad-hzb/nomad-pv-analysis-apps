@@ -1115,6 +1115,32 @@ def test_csv_upload_is_offered_next_to_a_handed_over_h5_file(gl, dm, monkeypatch
     assert {"mode_dropdown", "file_upload", "csv_density_checkbox"} <= set(application.widgets)
 
 
+@pytest.mark.parametrize(
+    "source, mode, unit, checkbox_shown, button_shown",
+    [
+        ("csv", None, "nm", True, True),
+        ("h5", "pl_raw", "nm", False, True),
+        ("h5", "pl_binned", "eV", False, True),
+        ("h5", "transmission_raw", "nm", False, True),
+        ("h5", "absorbance_binned", "nm", False, True),
+        ("h5", "giwaxs", "1/Å", False, False),
+        ("h5", "giwaxs_diamond", "1/Å", False, False),
+    ],
+)
+def test_csv_checkbox_and_ev_button_only_where_they_apply(
+    app, x_nm, source, mode, unit, checkbox_shown, button_shown
+):
+    application = app(np.array([_two_peaks(x_nm)]), x_nm, unit=unit)
+    application.data_manager.data_source = source
+    application.data_manager.h5_mode = mode
+    application.update_ui_after_data_load()
+    shown = {
+        key: application.widgets[key].layout.display != "none"
+        for key in ("csv_density_checkbox", "convert_energy_btn")
+    }
+    assert shown == {"csv_density_checkbox": checkbox_shown, "convert_energy_btn": button_shown}
+
+
 def test_data_from_a_csv_upload_is_never_saved_into_an_h5_file(app, x_nm):
     application = app(np.array([_two_peaks(x_nm)]), x_nm)
     application.data_manager.data_source = "csv"
