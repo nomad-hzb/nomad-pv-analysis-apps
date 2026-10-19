@@ -40,6 +40,23 @@ Process types you can choose: Experiment Info, ALD, Annealing, Blade Coating, Cl
 Cleaning UV-Ozone, Co-Evaporation, Dip Coating, Evaporation, Generic Process, Ink Recycling,
 Inkjet Printing, Laser Scribing, Screen Printing, Slot Die Coating, Spin Coating, Sputtering.
 
+## The file you get
+
+Three sheets:
+
+- **Experiment Data**: row 1 names the steps, row 2 holds the column names, and the data rows
+  start at row 3 (the example row, if you ticked it). The *Nomad ID* column is a formula for
+  rows 3 to 500: it joins *Project_Name*, *Batch*, *Subbatch* and *Sample* as
+  `HZB_<Project_Name>_<Batch>_<Subbatch>_C-<Sample>` and stays empty while *Project_Name* of
+  that row is empty.
+  Columns with a fixed list of choices have a dropdown for rows 3 to 1000.
+- **Data Entry Guide**: a table per process type (field, description, format, unit, example).
+  It is generated from the same catalogue as the columns, so it lists exactly the columns of
+  the sheet.
+- **How to Cite**: how to cite NOMAD and the code of the apps.
+
+Do not add, rename or move columns: the upload only reads the columns the app created.
+
 ## Prefill from NOMAD (optional)
 
 If the samples of the batch already exist in NOMAD (for example created by the In-Situ
@@ -98,23 +115,6 @@ Because a second Excel never changes existing entries, correct mistakes in NOMAD
 - **A whole process step is wrong** (wrong process type or wrong samples): delete that step's
   entry file in the upload in NOMAD, correct the step in the Excel and upload the file again.
   Only the deleted step is created anew; everything else is kept.
-
-## The file you get
-
-Three sheets:
-
-- **Experiment Data**: row 1 names the steps, row 2 holds the column names, and the data rows
-  start at row 3 (the example row, if you ticked it). The *Nomad ID* column is a formula for
-  rows 3 to 500: it joins *Project_Name*, *Batch*, *Subbatch* and *Sample* as
-  `HZB_<Project_Name>_<Batch>_<Subbatch>_C-<Sample>` and stays empty while *Project_Name* of
-  that row is empty.
-  Columns with a fixed list of choices have a dropdown for rows 3 to 1000.
-- **Data Entry Guide**: a table per process type (field, description, format, unit, example).
-  It is generated from the same catalogue as the columns, so it lists exactly the columns of
-  the sheet.
-- **How to Cite**: how to cite NOMAD and the code of the apps.
-
-Do not add, rename or move columns: the upload only reads the columns the app created.
 
 ## Known limits
 
