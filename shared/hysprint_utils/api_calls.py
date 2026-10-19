@@ -3,6 +3,7 @@
 
 import getpass
 import logging
+import re
 import time
 
 import requests
@@ -78,6 +79,54 @@ def get_all_uploads(url, token, number_of_uploads=20):
     )
     response.raise_for_status()
     return response.json()["data"]
+
+
+_ARCHIVE_REFERENCE_RE = re.compile(r"archive/([^#]+)#")
+
+
+def entry_id_from_reference(reference):
+    """The entry_id of an archive reference such as
+    '../uploads/{upload_id}/archive/{entry_id}#/data', or None for anything else (the format
+    of HySprint_Sample.substrate, see smart_databaser's own copy of this)."""
+    if not isinstance(reference, str):
+        return None
+    match = _ARCHIVE_REFERENCE_RE.search(reference)
+    return match.group(1) if match else None
+
+
+def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["sample"]):
+    """[{"sample": <sample data>, "substrate": <substrate data, or {}>}] for every sample
+    entry of the upload, in the shape process_specs' Experiment Info paths read
+    (["substrate", "substrate"], ["sample", "number_of_junctions"], ...).
+
+    Two queries whatever the number of samples: the samples, then all the substrate
+    entries they reference (which may sit in another upload). A substrate that cannot be
+    found gives {}."""
+    query = {
+        "required": {"data": "*"},
+        "owner": "visible",
+        "query": {"upload_id": upload_id, "entry_type": sample_type},
+        "pagination": {"page_size": 1000},
+    }
+    samples = [
+        (entry.get("archive") or {}).get("data") or {}
+        for entry in _query_all(url, token, "entries/archive/query", query)
+    ]
+    substrate_ids = {entry_id_from_reference(s.get("substrate")) for s in samples} - {None}
+    substrates = {}
+    if substrate_ids:
+        query = {
+            "required": {"data": "*"},
+            "owner": "visible",
+            "query": {"entry_id:any": sorted(substrate_ids)},
+            "pagination": {"page_size": 1000},
+        }
+        for entry in _query_all(url, token, "entries/archive/query", query):
+            substrates[entry.get("entry_id")] = (entry.get("archive") or {}).get("data") or {}
+    return [
+        {"sample": s, "substrate": substrates.get(entry_id_from_reference(s.get("substrate")), {})}
+        for s in samples
+    ]
 
 
 def get_all_batches_wth_data(url, token, entry_type):

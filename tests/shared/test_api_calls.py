@@ -193,3 +193,87 @@ def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
         ids = api_calls.get_ids_in_batch("https://e.test/api", "tok", ["B1", "B2"])
     assert ids == ["S1"]
     assert "asked for 2 batches" in caplog.text
+
+
+# =============================================================================
+# get_samples_with_substrates (Excel_creator's Prefill from NOMAD)
+# =============================================================================
+
+
+def _ref(entry_id, upload_id="u1"):
+    return f"../uploads/{upload_id}/archive/{entry_id}#/data"
+
+
+def _fake_query_all(responses, queries):
+    """_query_all stand-in answering each call with the next response list."""
+    answers = iter(responses)
+
+    def fake(url, token, endpoint, query):
+        queries.append((endpoint, query))
+        return next(answers)
+
+    return fake
+
+
+def test_entry_id_from_reference():
+    from hysprint_utils import api_calls
+
+    assert api_calls.entry_id_from_reference(_ref("abc")) == "abc"
+    assert api_calls.entry_id_from_reference("../upload/archive/xyz#data") == "xyz"
+    for not_a_reference in (None, "", "plain text", {"m_def": "x"}, 5):
+        assert api_calls.entry_id_from_reference(not_a_reference) is None
+
+
+def test_get_samples_with_substrates_pairs_each_sample_with_its_substrate(monkeypatch):
+    from hysprint_utils import api_calls
+
+    samples = [
+        {"archive": {"data": {"lab_id": "S1", "substrate": _ref("sub1")}}},
+        {"archive": {"data": {"lab_id": "S2", "substrate": _ref("sub1")}}},
+        {"archive": {"data": {"lab_id": "S3", "substrate": _ref("sub2", "other_upload")}}},
+        {"archive": {"data": {"lab_id": "S4"}}},
+        {"archive": {"data": {"lab_id": "S5", "substrate": _ref("gone")}}},
+    ]
+    substrates = [
+        {"entry_id": "sub1", "archive": {"data": {"substrate": "Glass"}}},
+        {"entry_id": "sub2", "archive": {"data": {"substrate": "FTO"}}},
+    ]
+    queries = []
+    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([samples, substrates], queries))
+    result = api_calls.get_samples_with_substrates("https://e.test/api", "tok", "up1")
+
+    assert [(r["sample"]["lab_id"], r["substrate"]) for r in result] == [
+        ("S1", {"substrate": "Glass"}),
+        ("S2", {"substrate": "Glass"}),
+        ("S3", {"substrate": "FTO"}),
+        ("S4", {}),
+        ("S5", {}),  # referenced substrate not found
+    ]
+    (_, sample_query), (_, substrate_query) = queries
+    assert sample_query["query"] == {"upload_id": "up1", "entry_type": "HySprint_Sample"}
+    assert sample_query["required"] == {"data": "*"}
+    # one query for all substrates, each id once, whatever upload they are in
+    assert substrate_query["query"] == {"entry_id:any": ["gone", "sub1", "sub2"]}
+
+
+def test_get_samples_with_substrates_skips_the_second_query_without_references(monkeypatch):
+    from hysprint_utils import api_calls
+
+    queries = []
+    samples = [{"archive": {"data": {"lab_id": "S1"}}}, {"archive": None}]
+    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([samples], queries))
+    result = api_calls.get_samples_with_substrates("https://e.test/api", "tok", "up1")
+    assert result == [
+        {"sample": {"lab_id": "S1"}, "substrate": {}},
+        {"sample": {}, "substrate": {}},
+    ]
+    assert len(queries) == 1
+
+
+def test_get_samples_with_substrates_follows_entry_types(monkeypatch):
+    from hysprint_utils import api_calls
+
+    queries = []
+    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([[]], queries))
+    api_calls.get_samples_with_substrates("u", "t", "up1", sample_type="Other_Sample")
+    assert queries[0][1]["query"]["entry_type"] == "Other_Sample"

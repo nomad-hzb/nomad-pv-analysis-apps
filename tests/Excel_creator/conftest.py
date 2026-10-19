@@ -21,6 +21,7 @@ def _load(unique_name: str, filename: str):
     return module
 
 
+_load("nomad_prefill_excel_creator", "nomad_prefill")
 _load("sheet_experiment_excel_creator", "sheet_experiment")
 _load("sheet_data_entry_guide_excel_creator", "sheet_data_entry_guide")
 _load("sheet_how_to_cite_excel_creator", "sheet_how_to_cite")
