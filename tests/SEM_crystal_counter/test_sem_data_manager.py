@@ -35,13 +35,24 @@ def test_sample_table_groups_images_by_sample(demo):
     assert "magnification_spread" in samples.columns
 
 
-def test_grains_table_and_settings_export(demo):
-    grains = demo.grains_table()
+def test_results_workbook_holds_every_table(demo):
+    import io
+
+    import pandas as pd
+
+    sheets = pd.read_excel(io.BytesIO(demo.results_workbook()), sheet_name=None)
+    assert list(sheets) == ["About", "Samples", "Images", "Grains", "Settings"]
+    grains = sheets["Grains"]
     assert {"image", "sample", "area_nm2", "eq_diameter_nm"} <= set(grains.columns)
     assert set(grains["sample"]) == {"DEMO_A", "DEMO_B"}
-    settings = json.loads(demo.settings_json())
-    assert set(settings["presets"]) == {"smooth", "striped"}
-    assert settings["presets_used"]["DEMO_A_01.tif"] in ("smooth", "striped")
+    assert len(grains) == len(demo.grains_table())
+    assert set(sheets["Samples"]["sample"]) == {"DEMO_A", "DEMO_B"}
+    assert set(sheets["Images"]["preset"]) <= {"smooth", "striped"}
+    settings = sheets["Settings"].set_index("setting")
+    assert settings.loc["striped.min_grain_diameter_nm", "value"] == 250.0
+    assert "auto_ratio_threshold" in settings.index
+    about = sheets["About"].set_index("item")
+    assert about.loc["App", "value"].startswith("SEM Crystal Counter ")
 
 
 def test_uploads_take_the_sample_from_the_file_name(make_tiff, voronoi_film):

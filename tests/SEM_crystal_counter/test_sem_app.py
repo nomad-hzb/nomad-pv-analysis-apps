@@ -87,9 +87,10 @@ def test_analysis_panel_refresh_and_download(demo, monkeypatch):
     assert any(getattr(x, "value", None) == "<h4>Samples</h4>" for x in shown)
     tables = [x.data for x in shown if "<table" in str(getattr(x, "data", ""))]
     assert len(tables) == 2 and "Mean diameter (nm)" in tables[0]  # plain HTML, no Styler
-    panel._download("a,b\n1,2\n", "test.csv")
+    panel._download_results()
     script = shown[-1].data
-    assert "a.setAttribute('download', 'test.csv')" in script and "base64," in script
+    assert "sem_results_" in script and ".xlsx" in script
+    assert "spreadsheetml.sheet;base64," in script
 
 
 def test_app_demo_load_end_to_end(monkeypatch):

@@ -9,9 +9,12 @@ per-sample tables and exports, and saves reviews to the training log.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import grain_core as gc
@@ -34,6 +37,13 @@ logger = logging.getLogger(__name__)
 MEASUREMENT_TYPE = ENTRY_TYPES["sem"]
 HOLE = 2  # click kind for holes, the same number as the ImageJ counter used for annotations
 PRESET_CHOICES = ("auto", *gc.PRESETS)
+
+
+def app_version() -> str:
+    """Version from this app's pyproject.toml (shown in exports)."""
+    text = (Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"', text, flags=re.MULTILINE)
+    return match.group(1) if match else "unknown"
 
 
 def training_log_dir() -> Path:
@@ -337,21 +347,78 @@ class SemDataManager:
             frames.append(grains)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-    def settings_json(self) -> str:
-        """The presets and the film-type rule used, for reproducibility of an export."""
-        return json.dumps(
-            {
-                "auto_ratio_threshold": gc.AUTO_RATIO_THRESHOLD,
-                "classifier_probe": gc.CLASSIFIER_PROBE.model_dump(),
-                "presets": {name: p.model_dump() for name, p in gc.PRESETS.items()},
-                "presets_used": {
-                    e.name: e.result.summary.get("preset")
-                    for e in self.entries.values()
-                    if e.analysed
-                },
-            },
-            indent=2,
+    def settings_table(self) -> pd.DataFrame:
+        """Every setting used, one row each, for reproducibility. The preset each image got is
+        in the image table."""
+        rows = [
+            ("app version", app_version(), "SEM_crystal_counter"),
+            (
+                "auto_ratio_threshold",
+                gc.AUTO_RATIO_THRESHOLD,
+                "smooth/probe grain-count ratio above which an image is treated as striped",
+            ),
+        ]
+        for field_name, value in gc.CLASSIFIER_PROBE.model_dump().items():
+            rows.append(
+                (
+                    f"classifier_probe.{field_name}",
+                    value,
+                    "fixed setting for the film-type decision",
+                )
+            )
+        for preset, params in gc.PRESETS.items():
+            for field_name, value in params.model_dump().items():
+                description = gc.Params.model_fields[field_name].description or ""
+                rows.append((f"{preset}.{field_name}", value, description))
+        return pd.DataFrame(
+            [(k, json.dumps(v) if isinstance(v, list) else v, d) for k, v, d in rows],
+            columns=["setting", "value", "meaning"],
         )
+
+    def results_workbook(self) -> bytes:
+        """All results in one Excel file: About, Samples, Images, Grains, Settings."""
+        images, samples, grains = self.image_table(), self.sample_table(), self.grains_table()
+        about = pd.DataFrame(
+            [
+                ("Created", datetime.now().strftime("%Y-%m-%d %H:%M")),
+                ("App", f"SEM Crystal Counter {app_version()}"),
+                ("Images", len(images)),
+                ("Samples", len(samples)),
+                (
+                    "Grain definition",
+                    "the region inside the deep outer groove; stripes or "
+                    "facets inside a grain do not split it; holes are not grains",
+                ),
+                (
+                    "Samples sheet",
+                    "per sample: mean and spread over its images (images with "
+                    f"fewer than {gc.MIN_GRAINS_FOR_STATS} grains left out), magnification spread",
+                ),
+                (
+                    "Images sheet",
+                    "per image: preset used, grain count, mean diameter, density, "
+                    "hole area, reliability, manual corrections",
+                ),
+                (
+                    "Grains sheet",
+                    "every grain of every image, sizes in nm; touches_edge grains "
+                    "are excluded from the size means",
+                ),
+                ("Settings sheet", "every parameter used, for reproducing the results"),
+            ],
+            columns=["item", "value"],
+        )
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            for sheet, table in (
+                ("About", about),
+                ("Samples", samples),
+                ("Images", images),
+                ("Grains", grains),
+                ("Settings", self.settings_table()),
+            ):
+                table.to_excel(writer, sheet_name=sheet, index=False)
+        return buffer.getvalue()
 
 
 def _compact(result: gc.Result) -> gc.Result:

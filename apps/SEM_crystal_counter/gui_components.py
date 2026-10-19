@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from datetime import datetime
 
 import grain_core as gc
 import ipywidgets as widgets
@@ -31,6 +32,7 @@ PRESET_OPTIONS = [
     ("striped films", "striped"),
 ]
 AUTO, CLICKS = "Automatic detection", "My clicks (one per grain)"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 # ---------------------------------------------------------------------------
@@ -134,23 +136,10 @@ class AnalysisPanel:
         self._tables = widgets.Output()
         self._plots = widgets.Output()
         self._downloads = widgets.Output()
-        buttons = [
-            (
-                "Grains (CSV)",
-                lambda: (self.dm.grains_table().to_csv(index=False), "sem_grains.csv"),
-            ),
-            ("Images (CSV)", lambda: (self.dm.image_table().to_csv(index=False), "sem_images.csv")),
-            (
-                "Samples (CSV)",
-                lambda: (self.dm.sample_table().to_csv(index=False), "sem_samples.csv"),
-            ),
-            ("Settings (JSON)", lambda: (self.dm.settings_json(), "sem_settings.json")),
-        ]
-        download_btns = []
-        for label, make in buttons:
-            btn = WidgetFactory.create_button(label, icon="download")
-            btn.on_click(lambda _b, make=make: self._download(*make()))
-            download_btns.append(btn)
+        self._download_btn = WidgetFactory.create_button(
+            "Download results (Excel)", icon="download", min_width=False
+        )
+        self._download_btn.on_click(lambda _b: self._download_results())
         self.widget = widgets.VBox(
             [
                 widgets.HBox([self._preset, self._analyse_btn, self._reanalyse_btn]),
@@ -158,8 +147,11 @@ class AnalysisPanel:
                 self._status,
                 self._tables,
                 self._plots,
-                widgets.HTML("<b>Download</b>"),
-                widgets.HBox(download_btns),
+                widgets.HTML(
+                    "<b>Download</b>: one Excel file with the sheets About, Samples, Images, "
+                    "Grains (every grain) and Settings (every parameter used)."
+                ),
+                self._download_btn,
                 self._downloads,
             ]
         )
@@ -209,13 +201,20 @@ class AnalysisPanel:
                 ipydisplay(go.FigureWidget(pm.size_histogram(self.dm.grains_table())))
                 ipydisplay(go.FigureWidget(pm.sample_bars(samples)))
 
-    def _download(self, content: str, filename: str) -> None:
+    def _download_results(self) -> None:
+        if not any(e.analysed for e in self.dm.entries.values()):
+            ErrorHandler.log_error("Nothing analysed yet.", output_widget=self._downloads)
+            return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        self._download(self.dm.results_workbook(), f"sem_results_{stamp}.xlsx", XLSX_MIME)
+
+    def _download(self, content: bytes, filename: str, mime: str) -> None:
         """Trigger a browser download through an injected anchor click."""
-        data = base64.b64encode(content.encode()).decode()
+        data = base64.b64encode(content).decode()
         js = (
             "var a = document.createElement('a');"
             f"a.setAttribute('download', '{filename}');"
-            f"a.setAttribute('href', 'data:text/plain;charset=utf-8;base64,{data}');"
+            f"a.setAttribute('href', 'data:{mime};base64,{data}');"
             "a.click();"
         )
         with self._downloads:

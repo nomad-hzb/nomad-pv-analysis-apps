@@ -45,8 +45,9 @@ separately.
    - *Samples*: per sample, the mean and spread over its images, plus `magnification_spread`.
    - Two plots: the grain-size distribution per sample, and the mean diameter per sample with
      the spread between images as error bars.
-   - *Download*: every grain, the image table, the sample table, and the settings used (for
-     reproducibility).
+   - *Download results (Excel)*: one file with the sheets *About* (what each sheet holds),
+     *Samples*, *Images*, *Grains* (every grain of every image) and *Settings* (every
+     parameter used, for reproducibility).
    - *Preset* and *Re-analyse all with this preset*: force smooth or striped for every image.
      Normally leave it on automatic.
 3. **Review and correct tab.** Pick an image. If the outlines are wrong:

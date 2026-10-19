@@ -14,6 +14,7 @@ dependencies = [
     "ipywidgets>=8.0",
     "plotly>=5.0",
     "anywidget>=0.9",  # go.FigureWidget needs it
+    "openpyxl>=3.1",  # Excel export
 ]
 
 [project.optional-dependencies]
