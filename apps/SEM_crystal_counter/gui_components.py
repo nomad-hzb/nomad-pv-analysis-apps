@@ -437,16 +437,15 @@ SAMPLE_COLUMNS = {
 }
 
 
-def _readable(table, columns: dict):
-    """The listed columns that exist, renamed and rounded, without the index."""
-    shown = table[[c for c in columns if c in table.columns]].rename(columns=columns)
-    numeric = shown.select_dtypes("number").columns
-    shown[numeric] = shown[numeric].round(2)
+def _readable(table, columns: dict) -> HTML:
+    """The listed columns that exist, renamed and rounded, as an HTML table without the index.
+    Plain DataFrame.to_html: pandas' Styler would need jinja2, which the app does not declare."""
+    shown = table[[c for c in columns if c in table.columns]].rename(columns=columns).copy()
     if "Hole area" in shown:
         shown["Hole area"] = shown["Hole area"].map(
             lambda v: f"{100 * v:.1f}%" if v == v and v is not None else ""
         )
-    return shown.style.hide(axis="index").format(precision=2, na_rep="")
+    return HTML(shown.to_html(index=False, na_rep="", float_format=lambda v: f"{v:.2f}"))
 
 
 def _blank():
