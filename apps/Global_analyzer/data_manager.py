@@ -172,6 +172,7 @@ def parse_uploaded_analysis_csv(csv_bytes: bytes) -> pd.DataFrame:
     key on - the exported format doesn't require one to be present.
     """
     df = pd.read_csv(io.BytesIO(csv_bytes))
+    df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
     if "sample_id" not in df.columns:
         df.insert(0, "sample_id", [f"row_{i + 1}" for i in range(len(df))])
     # Always text: sample exclusion matches on checkbox descriptions (strings),
@@ -188,6 +189,66 @@ def uploaded_numeric_columns(df: pd.DataFrame) -> List[str]:
         for col in df.select_dtypes(include="number").columns
         if col != "sample_id" and df[col].dropna().nunique() > 1
     ]
+
+
+# Header prefixes marking a column's role in the Analysis Data preview and its CSV
+# export, read back by split_column_roles so an exported CSV re-uploads with its
+# results and process parameters intact.
+RESULT_COLUMN_PREFIX = "result: "
+PROCESS_COLUMN_PREFIX = "process: "
+
+MISSING_VALUE_MODES = {
+    "Keep as missing": "keep",
+    "Process parameters -> 0": "process",
+    "All columns -> 0": "all",
+}
+
+
+def label_column_roles(
+    df: pd.DataFrame, results_cols: List[str], process_cols: List[str]
+) -> pd.DataFrame:
+    """df with every result column renamed "result: <name>" and every process
+    column "process: <name>"; other columns (sample_id, ...) keep their name."""
+    renames = {c: f"{RESULT_COLUMN_PREFIX}{c}" for c in results_cols if c in df.columns}
+    renames.update({c: f"{PROCESS_COLUMN_PREFIX}{c}" for c in process_cols if c in df.columns})
+    return df.rename(columns=renames)
+
+
+def split_column_roles(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    """Undo label_column_roles on an uploaded CSV: strip the role prefixes and
+    return (df, result columns, process columns), the names already stripped.
+    A prefix is kept when stripping it would collide with another column."""
+    renames, results, process = {}, [], []
+    taken = set(df.columns)
+    for col in df.columns:
+        for prefix, roles in (
+            (RESULT_COLUMN_PREFIX, results),
+            (PROCESS_COLUMN_PREFIX, process),
+        ):
+            if isinstance(col, str) and col.startswith(prefix):
+                name = col[len(prefix) :]
+                if name and name not in taken:
+                    renames[col] = name
+                    taken.add(name)
+                    roles.append(name)
+                else:
+                    roles.append(col)
+                break
+    return df.rename(columns=renames), results, process
+
+
+def fill_missing_with_zero(df: pd.DataFrame, columns: List[str]) -> Tuple[pd.DataFrame, int]:
+    """Replace NaN with 0 in the numeric `columns` of df (others are left alone,
+    so sample_id and text columns never get a 0). Returns (df, values filled)."""
+    numeric = [c for c in columns if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
+    if not numeric:
+        return df, 0
+    n_filled = int(df[numeric].isna().sum().sum())
+    if not n_filled:
+        return df, 0
+    filled = df.copy()
+    filled[numeric] = filled[numeric].fillna(0)
+    return filled, n_filled
 
 
 def apply_row_filters(df: pd.DataFrame, row_filters: List[dict]) -> pd.DataFrame:
