@@ -197,13 +197,19 @@ class MinimalistExperimentBuilder:
         # fetched until the panel is opened.
         self.prefill_toggle = widgets.ToggleButton(
             value=False,
-            description="Prefill from NOMAD",
-            icon="download",
+            description="Optional: prefill from NOMAD",
             tooltip=(
-                "Fill one row per sample of one of your NOMAD uploads: its Nomad ID and what "
-                "NOMAD knows of the sample and its substrate"
+                "Only if the samples already exist in NOMAD: fill one row per sample of one of "
+                "your NOMAD uploads, with its Nomad ID and what NOMAD knows of the sample and "
+                "its substrate"
             ),
-            layout=widgets.Layout(width="180px", margin="0 0 0 10px"),
+            # Small and grey on its own line under Generate Excel: an extra, not a second
+            # main action.
+            style={"font_size": "12px", "text_color": "#666666"},
+            # align_self: in the VBox an auto-width button would stretch across the page
+            layout=widgets.Layout(
+                width="auto", height="26px", margin="0 0 10px 0", align_self="flex-start"
+            ),
         )
         self.prefill_upload_dropdown = widgets.Dropdown(
             options=[(self.PREFILL_PLACEHOLDER, None)],
@@ -795,10 +801,8 @@ protocol.)
                     [self.is_testing_checkbox, self.include_readme_checkbox],
                     layout=widgets.Layout(margin="0 0 10px 0"),
                 ),
-                widgets.HBox(
-                    [self.generate_button, self.prefill_toggle],
-                    layout=widgets.Layout(margin="0 0 10px 0"),
-                ),
+                widgets.HBox([self.generate_button], layout=widgets.Layout(margin="0 0 10px 0")),
+                self.prefill_toggle,
                 self.prefill_panel,
                 self.download_area,
             ]

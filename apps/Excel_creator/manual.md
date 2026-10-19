@@ -5,8 +5,8 @@
 Build the Excel file in which you describe the fabrication sequence of a batch of samples
 (substrate cleaning, coatings, evaporation, and so on). The finished file is uploaded to NOMAD
 with the Smart Databaser, or by hand. The app builds the empty sheet with the right columns; you
-fill in the values in Excel. It only contacts NOMAD when you open *Prefill from NOMAD* (see
-below).
+fill in the values in Excel. It only contacts NOMAD when you open *Optional: prefill from
+NOMAD* (see below).
 
 ## Step by step
 
@@ -60,8 +60,8 @@ Do not add, rename or move columns: the upload only reads the columns the app cr
 ## Prefill from NOMAD (optional)
 
 If the samples of the batch already exist in NOMAD (for example created by the In-Situ
-Analyser), the sheet can start with them. Press *Prefill from NOMAD* next to *Generate Excel*: a
-panel opens and lists your 100 newest NOMAD uploads. Pick the upload of the batch; the panel says
+Analyser), the sheet can start with them. Press *Optional: prefill from NOMAD* under *Generate
+Excel*: a panel opens and lists your 100 newest NOMAD uploads. Pick the upload of the batch; the panel says
 how many samples it found and which columns NOMAD has values for. *Generate Excel* then writes
 one sample per row, sorted by name:
 
