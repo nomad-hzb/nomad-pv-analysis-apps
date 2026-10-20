@@ -45,23 +45,63 @@ separately.
    - *Samples*: per sample, the mean and spread over its images, plus `magnification_spread`.
    - Two plots: the grain-size distribution per sample, and the mean diameter per sample with
      the spread between images as error bars.
-   - *Download results (Excel)*: one file with the sheets *About* (what each sheet holds),
-     *Samples*, *Images*, *Grains* (every grain of every image) and *Settings* (every
-     parameter used, for reproducibility).
+   - *Download results (Excel)*: one file with the ticked sheets: *About* (what each sheet
+     holds), *Samples*, *Images*, *Grains* (every grain of every image, the largest sheet) and
+     *Settings* (every parameter used, for reproducibility). All are ticked by default.
    - *Preset* and *Re-analyse all with this preset*: force smooth or striped for every image.
      Normally leave it on automatic.
-3. **Review and correct tab.** Pick an image. If the outlines are wrong:
-   - *Automatic detection*: a click *merges two grains* (click both) or *splits a grain*
-     (click where the second grain is; the new border follows the darkest groove).
-   - *My clicks (one per grain)*: click the centre of **every** grain and the program finds
-     the borders. A grain without a dot is absorbed by its neighbours. Switching to this mode
-     starts from the automatic grains, so you only add missing ones and remove wrong ones
-     (click on a dot to remove it). Set *A click: adds a hole* to mark pinholes.
+3. **Review and correct tab.** One image at a time.
+   - **Moving between images:** *◀ Previous* / *Next ▶*, with a counter such as *17 / 85*, or
+     pick the image from the list.
+   - **Ignore this image:** leaves the image out of every result, e.g. a cross-section that
+     was loaded with the top views. Untick it to use the image again.
+   - **What the colours mean:** green outline = grain fully inside the image (counted); orange
+     outline = grain cut by the image border (left out of the size averages, counted as half a
+     grain for the density). Blue dots = your grain clicks, red = holes, magenta = the first
+     point of a merge or cut.
+   - **Zoom:** drag a box over the image, or use the scroll wheel. *Whole image* (or a
+     double-click) zooms out again. While an editing action is selected, the first click of a
+     double-click also counts as a click; *Undo* removes it.
+   - **Correcting automatic grains** (*Grains from: Automatic detection*), with *A click*:
+     - *merges two grains*: click one grain (marked magenta), then its neighbour; the border
+       between them is removed.
+     - *cuts along a line*: click a start point and an end point; every grain the straight
+       line crosses from one border to the other is cut along it. A line that does not cross a
+       grain completely does nothing, and a message says so.
+   - **Placing grains yourself** (*Grains from: My clicks (one per grain)*): click the centre of
+     **every** grain and the program finds the borders. A grain without a dot is absorbed by
+     its neighbours. Switching to this mode starts from the automatic grains, so you only add
+     missing ones and remove wrong ones. *A click* then *adds a grain*, *adds a hole* (pinholes
+     or voids, whose area is reported separately) or *removes a dot*. **Ctrl+click** removes
+     a dot in any of these modes.
    - *Undo* and *Clear corrections* work on the current mode. Corrections are kept per image,
      and the tables and plots update with them.
+   - **Detection settings for this image** (collapsed): the three settings that matter most,
+     for images where the automatic grains are systematically wrong. *Apply to this image*
+     re-analyses it (a few seconds); *Apply to all images* does it for every image that is not
+     ignored; *Back to the preset* undoes it. Corrections made before are kept, but check them,
+     because the grains may have changed. The Images table marks such images "own settings".
+     - *Smallest grain diameter*: the most important one. Raise it when grains fall apart into
+       small pieces; lower it when neighbouring grains are glued together.
+     - *Merge threshold*: higher merges more (removes false borders such as stripes inside
+       grains).
+     - *Boundary threshold*: lower gives fewer grains, higher gives more.
    - *Save as reviewed* stores the image's final grain map, your clicks or edits, and the
-     settings in the training log. Please also save images that needed no correction:
-     confirmed results are training data too.
+     settings in the training log (see below). Please also save images that needed no
+     correction: confirmed results are useful too.
+
+## Training data: what happens with saved reviews
+
+Every *Save as reviewed* writes one folder per image to the team's training log
+(`shared/log/sem_training_log/` of the app's upload). It holds:
+- the final grain map;
+- your clicks (in the same format as an ImageJ point annotation) or your merge/cut edits;
+- the settings used, your user name and the time.
+
+Nothing is trained automatically while you work. The collected reviews are used by the
+developers to check and retune the automatic detection and, once enough images are reviewed,
+to train a model for it. So the more images are reviewed, the better later versions get.
+Saving the same image again replaces its earlier review.
 
 ## How the numbers are computed
 

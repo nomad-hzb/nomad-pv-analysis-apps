@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Measurement type constant -- imported by gui_components.py
 MEASUREMENT_TYPE = ENTRY_TYPES["sem"]
+SHEETS = ("About", "Samples", "Images", "Grains", "Settings")
 HOLE = 2  # click kind for holes, the same number as the ImageJ counter used for annotations
 PRESET_CHOICES = ("auto", *gc.PRESETS)
 
@@ -67,6 +68,8 @@ class SemEntry:
     edits: list[dict] = field(default_factory=list)
     clicks: list[tuple[float, float, int]] = field(default_factory=list)  # (y, x, kind)
     use_clicks: bool = False
+    ignored: bool = False  # left out of every result (e.g. a cross-section image)
+    overrides: dict = field(default_factory=dict)  # per-image detection settings (sliders)
     _final: tuple | None = field(default=None, repr=False)  # (key, result, warnings) cache
 
     @property
@@ -173,8 +176,9 @@ class SemDataManager:
     # Analysis
     # ------------------------------------------------------------------
     def analyse(self, name: str, preset: str = "auto") -> SemEntry:
-        """Run the automatic analysis on one image. Corrections made earlier are kept: they
-        are stored as image positions and replayed on the new result."""
+        """Run the automatic analysis on one image, with its per-image detection settings
+        (entry.overrides) on top of the preset. Corrections made earlier are kept: they are
+        stored as image positions and replayed on the new result."""
         entry = self.entries[name]
         if entry.sem is None:
             return entry
@@ -182,11 +186,20 @@ class SemDataManager:
             entry.error = "no pixel size in the TIFF metadata"
             return entry
         try:
+            chosen, ratio, result = preset, None, None
             if preset == "auto":
-                result = gc.analyze_auto(entry.sem)
-            else:
-                result = gc.analyze(entry.sem, gc.PRESETS[preset])
-                result.summary.update({"preset": preset, "preset_ratio": None})
+                if entry.overrides and entry.result is not None:
+                    chosen = entry.result.summary.get("preset", "smooth")
+                    ratio = entry.result.summary.get("preset_ratio")
+                else:
+                    result = gc.analyze_auto(entry.sem)
+                    chosen, ratio = result.summary["preset"], result.summary["preset_ratio"]
+            if entry.overrides or result is None:
+                params = gc.PRESETS[chosen].model_copy(update=entry.overrides)
+                result = gc.analyze(entry.sem, params)
+            result.summary.update(
+                {"preset": chosen, "preset_ratio": ratio, "custom_settings": bool(entry.overrides)}
+            )
         except Exception as exc:
             logger.exception("Analysis of %s failed", name)
             entry.error = f"analysis failed: {exc}"
@@ -238,6 +251,47 @@ class SemDataManager:
         entry = self.entries[name]
         if entry.result is not None:
             entry.clicks = [(y, x, 0) for y, x in gc.grain_centres(entry.result)]
+
+    def params(self, name: str) -> gc.Params:
+        """The detection settings in use for an image: its preset plus its own overrides."""
+        entry = self.entries[name]
+        preset = entry.result.summary.get("preset", "smooth") if entry.result else "smooth"
+        return gc.PRESETS[preset].model_copy(update=entry.overrides)
+
+    def set_overrides(self, name: str, overrides: dict) -> SemEntry:
+        """Change an image's detection settings (empty dict = back to its preset) and
+        re-analyse it."""
+        entry = self.entries[name]
+        entry.overrides = dict(overrides)
+        return self.analyse(name, entry.preset)
+
+    def set_ignored(self, name: str, ignored: bool) -> None:
+        self.entries[name].ignored = ignored
+
+    def add_click(self, name: str, y: float, x: float, kind: int = 0, radius: float = 7.0):
+        """Add a grain (kind 0) or hole (HOLE) click. A click on an existing dot adds nothing
+        (two dots in one grain would split it). Returns "added" or "exists"."""
+        if self._near(name, y, x, radius):
+            return "exists"
+        self.entries[name].clicks.append((float(y), float(x), int(kind)))
+        return "added"
+
+    def remove_click(self, name: str, y: float, x: float, radius: float = 10.0):
+        """Remove the dot nearest to (y, x) within radius. Returns "removed" or "none"."""
+        near = self._near(name, y, x, radius)
+        if not near:
+            return "none"
+        clicks = self.entries[name].clicks
+        nearest = min(near, key=lambda i: (clicks[i][0] - y) ** 2 + (clicks[i][1] - x) ** 2)
+        clicks.pop(nearest)
+        return "removed"
+
+    def _near(self, name: str, y: float, x: float, radius: float) -> list[int]:
+        return [
+            i
+            for i, (cy, cx, _) in enumerate(self.entries[name].clicks)
+            if (cy - y) ** 2 + (cx - x) ** 2 <= radius**2
+        ]
 
     def toggle_click(self, name: str, y: float, x: float, kind: int = 0, radius: float = 7.0):
         """Add a grain (kind 0) or hole (HOLE) click, or remove the click within `radius`
@@ -301,15 +355,18 @@ class SemDataManager:
                 "variation": entry.variation,
                 "source": entry.source,
                 "pixel_size_nm": entry.sem.pixel_size_nm if entry.sem else None,
-                "status": entry.error or ("analysed" if entry.analysed else "not analysed"),
+                "status": "ignored"
+                if entry.ignored
+                else entry.error or ("analysed" if entry.analysed else "not analysed"),
                 "corrected": "clicks" if entry.use_clicks else ("edits" if entry.edits else ""),
             }
-            if entry.analysed:
+            if entry.analysed and not entry.ignored:
                 result, _ = self.final_result(entry.name)
                 summary = result.summary
                 row.update(
                     {
-                        "preset": entry.result.summary.get("preset"),
+                        "preset": entry.result.summary.get("preset")
+                        + (" (own settings)" if entry.overrides else ""),
                         "n_grains": summary.get("n_grains"),
                         "mean_eq_diameter_nm": summary.get("mean_eq_diameter_nm"),
                         "mean_area_planimetric_nm2": summary.get("mean_area_planimetric_nm2"),
@@ -326,7 +383,7 @@ class SemDataManager:
         sample has reliable images), with the magnification-consistency score."""
         images = []
         for entry in self.entries.values():
-            if not entry.analysed:
+            if not entry.analysed or entry.ignored:
                 continue
             result, _ = self.final_result(entry.name)
             images.append({"sample": entry.sample_id, **result.summary})
@@ -338,7 +395,7 @@ class SemDataManager:
         """Every grain of every analysed image, with image and sample columns."""
         frames = []
         for entry in self.entries.values():
-            if not entry.analysed:
+            if not entry.analysed or entry.ignored:
                 continue
             result, _ = self.final_result(entry.name)
             grains = result.grains.copy()
@@ -370,19 +427,28 @@ class SemDataManager:
             for field_name, value in params.model_dump().items():
                 description = gc.Params.model_fields[field_name].description or ""
                 rows.append((f"{preset}.{field_name}", value, description))
+        for entry in self.entries.values():
+            for field_name, value in entry.overrides.items():
+                rows.append(
+                    (f"{entry.name}: {field_name}", value, "own setting of this image (slider)")
+                )
         return pd.DataFrame(
             [(k, json.dumps(v) if isinstance(v, list) else v, d) for k, v, d in rows],
             columns=["setting", "value", "meaning"],
         )
 
-    def results_workbook(self) -> bytes:
-        """All results in one Excel file: About, Samples, Images, Grains, Settings."""
-        images, samples, grains = self.image_table(), self.sample_table(), self.grains_table()
+    def results_workbook(self, sheets=SHEETS) -> bytes:
+        """The results in one Excel file, with the chosen sheets (in the order of SHEETS)."""
+        if not sheets:
+            raise ValueError("choose at least one sheet")
+        images, samples = self.image_table(), self.sample_table()
+        n_ignored = int((images["status"] == "ignored").sum()) if len(images) else 0
         about = pd.DataFrame(
             [
                 ("Created", datetime.now().strftime("%Y-%m-%d %H:%M")),
                 ("App", f"SEM Crystal Counter {app_version()}"),
                 ("Images", len(images)),
+                ("Ignored images", f"{n_ignored} (listed in Images, left out of every result)"),
                 ("Samples", len(samples)),
                 (
                     "Grain definition",
@@ -410,14 +476,16 @@ class SemDataManager:
         )
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            for sheet, table in (
-                ("About", about),
-                ("Samples", samples),
-                ("Images", images),
-                ("Grains", grains),
-                ("Settings", self.settings_table()),
-            ):
-                table.to_excel(writer, sheet_name=sheet, index=False)
+            tables = {
+                "About": lambda: about,
+                "Samples": lambda: samples,
+                "Images": lambda: images,
+                "Grains": self.grains_table,
+                "Settings": self.settings_table,
+            }
+            for sheet in SHEETS:
+                if sheet in sheets:
+                    tables[sheet]().to_excel(writer, sheet_name=sheet, index=False)
         return buffer.getvalue()
 
 

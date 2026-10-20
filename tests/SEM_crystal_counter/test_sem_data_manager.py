@@ -149,3 +149,16 @@ def test_save_review_writes_to_the_shared_training_log(demo, monkeypatch, tmp_pa
 def test_training_log_dir_sits_next_to_the_usage_logs(monkeypatch, tmp_path):
     monkeypatch.setenv("HYSPRINT_USAGE_LOG_DIR", str(tmp_path))
     assert dm.training_log_dir() == tmp_path / "sem_training_log"
+
+
+def test_workbook_with_chosen_sheets_only(demo):
+    import io
+
+    import pandas as pd
+
+    sheets = pd.read_excel(
+        io.BytesIO(demo.results_workbook(["Samples", "Grains"])), sheet_name=None
+    )
+    assert list(sheets) == ["Samples", "Grains"]
+    with pytest.raises(ValueError):
+        demo.results_workbook([])

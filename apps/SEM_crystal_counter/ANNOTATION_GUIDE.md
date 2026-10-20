@@ -113,3 +113,21 @@ there.
     nothing needed fixing: confirmed results are training data too.
   - Install the dev extras first:
     `pip install streamlit opencv-python-headless streamlit-image-coordinates`.
+
+## Training data from the app (for developers)
+
+Every *Save as reviewed* in the Voila app writes one folder per image to
+`shared/log/sem_training_log/` of the app's upload (or `$HYSPRINT_USAGE_LOG_DIR/sem_training_log`).
+`training_log.load_reviews(folder)` reads them all. Each folder holds:
+- `labels.png`: the final grain map, 16-bit, 0 = no grain or a hole.
+- `review.json`: image name and fingerprint, pixel size, preset, settings, merge/cut edits, user,
+  time.
+- `points.csv`, only for images corrected in click mode: X, Y and Counter (0 = grain,
+  2 = hole), the same format as an ImageJ annotation.
+
+Nothing is trained automatically. To use the reviews:
+- **Retune the presets:** copy a review's `points.csv` into the annotation folder as
+  `<image>_Results.csv`; `evaluate.py` and the search scripts then score against it like a hand
+  annotation.
+- **Train a model:** use the `labels.png` maps as complete ground truth (for example to
+  fine-tune Cellpose) once a few dozen images are reviewed.

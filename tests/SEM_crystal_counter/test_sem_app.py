@@ -23,16 +23,18 @@ def demo():
     return manager
 
 
-def _click(panel, y, x):
-    panel._on_figure_click(None, SimpleNamespace(xs=[x], ys=[y]), None)
+def _click(panel, y, x, ctrl=False):
+    """A Plotly click at pixel (y, x), as delivered to the trace's on_click callback."""
+    panel._on_figure_click(None, SimpleNamespace(xs=[x], ys=[y]), SimpleNamespace(ctrl=ctrl))
 
 
 def test_overlay_figure_keeps_pixel_coordinates():
     rgb = np.zeros((100, 200, 3), dtype=np.uint8)
     fig = pm.overlay_figure(rgb)
     assert fig.data[0].source.startswith("data:image/png;base64,")
-    assert list(fig.layout.xaxis.range) == [0, 200]
-    assert list(fig.layout.yaxis.range) == [100, 0]  # rows grow downwards, like the image
+    # autorange (not fixed ranges), so a double-click returns to this image's full extent
+    assert fig.layout.xaxis.autorange is True
+    assert fig.layout.yaxis.autorange == "reversed"  # rows grow downwards, like the image
 
 
 def test_result_plots_and_empty_states(demo):
@@ -54,8 +56,14 @@ def test_review_panel_click_mode_adds_holes_and_removes_dots(demo):
     panel._action.value = "adds a hole"
     _click(panel, 5, 5)
     assert entry.clicks[-1][2] == dm.HOLE
-    _click(panel, 5, 5)  # clicking the same spot removes the dot again
+    _click(panel, 5, 5)  # a second click on the dot adds nothing (no duplicate dots)
+    assert len(entry.clicks) == n_auto + 1
+    _click(panel, 6, 6, ctrl=True)  # ctrl+click removes the nearest dot
     assert len(entry.clicks) == n_auto
+    panel._action.value = "removes a dot"
+    y, x, _ = entry.clicks[0]
+    _click(panel, int(y), int(x))
+    assert len(entry.clicks) == n_auto - 1
     assert "grain clicks" in panel._info.value
     panel._source.value = gui.AUTO
     assert not entry.use_clicks
@@ -72,7 +80,7 @@ def test_review_panel_merge_needs_two_clicks(demo):
     other = next(lab for lab in range(2, labels.max() + 1) if (labels == lab).any())
     second = np.argwhere(labels == other)[0]
     _click(panel, *first)
-    assert panel._pending_merge is not None and not demo.entries[name].edits
+    assert panel._pending is not None and not demo.entries[name].edits
     _click(panel, *second)
     assert demo.entries[name].edits[-1]["op"] == "merge"
     panel._undo(None)
@@ -133,3 +141,70 @@ def test_app_still_works_when_nomad_is_unreachable(monkeypatch):
     assert "Could not get the batch list" in sem_app._sources.children[0].value
     sem_app._on_demo_load(None)  # demo (and upload) still work
     assert len(sem_app._dm.entries) == 3
+
+
+def test_whole_image_button_resets_the_zoom(demo):
+    panel = gui.ReviewPanel(demo, on_changed=lambda: None)
+    panel.refresh()
+    panel._figure.layout.xaxis.range = [10, 50]  # as after zooming in
+    panel._whole_btn.click()
+    x0, x1 = panel._figure.layout.xaxis.range
+    assert x0 == pytest.approx(-0.5, abs=1e-3) and x1 == 640 - 0.5  # the demo images are 640 wide
+    first = tuple(panel._figure.layout.xaxis.range)
+    panel._whole_btn.click()  # a second reset is still a change, so the browser gets it
+    assert tuple(panel._figure.layout.xaxis.range) != first
+
+
+def test_navigation_counter_and_ignore(demo):
+    panel = gui.ReviewPanel(demo, on_changed=lambda: None)
+    panel.refresh()
+    panel._image.value = demo.names[0]
+    assert panel._counter.value == "1 / 3"
+    panel._step(1)
+    assert panel._image.value == demo.names[1] and panel._counter.value == "2 / 3"
+    panel._step(-2)  # wraps around to the last image
+    assert panel._counter.value == "3 / 3"
+    name = panel._image.value
+    panel._ignore.value = True
+    assert demo.entries[name].ignored
+    assert name not in set(demo.grains_table()["image"])
+    assert "ignored" in panel._info.value
+    panel._ignore.value = False
+    assert name in set(demo.grains_table()["image"])
+
+
+def test_cut_needs_two_clicks_across_a_grain(demo):
+    panel = gui.ReviewPanel(demo, on_changed=lambda: None)
+    panel.refresh()
+    name = "DEMO_A_02.tif"
+    panel._image.value = name
+    panel._source.value = gui.AUTO
+    panel._action.value = "cuts along a line"
+    before = demo.final_result(name)[0].summary["n_grains"]
+    labels = demo.final_result(name)[0].labels
+    ys, xs = np.nonzero(labels == np.argmax(np.bincount(labels.ravel())))  # largest grain
+    row = int(np.median(ys))
+    cols = xs[ys == row]
+    _click(panel, row, int(cols.min()) - 3)  # just outside its left border ...
+    assert panel._pending is not None and not demo.entries[name].edits
+    _click(panel, row, int(cols.max()) + 3)  # ... to just outside its right border
+    assert demo.entries[name].edits[-1]["op"] == "cut"
+    assert demo.final_result(name)[0].summary["n_grains"] == before + 1
+    demo.clear_corrections(name)
+
+
+def test_detection_settings_re_analyse_one_image(demo):
+    panel = gui.ReviewPanel(demo, on_changed=lambda: None)
+    panel.refresh()
+    name = "DEMO_A_01.tif"
+    panel._image.value = name
+    before = demo.final_result(name)[0].summary["n_grains"]
+    panel._sliders["min_grain_diameter_nm"].value = 400.0
+    panel._apply_settings(all_images=False)
+    entry = demo.entries[name]
+    assert entry.overrides == {"min_grain_diameter_nm": 400.0}
+    assert demo.final_result(name)[0].summary["n_grains"] < before
+    assert "own settings" in demo.image_table().set_index("image").loc[name, "preset"]
+    panel._reset_settings()
+    assert entry.overrides == {}
+    assert demo.final_result(name)[0].summary["n_grains"] == before

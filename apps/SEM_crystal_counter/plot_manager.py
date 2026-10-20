@@ -36,9 +36,12 @@ def overlay_figure(rgb: np.ndarray, title: str = "") -> go.Figure:
         width=OVERLAY_WIDTH,
         height=int(OVERLAY_WIDTH * height / width) + (40 if title else 10),
         margin=dict(l=0, r=0, t=40 if title else 0, b=0),
-        xaxis=dict(visible=False, range=[0, width]),
-        yaxis=dict(visible=False, range=[height, 0], scaleanchor="x"),
-        dragmode="pan",
+        # autorange, not fixed ranges: a double-click restores the ranges the figure was
+        # created with, which must be the current image's full extent
+        xaxis=dict(visible=False, autorange=True),
+        yaxis=dict(visible=False, autorange="reversed", scaleanchor="x"),
+        # zoom, not pan: in pan mode Plotly sends no click event for Ctrl+click
+        dragmode="zoom",
     )
     return fig
 

@@ -26,7 +26,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks
-from skimage import filters, graph, measure, restoration, segmentation
+from skimage import draw, filters, graph, measure, restoration, segmentation
 from skimage.feature import peak_local_max
 from skimage.graph import rag_boundary
 
@@ -598,12 +598,61 @@ def split_at(labels: np.ndarray, bmap: np.ndarray, point: tuple[int, int]) -> st
     return None
 
 
+def cut_along_line(
+    labels: np.ndarray, start: tuple[int, int], end: tuple[int, int], min_piece_px: float = 20
+) -> str | None:
+    """Cut every grain that the straight line start -> end crosses from one border to another,
+    in place. Returns a warning when no grain is cut.
+
+    The line pixels are removed from each grain the line touches; the grain is split only if
+    the rest falls apart into two or more pieces of at least min_piece_px pixels (so the line
+    must intersect the grain's outline on both sides, or run into the image edge). The line
+    pixels are then given to the nearest piece.
+    """
+    rows, cols = draw.line(*map(int, start), *map(int, end))
+    keep = (rows >= 0) & (rows < labels.shape[0]) & (cols >= 0) & (cols < labels.shape[1])
+    on_line = np.zeros(labels.shape, dtype=bool)
+    on_line[rows[keep], cols[keep]] = True
+    cut_any = False
+    for lab in np.unique(labels[on_line]):
+        if lab == 0:
+            continue
+        sl = ndi.find_objects((labels == lab).astype(np.int32))[0]
+        region = labels[sl] == lab
+        pieces = measure.label(region & ~on_line[sl], connectivity=1)
+        sizes = np.bincount(pieces.ravel())[1:]
+        big = np.flatnonzero(sizes >= min_piece_px) + 1
+        if len(big) < 2:
+            continue
+        # keep only the big pieces; small crumbs and the line itself go to the nearest one
+        seeds = np.where(np.isin(pieces, big), pieces, 0)
+        _, (iy, ix) = ndi.distance_transform_edt(seeds == 0, return_indices=True)
+        nearest = seeds[iy, ix]
+        new_labels = labels[sl].copy()
+        largest = big[np.argmax(sizes[big - 1])]
+        next_label = labels.max() + 1
+        for piece in big:
+            if piece == largest:
+                continue
+            new_labels[region & (nearest == piece)] = next_label
+            next_label += 1
+        labels[sl] = new_labels
+        cut_any = True
+    if not cut_any:
+        return (
+            f"cut from {tuple(start)} to {tuple(end)}: the line must cross a grain from one "
+            "border to the other"
+        )
+    return None
+
+
 def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
     """Replay manual edits on a result and re-measure.
 
     Edits are recorded as clicked image positions, not grain ids:
         {"op": "merge", "points": [[y1, x1], [y2, x2]]}
         {"op": "split", "point": [y, x]}
+        {"op": "cut", "points": [[y1, x1], [y2, x2]]}   (straight cutting line)
     so they still apply after a parameter change renumbers the grains. Edits that no longer
     make sense (both merge clicks in one grain, a split with no boundary) are skipped and
     reported.
@@ -618,6 +667,11 @@ def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
             warning = merge_at(labels, first, second)
         elif edit["op"] == "split":
             warning = split_at(labels, result.bmap, tuple(map(int, edit["point"])))
+        elif edit["op"] == "cut":
+            start, end = (tuple(map(int, pt)) for pt in edit["points"])
+            px = result.sem.pixel_size_nm or 1.0
+            min_piece = max(result.params.min_grain_area_nm2 / px**2, 20)
+            warning = cut_along_line(labels, start, end, min_piece)
         else:
             warning = f"unknown edit {edit!r}"
         if warning:
