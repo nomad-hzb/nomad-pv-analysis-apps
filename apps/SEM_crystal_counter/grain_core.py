@@ -298,6 +298,8 @@ def measure_grains(labels: np.ndarray, pixel_size_nm: float) -> pd.DataFrame:
         "circularity",
         "solidity",
         "orientation_deg",
+        "width_nm",
+        "height_nm",
         "centroid_x_px",
         "centroid_y_px",
         "touches_edge",
@@ -339,6 +341,8 @@ def measure_grains(labels: np.ndarray, pixel_size_nm: float) -> pd.DataFrame:
             "circularity": 4 * np.pi * area_nm2 / np.maximum(perimeter_nm**2, 1e-9),
             "solidity": t["area"] / np.maximum(hull_area, 1e-9),
             "orientation_deg": np.degrees(t["orientation"]),
+            "width_nm": (maxc - minc) * pixel_size_nm,  # horizontal extent (bounding box)
+            "height_nm": (maxr - minr) * pixel_size_nm,  # vertical extent (bounding box)
             "centroid_x_px": t["centroid-1"],
             "centroid_y_px": t["centroid-0"],
             "touches_edge": touches_edge,
@@ -569,6 +573,8 @@ def grain_centres(result: Result) -> list[tuple[float, float]]:
 def merge_at(labels: np.ndarray, first: tuple[int, int], second: tuple[int, int]) -> str | None:
     """Merge the grains under two clicked (y, x) points, in place. Returns a warning or None."""
     a, b = int(labels[first]), int(labels[second])
+    if a == 0 or b == 0:
+        return f"merge at {first} and {second}: a click is outside every grain"
     if a == b:
         return f"merge at {first} and {second}: both clicks are in the same grain"
     labels[labels == b] = a
@@ -788,6 +794,18 @@ def magnification_spread(images: pd.DataFrame) -> pd.DataFrame:
             "magnification_spread": spread.where(stats["count"] > 1),
         }
     )
+
+
+def has_measurement_overlay(image: np.ndarray) -> bool:
+    """True when the SEM software drew measurements into the image: solid black label boxes
+    (>= 150 px, >= 85% filled) holding white text. Natural SEM images have none (voids are
+    irregular and hold no pure white); on the reference images measured ones had 2-4."""
+    labels, _ = ndi.label(ndi.binary_closing(image == 0, iterations=2))
+    for i, sl in enumerate(ndi.find_objects(labels), start=1):
+        box = labels[sl] == i
+        if box.size >= 150 and box.mean() >= 0.85 and (image[sl] == 255).sum() >= 5:
+            return True
+    return False
 
 
 def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True) -> np.ndarray:

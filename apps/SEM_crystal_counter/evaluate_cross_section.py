@@ -9,6 +9,11 @@ Only thickness bars are compared: bars at least 60% as long as the longest bar o
 image. Shorter vertical bars measure void heights.
 
     python evaluate_cross_section.py "D:/.../SEM images/side"
+    python evaluate_cross_section.py "D:/.../SEM images/side" --grains "D:/.../annotations"
+
+--grains also scores the grains inside the film against ImageJ point annotations of
+cross-sections (cs_*_Results.csv): counter 0/1 = grain/unsure grain, 2 = void, 3 = points along
+the film bottom (used as the bottom, so only the grain detection is scored).
 """
 
 from __future__ import annotations
@@ -62,11 +67,41 @@ def extract_bars(clean: np.ndarray, measured: np.ndarray) -> list[dict]:
     return bars
 
 
+def score_grains(images: Path, annotations: Path, params=None) -> pd.DataFrame:
+    """Grain scores of the cross-section analysis against cs_*_Results.csv annotations."""
+    from evaluate import annotation_stem, score
+
+    rows = []
+    files = {p.stem.lower(): p for p in images.glob("*.tif")}
+    for ann in sorted(annotations.glob("cs_*.csv")):
+        stem = annotation_stem(ann.name)
+        if stem is None or stem.lower() not in files:
+            continue
+        sem = gc.load_sem_tiff(files[stem.lower()])
+        table = pd.read_csv(ann)
+        bottom = table[table["Counter"] == 3][["Y", "X"]].to_numpy()
+        points = table[table["Counter"] != 3]
+        points = pd.DataFrame(
+            {
+                "x": points["X"].astype(float),
+                "y": points["Y"].astype(float),
+                "unsure": points["Counter"] == 1,
+                "hole": points["Counter"] == 2,
+            }
+        )
+        result, _ = cs.analyze_cross_section(
+            sem, params, bottom_line=bottom if len(bottom) else None
+        )
+        rows.append({"image": stem, **score(result.labels, points, sem.pixel_size_nm)})
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("folder")
+    parser.add_argument("--grains", help="annotation folder: also score the grains in the film")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -106,6 +141,11 @@ def main() -> None:
         100 * table["error"].abs().max(),
         100 * table["error"].mean(),
     )
+
+    if args.grains:
+        grains = score_grains(Path(args.folder), Path(args.grains))
+        cols = ["image", "n_true", "n_pred", "precision", "recall", "f1", "area_error"]
+        logger.info("\nGrains in the film:\n%s", grains[cols].round(3).to_string(index=False))
 
 
 if __name__ == "__main__":

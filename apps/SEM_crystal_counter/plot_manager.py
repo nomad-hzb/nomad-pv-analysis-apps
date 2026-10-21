@@ -92,3 +92,56 @@ def _empty(message: str) -> go.Figure:
     fig.add_annotation(text=message, showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")
     fig.update_layout(height=200, xaxis=dict(visible=False), yaxis=dict(visible=False))
     return fig
+
+
+def scalebar_script(container_class: str, nm_per_px: float) -> str:
+    """JavaScript for a scale bar below the overlay figure inside the element with
+    container_class. It runs in the browser and follows every zoom, pan and double-click
+    reset: Python is not told about those, so the bar is computed from the figure's current
+    x range. Length about 1/10 of the visible width, rounded to 1, 2 or 5 x 10^n nm."""
+    return f"""
+(function () {{
+  window.semScale = window.semScale || {{}};
+  window.semScale["{container_class}"] = {nm_per_px};
+  function nice(v) {{
+    var p = Math.pow(10, Math.floor(Math.log10(v)));
+    var m = v / p;
+    return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+  }}
+  function label(nm) {{
+    return nm >= 1000 ? (nm / 1000) + " \u00b5m" : nm + " nm";
+  }}
+  function install(tries) {{
+    var box = document.querySelector(".{container_class}");
+    var gd = box && box.querySelector(".js-plotly-plot");
+    if (!gd || !gd._fullLayout || !gd._fullLayout.xaxis) {{
+      if (tries > 0) setTimeout(function () {{ install(tries - 1); }}, 300);
+      return;
+    }}
+    var bar = box.querySelector(".sem-scalebar");
+    if (!bar) {{
+      bar = document.createElement("div");
+      bar.className = "sem-scalebar";
+      bar.style.cssText = "margin:4px 0 6px 0;font:13px sans-serif;";
+      box.appendChild(bar);  // the wrapper stacks vertically: the bar goes below the image
+    }}
+    function update() {{
+      var xa = gd._fullLayout.xaxis, px = window.semScale["{container_class}"];
+      if (!xa || !xa.range || !px) return;
+      var visible = Math.abs(xa.range[1] - xa.range[0]);
+      var nm = nice(visible * px / 10);
+      var width = nm / px / visible * xa._length;
+      bar.innerHTML = '<div style="margin-left:' + xa._offset + 'px;width:' + width.toFixed(1) +
+        'px;height:5px;background:#000"></div><div class="sem-scalebar-label" style="margin-left:' +
+        xa._offset + 'px">' + label(nm) + '</div>';
+    }}
+    if (!gd._semScalebar) {{
+      gd.on("plotly_relayout", update);
+      gd.on("plotly_afterplot", update);
+      gd._semScalebar = true;
+    }}
+    update();
+  }}
+  install(40);
+}})();
+"""

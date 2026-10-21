@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import grain_core as gc
 import numpy as np
 from grain_core import SemImage
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks
-from skimage import filters
+from skimage import filters, segmentation
 
 CROSS_SECTION_RATIO = 0.6
 """An image is a cross-section when the texture of its top 10% rows is below this fraction of
@@ -111,14 +112,32 @@ class CrossSectionResult:
     summary: dict = field(default_factory=dict)
 
 
-def measure_thickness(sem: SemImage) -> CrossSectionResult:
-    """Film top, bottom interface and thickness per column, with summary statistics."""
+CROSS_PARAMS = gc.Params(min_grain_diameter_nm=100.0)
+"""Grain detection inside the film. Preliminary: to be tuned against annotated cross-sections."""
+
+
+def line_from_points(points, width: int) -> np.ndarray | None:
+    """Row per column of a line given by clicked (y, x) points: linear between the points,
+    flat beyond the outermost ones. None without at least two points."""
+    if points is None or len(points) < 2:
+        return None
+    ys, xs = np.asarray(points, dtype=float).T
+    order = np.argsort(xs)
+    return np.round(np.interp(np.arange(width), xs[order], ys[order])).astype(int)
+
+
+def measure_thickness(sem: SemImage, bottom_line=None) -> CrossSectionResult:
+    """Film top, bottom interface and thickness per column, with summary statistics.
+    bottom_line: optional (y, x) points of a hand-drawn film bottom; it replaces the
+    automatic bottom interface."""
     if sem.pixel_size_nm is None:
         raise ValueError(f"{sem.name}: pixel size unknown")
     px = sem.pixel_size_nm
     img = sem.image.astype(float) / 255
     top = film_top(img, px)
-    bottom = bottom_interface(img, top, px)
+    drawn = line_from_points(bottom_line, img.shape[1])
+    bottom = drawn if drawn is not None else bottom_interface(img, top, px)
+    bottom = np.maximum(bottom, top)
     thickness = (bottom - top).astype(float) * px
     valid = thickness[thickness > 0]
     summary = {
@@ -132,6 +151,7 @@ def measure_thickness(sem: SemImage) -> CrossSectionResult:
         "thickness_max_nm": float(valid.max()) if len(valid) else float("nan"),
         "top_roughness_rms_nm": float(np.std(top) * px),
         "width_measured_nm": float(len(thickness) * px),
+        "bottom_drawn": drawn is not None,
     }
     return CrossSectionResult(sem, top, bottom, thickness, summary)
 
@@ -144,3 +164,86 @@ def overlay(result: CrossSectionResult) -> np.ndarray:
         for dy in (0, 1):
             rgb[np.clip(rows + dy, 0, rgb.shape[0] - 1), xs] = color
     return rgb
+
+
+def film_mask(result: CrossSectionResult) -> np.ndarray:
+    """True between the film top and the bottom interface."""
+    rows = np.arange(result.sem.image.shape[0])[:, None]
+    return (rows >= result.top[None, :]) & (rows <= result.bottom[None, :])
+
+
+def analyze_cross_section(
+    sem: SemImage, params: gc.Params | None = None, bottom_line=None
+) -> tuple[gc.Result, CrossSectionResult]:
+    """Thickness, and the grains inside the film only (label 0 outside: vacuum and the layers
+    below are never grains). The grain result works with the same corrections as top views."""
+    params = params or CROSS_PARAMS
+    thick = measure_thickness(sem, bottom_line)
+    film = film_mask(thick)
+    px = sem.pixel_size_nm
+    pre = gc.preprocess(sem.image, px, params)
+    bmap = gc.boundary_map(pre, px, params)
+    bmap = np.where(film, bmap, 1.0)  # outside the film counts as boundary
+    seeds = gc.find_seeds(bmap, px, params)
+    seeds[~film] = 0
+    outside = seeds.max() + 1
+    seeds[~film] = outside  # vacuum and the layers below grow as one region
+    labels = segmentation.watershed(bmap, seeds)
+    labels = gc.merge_regions(labels, pre, px, params)
+    labels[~film] = 0
+    labels = segmentation.relabel_sequential(labels)[0]
+    seeds[seeds == outside] = 0
+    result = gc.Result(
+        sem, params, pre, bmap, seeds, labels, labels, gc.measure_grains(labels, px), {}
+    )
+    return restrict_to_film(result, film, thick), thick
+
+
+def restrict_to_film(result: gc.Result, film: np.ndarray, thick: CrossSectionResult) -> gc.Result:
+    """Labels outside the film set to 0, grains re-measured, film-based summary (densities and
+    hole fraction relative to the film area, not the image). Used after every correction, so
+    clicks and edits can never reach into the layers below."""
+    labels = result.labels.copy()
+    labels[~film] = 0
+    labels = segmentation.relabel_sequential(labels)[0]
+    px = result.sem.pixel_size_nm
+    grains = gc.measure_grains(labels, px)
+    summary = {**result.summary, **thick.summary, "kind": "cross-section"}
+    film_px = int(film.sum())
+    film_um2 = film_px * px**2 / 1e6
+    holes = float(((labels == 0) & film).sum() / max(film_px, 1))
+    inner = grains[~grains["touches_edge"]] if len(grains) else grains
+    n_plan = len(inner) + 0.5 * (len(grains) - len(inner))
+    summary.update(
+        {
+            "n_grains": len(grains),
+            "n_edge": len(grains) - len(inner),
+            "n_planimetric": n_plan,
+            "film_area_um2": film_um2,
+            "hole_area_fraction": holes,
+            "grains_per_um2": n_plan / film_um2 if film_um2 else float("nan"),
+            "mean_area_planimetric_nm2": film_um2 * 1e6 * (1 - holes) / n_plan
+            if n_plan
+            else float("nan"),
+            "mean_eq_diameter_nm": float(inner["eq_diameter_nm"].mean())
+            if len(inner)
+            else float("nan"),
+            "median_eq_diameter_nm": float(inner["eq_diameter_nm"].median())
+            if len(inner)
+            else float("nan"),
+            "median_width_nm": float(inner["width_nm"].median()) if len(inner) else float("nan"),
+            "median_height_nm": float(inner["height_nm"].median()) if len(inner) else float("nan"),
+            "reliable": n_plan >= 5,
+        }
+    )
+    return gc.Result(
+        result.sem,
+        result.params,
+        result.pre,
+        result.bmap,
+        result.seeds,
+        result.raw_labels,
+        labels,
+        grains,
+        summary,
+    )

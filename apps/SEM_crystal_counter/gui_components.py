@@ -284,6 +284,11 @@ class ReviewPanel:
         self._figure = go.FigureWidget(pm.overlay_figure(_blank()))
         self._figure._config = {"scrollZoom": True, "displaylogo": False}
         self._figure.data[0].on_click(self._on_figure_click)
+        # scale bar below the image, drawn in the browser (follows zoom and double-click)
+        self._scale_class = f"sem-overlay-{id(self)}"
+        self._figure_box = widgets.VBox([self._figure])
+        self._figure_box.add_class(self._scale_class)
+        self._scale_out = widgets.Output()
 
         # detection settings of this image (the main sliders of the dev tuner)
         self._sliders = {
@@ -346,7 +351,8 @@ class ReviewPanel:
                 self._action_help,
                 widgets.HBox([self._start_btn, self._undo_btn, self._clear_btn, self._whole_btn]),
                 self._info,
-                self._figure,
+                self._figure_box,
+                self._scale_out,
                 widgets.HTML(LEGEND_HTML),
                 self._settings,
                 widgets.HBox([self._note, self._save_btn]),
@@ -388,6 +394,7 @@ class ReviewPanel:
         with self._figure.batch_update():
             self._figure.data[0].source = pm.png_source(rgb)
             if reset_view:
+                self._show_scalebar(entry.sem.pixel_size_nm)
                 # Explicit full ranges: zooming happens in the browser only, so Python still
                 # holds the old values and re-setting "autorange" would send nothing.
                 self._figure.layout.xaxis.range = [-0.5 - 1e-6 * self._resets, width - 0.5]
@@ -395,6 +402,11 @@ class ReviewPanel:
                 self._figure.layout.height = int(pm.OVERLAY_WIDTH * height / width) + 10
                 self._resets += 1
         self._info.value = _info_html(entry, result, warnings)
+
+    def _show_scalebar(self, nm_per_px: float) -> None:
+        with self._scale_out:
+            self._scale_out.clear_output()
+            ipydisplay(HTML(f"<script>{pm.scalebar_script(self._scale_class, nm_per_px)}</script>"))
 
     # -- navigation ----------------------------------------------------------
     def _step(self, delta: int) -> None:
