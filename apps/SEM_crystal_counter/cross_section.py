@@ -112,8 +112,16 @@ class CrossSectionResult:
     summary: dict = field(default_factory=dict)
 
 
-CROSS_PARAMS = gc.Params(min_grain_diameter_nm=100.0)
-"""Grain detection inside the film. Preliminary: to be tuned against annotated cross-sections."""
+CROSS_PARAMS = gc.Params(
+    min_grain_diameter_nm=100.0,
+    merge_threshold=0.1,
+    boundary_threshold=1.0,
+    ridge_weight=1.0,
+    clip_bright_percentile=100.0,
+)
+"""Grain detection inside the film. Grid search over 144 settings on the 4 annotated
+cross-sections (2026-10-21): the same settings win every leave-one-image-out fold, F1 0.58-0.78
+(mean 0.71), mean |area error| 17%."""
 
 
 def line_from_points(points, width: int) -> np.ndarray | None:
