@@ -120,6 +120,9 @@ def thickness_profile(profiles: pd.DataFrame) -> go.Figure:
         y="thickness_nm",
         color="image",
         labels={"x_nm": "Position along the image (nm)", "thickness_nm": "Film thickness (nm)"},
+        # SVG, not WebGL: plotly express picks WebGL above 1000 points (an image has 1024
+        # columns), and browsers without WebGL then show only "WebGL is not supported"
+        render_mode="svg",
     )
     fig.update_layout(title="Film thickness along each cross-section", height=380)
     return fig

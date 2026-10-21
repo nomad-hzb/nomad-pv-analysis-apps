@@ -258,3 +258,13 @@ def test_review_of_a_cross_section_draws_the_film_bottom(make_tiff, cross_sectio
     panel._kind.value = dm.TOP  # the user says it is a top view
     assert manager.entries["VP3_cs.tif"].kind == dm.TOP
     assert gui.BOTTOM not in panel._action.options
+
+
+def test_thickness_profile_does_not_need_webgl():
+    import pandas as pd
+
+    profiles = pd.DataFrame(
+        {"image": "a.tif", "x_nm": np.arange(2048.0), "thickness_nm": np.full(2048, 500.0)}
+    )
+    # above 1000 points plotly express would pick scattergl, which fails without WebGL
+    assert {t.type for t in pm.thickness_profile(profiles).data} == {"scatter"}
