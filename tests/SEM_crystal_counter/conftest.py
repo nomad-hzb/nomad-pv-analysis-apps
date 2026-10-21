@@ -26,6 +26,7 @@ for _name in (
     "run_batch",
     "evaluate",
     "training_log",
+    "cross_section",
     "data_manager",
     "plot_manager",
     "gui_components",
