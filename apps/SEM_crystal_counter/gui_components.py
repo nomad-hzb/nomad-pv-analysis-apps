@@ -396,7 +396,9 @@ class ReviewPanel:
                 self._settings_status,
             ]
         )
-        self._settings = widgets.Accordion(children=[settings], selected_index=None)
+        self._settings = widgets.Accordion(
+            children=[settings], selected_index=0
+        )  # open: users look for the sliders
         self._settings.set_title(0, "Detection settings for this image")
 
         # review

@@ -115,7 +115,7 @@ separately.
      point; *Automatic bottom* goes back to the detected line.
    - *Undo* and *Clear corrections* work on the current mode. Corrections are kept per image,
      and the tables and plots update with them.
-   - **Detection settings for this image** (collapsed): the three settings that matter most,
+   - **Detection settings for this image** (open below the image; click its title to fold it): the three settings that matter most,
      for images where the automatic grains are systematically wrong. *Apply to this image*
      re-analyses it (a few seconds); *Apply to all images* does it for every image that is not
      ignored; *Back to the preset* undoes it. Corrections made before are kept, but check them,

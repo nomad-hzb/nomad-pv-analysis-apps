@@ -268,3 +268,7 @@ def test_thickness_profile_does_not_need_webgl():
     )
     # above 1000 points plotly express would pick scattergl, which fails without WebGL
     assert {t.type for t in pm.thickness_profile(profiles).data} == {"scatter"}
+
+
+def test_detection_settings_start_open(demo):
+    assert gui.ReviewPanel(demo, on_changed=lambda: None)._settings.selected_index == 0
