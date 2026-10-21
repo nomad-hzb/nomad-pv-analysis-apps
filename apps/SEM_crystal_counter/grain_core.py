@@ -26,7 +26,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks
-from skimage import filters, graph, measure, restoration, segmentation
+from skimage import draw, filters, graph, measure, restoration, segmentation
 from skimage.feature import peak_local_max
 from skimage.graph import rag_boundary
 
@@ -298,6 +298,8 @@ def measure_grains(labels: np.ndarray, pixel_size_nm: float) -> pd.DataFrame:
         "circularity",
         "solidity",
         "orientation_deg",
+        "width_nm",
+        "height_nm",
         "centroid_x_px",
         "centroid_y_px",
         "touches_edge",
@@ -339,6 +341,8 @@ def measure_grains(labels: np.ndarray, pixel_size_nm: float) -> pd.DataFrame:
             "circularity": 4 * np.pi * area_nm2 / np.maximum(perimeter_nm**2, 1e-9),
             "solidity": t["area"] / np.maximum(hull_area, 1e-9),
             "orientation_deg": np.degrees(t["orientation"]),
+            "width_nm": (maxc - minc) * pixel_size_nm,  # horizontal extent (bounding box)
+            "height_nm": (maxr - minr) * pixel_size_nm,  # vertical extent (bounding box)
             "centroid_x_px": t["centroid-1"],
             "centroid_y_px": t["centroid-0"],
             "touches_edge": touches_edge,
@@ -569,6 +573,8 @@ def grain_centres(result: Result) -> list[tuple[float, float]]:
 def merge_at(labels: np.ndarray, first: tuple[int, int], second: tuple[int, int]) -> str | None:
     """Merge the grains under two clicked (y, x) points, in place. Returns a warning or None."""
     a, b = int(labels[first]), int(labels[second])
+    if a == 0 or b == 0:
+        return f"merge at {first} and {second}: a click is outside every grain"
     if a == b:
         return f"merge at {first} and {second}: both clicks are in the same grain"
     labels[labels == b] = a
@@ -598,12 +604,61 @@ def split_at(labels: np.ndarray, bmap: np.ndarray, point: tuple[int, int]) -> st
     return None
 
 
+def cut_along_line(
+    labels: np.ndarray, start: tuple[int, int], end: tuple[int, int], min_piece_px: float = 20
+) -> str | None:
+    """Cut every grain that the straight line start -> end crosses from one border to another,
+    in place. Returns a warning when no grain is cut.
+
+    The line pixels are removed from each grain the line touches; the grain is split only if
+    the rest falls apart into two or more pieces of at least min_piece_px pixels (so the line
+    must intersect the grain's outline on both sides, or run into the image edge). The line
+    pixels are then given to the nearest piece.
+    """
+    rows, cols = draw.line(*map(int, start), *map(int, end))
+    keep = (rows >= 0) & (rows < labels.shape[0]) & (cols >= 0) & (cols < labels.shape[1])
+    on_line = np.zeros(labels.shape, dtype=bool)
+    on_line[rows[keep], cols[keep]] = True
+    cut_any = False
+    for lab in np.unique(labels[on_line]):
+        if lab == 0:
+            continue
+        sl = ndi.find_objects((labels == lab).astype(np.int32))[0]
+        region = labels[sl] == lab
+        pieces = measure.label(region & ~on_line[sl], connectivity=1)
+        sizes = np.bincount(pieces.ravel())[1:]
+        big = np.flatnonzero(sizes >= min_piece_px) + 1
+        if len(big) < 2:
+            continue
+        # keep only the big pieces; small crumbs and the line itself go to the nearest one
+        seeds = np.where(np.isin(pieces, big), pieces, 0)
+        _, (iy, ix) = ndi.distance_transform_edt(seeds == 0, return_indices=True)
+        nearest = seeds[iy, ix]
+        new_labels = labels[sl].copy()
+        largest = big[np.argmax(sizes[big - 1])]
+        next_label = labels.max() + 1
+        for piece in big:
+            if piece == largest:
+                continue
+            new_labels[region & (nearest == piece)] = next_label
+            next_label += 1
+        labels[sl] = new_labels
+        cut_any = True
+    if not cut_any:
+        return (
+            f"cut from {tuple(start)} to {tuple(end)}: the line must cross a grain from one "
+            "border to the other"
+        )
+    return None
+
+
 def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
     """Replay manual edits on a result and re-measure.
 
     Edits are recorded as clicked image positions, not grain ids:
         {"op": "merge", "points": [[y1, x1], [y2, x2]]}
         {"op": "split", "point": [y, x]}
+        {"op": "cut", "points": [[y1, x1], [y2, x2]]}   (straight cutting line)
     so they still apply after a parameter change renumbers the grains. Edits that no longer
     make sense (both merge clicks in one grain, a split with no boundary) are skipped and
     reported.
@@ -618,6 +673,11 @@ def apply_edits(result: Result, edits: list[dict]) -> tuple[Result, list[str]]:
             warning = merge_at(labels, first, second)
         elif edit["op"] == "split":
             warning = split_at(labels, result.bmap, tuple(map(int, edit["point"])))
+        elif edit["op"] == "cut":
+            start, end = (tuple(map(int, pt)) for pt in edit["points"])
+            px = result.sem.pixel_size_nm or 1.0
+            min_piece = max(result.params.min_grain_area_nm2 / px**2, 20)
+            warning = cut_along_line(labels, start, end, min_piece)
         else:
             warning = f"unknown edit {edit!r}"
         if warning:
@@ -686,8 +746,74 @@ def count_grains(sem: SemImage, params: Params, pre: np.ndarray) -> int:
     return int(labels.max())
 
 
-def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True) -> np.ndarray:
-    """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds."""
+def summarize_samples(images: pd.DataFrame) -> pd.DataFrame:
+    """Per-sample mean and spread across images (images are the replicates, not grains).
+
+    Images flagged as unreliable (too few grains, see grain_core.MIN_GRAINS_FOR_STATS) are
+    left out when the sample has any reliable image; n_images_flagged reports them.
+    """
+    cols = [
+        "grains_per_um2",
+        "mean_area_planimetric_nm2",
+        "mean_area_ml_nm2",
+        "median_area_nm2",
+        "mean_eq_diameter_nm",
+        "mean_intercept_nm",
+        "boundary_length_per_um2",
+    ]
+    if "reliable" in images:
+        has_reliable = images.groupby("sample")["reliable"].transform("any")
+        used = images[images["reliable"].astype(bool) | ~has_reliable]
+    else:
+        used = images
+    grouped = used.groupby("sample")
+    out = grouped[cols].agg(["mean", "std"])
+    out.columns = [f"{c}_{stat}" for c, stat in out.columns]
+    out.insert(0, "n_images", grouped.size())
+    out.insert(1, "n_images_flagged", images.groupby("sample").size() - grouped.size())
+    out.insert(2, "n_grains_total", grouped["n_grains"].sum())
+    if "pixel_size_nm" in used:
+        out = out.join(magnification_spread(used))
+    return out.reset_index()
+
+
+def magnification_spread(images: pd.DataFrame) -> pd.DataFrame:
+    """Per sample: how much the mean grain area differs between magnifications.
+
+    A sample's grains do not change with zoom, so the mean area per magnification should agree;
+    the spread ((max - min) / mean of the per-magnification means) is an accuracy check that
+    needs no annotation. NaN when a sample was imaged at a single magnification.
+    """
+    mag = images.assign(magnification=images["pixel_size_nm"].round(1))
+    per_mag = mag.groupby(["sample", "magnification"])["mean_area_planimetric_nm2"].mean()
+    stats = per_mag.groupby("sample").agg(["count", "min", "max", "mean"])
+    spread = (stats["max"] - stats["min"]) / stats["mean"]
+    return pd.DataFrame(
+        {
+            "n_magnifications": stats["count"],
+            "magnification_spread": spread.where(stats["count"] > 1),
+        }
+    )
+
+
+def has_measurement_overlay(image: np.ndarray) -> bool:
+    """True when the SEM software drew measurements into the image: solid black label boxes
+    (>= 150 px, >= 85% filled) holding white text. Natural SEM images have none (voids are
+    irregular and hold no pure white); on the reference images measured ones had 2-4."""
+    labels, _ = ndi.label(ndi.binary_closing(image == 0, iterations=2))
+    for i, sl in enumerate(ndi.find_objects(labels), start=1):
+        box = labels[sl] == i
+        if box.size >= 150 and box.mean() >= 0.85 and (image[sl] == 255).sum() >= 5:
+            return True
+    return False
+
+
+def overlay(
+    result: Result, show_seeds: bool = False, show_outlines: bool = True, region=None
+) -> np.ndarray:
+    """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds.
+    region: where unlabelled pixels are holes (default everywhere; the film of a cross-section,
+    whose surroundings are unlabelled but are not holes)."""
     rgb = np.repeat(result.sem.image[..., None], 3, axis=2).astype(np.uint8)
     if show_outlines:
         lab = result.labels
@@ -697,6 +823,8 @@ def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True
         rgb[bounds & ~on_edge] = (40, 230, 60)
         rgb[on_edge] = (255, 150, 0)
     holes = result.labels == 0
+    if region is not None:
+        holes &= region
     if holes.any():  # clicked holes: tint red
         rgb[holes] = (0.55 * rgb[holes] + 0.45 * np.array([220, 30, 30])).astype(np.uint8)
     if show_seeds:
@@ -713,6 +841,14 @@ def draw_dots(rgb: np.ndarray, ys, xs, color: tuple, radius: int = 2) -> None:
             rgb[np.clip(ys + dy, 0, rgb.shape[0] - 1), np.clip(xs + dx, 0, rgb.shape[1] - 1)] = (
                 color
             )
+
+
+def draw_line(rgb: np.ndarray, p0, p1, color: tuple, width: int = 1) -> None:
+    """Paint a straight line from p0 to p1 ((y, x) points) in place, clipped to the image."""
+    n = int(max(abs(p1[0] - p0[0]), abs(p1[1] - p0[1]))) + 1
+    ys = np.round(np.linspace(p0[0], p1[0], n)).astype(int)
+    xs = np.round(np.linspace(p0[1], p1[1], n)).astype(int)
+    draw_dots(rgb, ys, xs, color, radius=width)
 
 
 def sample_name(image_name: str) -> str:

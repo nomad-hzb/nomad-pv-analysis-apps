@@ -157,6 +157,13 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "fa-mountain",
         ),
         AppEntry(
+            "SEM_crystal_counter",
+            "SEM_Analyzer.ipynb",
+            "SEM Crystal Counter",
+            "Grain size of perovskite films from top-view SEM images, with manual correction.",
+            "fa-microscope",
+        ),
+        AppEntry(
             "NMR_Analysis",
             "nmr_plotter.ipynb",
             "NMR Analysis",
@@ -273,14 +280,6 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "Electrochemical Analysis",
             "Analyze EIS and other electrochemical measurements.",
             "fa-bolt",
-            experimental=True,
-        ),
-        AppEntry(
-            "SEM_crystal_counter",
-            "SEM_Analyzer.ipynb",
-            "SEM Crystal Counter",
-            "Count and analyze crystal grains in SEM images.",
-            "fa-microscope",
             experimental=True,
         ),
         AppEntry(

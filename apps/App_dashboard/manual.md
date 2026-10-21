@@ -18,7 +18,7 @@ It does not read or change any data.
    - *Data Management*: File Uploader, Excel Creator, Smart Databaser, Entry Auditor, Database
      Downloader.
    - *Device Characterization*: JV Analysis, EQE Analyzer, MPPT Analyzer, AbsPL Analysis, TRPL
-     Analysis, XRD Peak Finder, NMR Analysis, Peak Explorer.
+     Analysis, XRD Peak Finder, SEM Crystal Counter, NMR Analysis, Peak Explorer.
    - *In-situ and GIWAXS Data Analysis*: ISA Previewer, GIWAXS Analysis, Optical Analysis, Timely
      Teller, Thickness Tracer (not implemented yet).
    - *Utilities & Calculators*: Design of Experiments, Global Analyzer, Hansen Calculator, Wetting
@@ -29,7 +29,7 @@ It does not read or change any data.
      in JupyterLab) and a link to a prompt you can paste into an AI chatbot so it can query your
      NOMAD data and write a custom script.
    - *Experimental / In Progress*: apps that are still being worked on (Electrochemical Analysis,
-     SEM Crystal Counter, XPS Automated, LCC Calculator). They may be incomplete or change.
+     XPS Automated, LCC Calculator). They may be incomplete or change.
 4. **What's New** (top right) opens the list of releases with the recent changes.
 
 Your clicks on the dashboard are counted in the usage log (which app was opened), as for all

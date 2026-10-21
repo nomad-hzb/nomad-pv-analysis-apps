@@ -393,3 +393,28 @@ def test_training_log_writes_holes_with_imagej_counter(make_tiff, tmp_path):
     points = read_points(folder / "points.csv", (60, 80), 80)
     assert list(points["hole"]) == [False, True]
     assert load_reviews(tmp_path)[0].meta["n_hole_clicks"] == 1
+
+
+def test_cut_along_a_line_splits_the_crossed_grain(make_tiff):
+    from grain_core import apply_edits
+
+    result = _two_grain_result(make_tiff)
+    merge = {"op": "merge", "points": [[10, 10], [10, 70]]}
+    cut = {"op": "cut", "points": [[0, 40], [59, 40]]}  # top border to bottom border
+    edited, warnings = apply_edits(result, [merge, cut])
+    assert warnings == []
+    assert edited.summary["n_grains"] == 2
+    left, right = edited.labels[30, 10], edited.labels[30, 70]
+    assert left != right
+    assert (edited.labels[:, :39] == left).all() and (edited.labels[:, 42:] == right).all()
+
+
+def test_cut_that_does_not_cross_a_grain_is_reported(make_tiff):
+    from grain_core import apply_edits
+
+    result = _two_grain_result(make_tiff)
+    inside = {"op": "cut", "points": [[20, 10], [40, 20]]}  # starts and ends inside one grain
+    corner = {"op": "cut", "points": [[0, 2], [2, 0]]}  # only grazes a corner: crumbs only
+    edited, warnings = apply_edits(result, [inside, corner])
+    assert edited.summary["n_grains"] == 2
+    assert len(warnings) == 2 and all("must cross a grain" in w for w in warnings)

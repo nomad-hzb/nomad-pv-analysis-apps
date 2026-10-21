@@ -1,0 +1,7 @@
+{
+  "images": [
+    {"file": "DEMO_A_01.tif", "sample_id": "DEMO_A", "variation": "synthetic smooth film"},
+    {"file": "DEMO_A_02.tif", "sample_id": "DEMO_A", "variation": "synthetic smooth film"},
+    {"file": "DEMO_B_01.tif", "sample_id": "DEMO_B", "variation": "synthetic film with surface stripes"}
+  ]
+}
