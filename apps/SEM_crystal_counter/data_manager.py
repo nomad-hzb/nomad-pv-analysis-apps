@@ -2,9 +2,10 @@
 SEM Data Manager
 ================
 Pure Python, no widget imports. Loads SEM images (from NOMAD batches, direct uploads or the
-demo fixture), runs the grain analysis of grain_core on them, keeps the per-image manual
-corrections (clicked grains and holes, merge/split edits), builds the per-image and
-per-sample tables and exports, and saves reviews to the training log.
+demo fixture), tells top views from cross-sections, runs the grain analysis of grain_core (and
+the thickness of cross_section) on them, keeps the per-image manual corrections (clicked grains
+and holes, merge/split edits, a drawn film bottom), builds the per-image and per-sample tables
+and exports, and saves reviews to the training log.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import cross_section as cs
 import grain_core as gc
 import numpy as np
 import pandas as pd
@@ -35,9 +37,37 @@ logger = logging.getLogger(__name__)
 
 # Measurement type constant -- imported by gui_components.py
 MEASUREMENT_TYPE = ENTRY_TYPES["sem"]
-SHEETS = ("About", "Samples", "Images", "Grains", "Settings")
+SHEETS = (
+    "About",
+    "Samples",
+    "Images",
+    "Grains",
+    "Cross-sections",
+    "Cross-section samples",
+    "Thickness profiles",
+    "Settings",
+)
 HOLE = 2  # click kind for holes, the same number as the ImageJ counter used for annotations
 PRESET_CHOICES = ("auto", *gc.PRESETS)
+TOP, CROSS = "top", "cross"  # image kinds
+KIND_NAMES = {TOP: "top view", CROSS: "cross-section"}
+OVERLAY_NOTE = "measurements drawn in by the SEM software (ignored by default)"
+CROSS_SUMMARY_KEYS = (
+    "thickness_median_nm",
+    "thickness_mean_nm",
+    "thickness_p10_nm",
+    "thickness_p90_nm",
+    "thickness_min_nm",
+    "thickness_max_nm",
+    "top_roughness_rms_nm",
+    "n_grains",
+    "median_eq_diameter_nm",
+    "median_width_nm",
+    "median_height_nm",
+    "grains_per_um2",
+    "hole_area_fraction",
+    "reliable",
+)
 
 
 def app_version() -> str:
@@ -68,8 +98,12 @@ class SemEntry:
     edits: list[dict] = field(default_factory=list)
     clicks: list[tuple[float, float, int]] = field(default_factory=list)  # (y, x, kind)
     use_clicks: bool = False
-    ignored: bool = False  # left out of every result (e.g. a cross-section image)
+    ignored: bool = False  # left out of every result
     overrides: dict = field(default_factory=dict)  # per-image detection settings (sliders)
+    kind: str = TOP  # TOP or CROSS, recognised at load, the user can change it
+    has_overlay: bool = False  # the SEM software drew measurements into the image
+    bottom_points: list[tuple[float, float]] = field(default_factory=list)  # drawn film bottom
+    thickness: cs.CrossSectionResult | None = None  # cross-sections only
     _final: tuple | None = field(default=None, repr=False)  # (key, result, warnings) cache
 
     @property
@@ -119,6 +153,7 @@ class SemDataManager:
             try:
                 content = download_raw_file(self._url, self._token, meta["upload_id"], path)
                 entry.sem = gc.load_sem_tiff(content, name=Path(path).name)
+                _inspect(entry)
             except Exception as exc:  # one broken file must not stop the batch
                 logger.warning("Could not load %s: %s", path, exc)
                 entry.error = f"could not load: {exc}"
@@ -137,6 +172,7 @@ class SemDataManager:
             )
             try:
                 entry.sem = gc.load_sem_tiff(bytes(content), name=file_name)
+                _inspect(entry)
             except Exception as exc:
                 logger.warning("Could not read %s: %s", file_name, exc)
                 entry.error = f"could not read: {exc}"
@@ -157,6 +193,7 @@ class SemDataManager:
                 source="demo",
             )
             entry.sem = gc.load_sem_tiff(path)
+            _inspect(entry)
             self.entries[entry.name] = entry
         return bool(spec["images"])
 
@@ -185,6 +222,8 @@ class SemDataManager:
         if entry.sem.pixel_size_nm is None:
             entry.error = "no pixel size in the TIFF metadata"
             return entry
+        if entry.kind == CROSS:
+            return self._analyse_cross(entry, preset)
         try:
             chosen, ratio, result = preset, None, None
             if preset == "auto":
@@ -207,6 +246,27 @@ class SemDataManager:
         entry.result = _compact(result)
         entry.preset = preset
         entry.error = None
+        return entry
+
+    def _analyse_cross(self, entry: SemEntry, preset: str) -> SemEntry:
+        """Thickness and the grains inside the film. The top-view presets do not apply."""
+        try:
+            result, thick = cs.analyze_cross_section(
+                entry.sem, self.params(entry.name), bottom_line=entry.bottom_points or None
+            )
+        except Exception as exc:
+            logger.exception("Cross-section analysis of %s failed", entry.name)
+            entry.error = f"analysis failed: {exc}"
+            return entry
+        result.summary.update(
+            {
+                "preset": KIND_NAMES[CROSS],
+                "preset_ratio": None,
+                "custom_settings": bool(entry.overrides),
+            }
+        )
+        entry.result, entry.thickness = _compact(result), thick
+        entry.preset, entry.error = preset, None
         return entry
 
     def analyse_all(self, preset: str = "auto", progress=None, only_new: bool = True) -> None:
@@ -233,13 +293,24 @@ class SemDataManager:
         return result, warnings
 
     def _compute_final(self, entry: SemEntry) -> tuple[gc.Result, list[str]]:
+        warnings = []
         if entry.use_clicks:
             grains = [(y, x) for y, x, kind in entry.clicks if kind != HOLE]
             holes = [(y, x) for y, x, kind in entry.clicks if kind == HOLE]
             if not grains:
                 return entry.result, []
-            return gc.result_from_points(entry.result, grains, holes), []
-        return gc.apply_edits(entry.result, entry.edits)
+            result = gc.result_from_points(entry.result, grains, holes)
+        else:
+            result, warnings = gc.apply_edits(entry.result, entry.edits)
+        if entry.kind == CROSS and entry.thickness is not None:
+            # corrections must never reach into the vacuum or the layers below
+            result = cs.restrict_to_film(result, self.film(entry.name), entry.thickness)
+        return result, warnings
+
+    def film(self, name: str) -> np.ndarray | None:
+        """Film mask of a cross-section (None for top views)."""
+        entry = self.entries[name]
+        return cs.film_mask(entry.thickness) if entry.thickness is not None else None
 
     # ------------------------------------------------------------------
     # Corrections
@@ -252,11 +323,36 @@ class SemDataManager:
         if entry.result is not None:
             entry.clicks = [(y, x, 0) for y, x in gc.grain_centres(entry.result)]
 
+    def base_params(self, name: str) -> gc.Params:
+        """The settings an image starts from: its preset, or the cross-section settings."""
+        entry = self.entries[name]
+        if entry.kind == CROSS:
+            return cs.CROSS_PARAMS
+        preset = entry.result.summary.get("preset", "smooth") if entry.result else "smooth"
+        return gc.PRESETS.get(preset, gc.PRESETS["smooth"])
+
     def params(self, name: str) -> gc.Params:
         """The detection settings in use for an image: its preset plus its own overrides."""
+        return self.base_params(name).model_copy(update=self.entries[name].overrides)
+
+    def set_kind(self, name: str, kind: str) -> SemEntry:
+        """Treat the image as a top view or a cross-section and re-analyse it. Corrections,
+        own settings and a drawn bottom belong to the old kind's grains and are dropped."""
         entry = self.entries[name]
-        preset = entry.result.summary.get("preset", "smooth") if entry.result else "smooth"
-        return gc.PRESETS[preset].model_copy(update=entry.overrides)
+        if kind == entry.kind:
+            return entry
+        entry.kind = kind
+        entry.result = entry.thickness = None
+        entry.edits, entry.clicks, entry.bottom_points = [], [], []
+        entry.use_clicks, entry.overrides = False, {}
+        return self.analyse(name, "auto")
+
+    def set_bottom_line(self, name: str, points: list) -> SemEntry:
+        """Use a drawn film bottom ((y, x) points, at least two) instead of the automatic one,
+        or the automatic one again with no points, and re-analyse the cross-section."""
+        entry = self.entries[name]
+        entry.bottom_points = [(float(y), float(x)) for y, x in points]
+        return self.analyse(name, entry.preset)
 
     def set_overrides(self, name: str, overrides: dict) -> SemEntry:
         """Change an image's detection settings (empty dict = back to its preset) and
@@ -354,11 +450,13 @@ class SemDataManager:
                 "sample": entry.sample_id,
                 "variation": entry.variation,
                 "source": entry.source,
+                "kind": KIND_NAMES[entry.kind],
                 "pixel_size_nm": entry.sem.pixel_size_nm if entry.sem else None,
                 "status": "ignored"
                 if entry.ignored
                 else entry.error or ("analysed" if entry.analysed else "not analysed"),
                 "corrected": "clicks" if entry.use_clicks else ("edits" if entry.edits else ""),
+                "note": OVERLAY_NOTE if entry.has_overlay else "",
             }
             if entry.analysed and not entry.ignored:
                 result, _ = self.final_result(entry.name)
@@ -375,34 +473,114 @@ class SemDataManager:
                         "reliable": summary.get("reliable"),
                     }
                 )
+                if entry.kind == CROSS:
+                    row["thickness_median_nm"] = summary.get("thickness_median_nm")
             rows.append(row)
         return pd.DataFrame(rows)
 
     def sample_table(self) -> pd.DataFrame:
-        """Per-sample statistics over the analysed images (unreliable ones left out when the
+        """Per-sample statistics over the analysed top views (unreliable ones left out when the
         sample has reliable images), with the magnification-consistency score."""
         images = []
-        for entry in self.entries.values():
-            if not entry.analysed or entry.ignored:
-                continue
+        for entry in self._used(TOP):
             result, _ = self.final_result(entry.name)
             images.append({"sample": entry.sample_id, **result.summary})
         if not images:
             return pd.DataFrame()
         return gc.summarize_samples(pd.DataFrame(images))
 
-    def grains_table(self) -> pd.DataFrame:
-        """Every grain of every analysed image, with image and sample columns."""
+    def _used(self, kind: str | None = None) -> list[SemEntry]:
+        """Analysed, not ignored images (of one kind)."""
+        return [
+            e
+            for e in self.entries.values()
+            if e.analysed and not e.ignored and (kind is None or e.kind == kind)
+        ]
+
+    def grains_table(self, kind: str | None = None) -> pd.DataFrame:
+        """Every grain of every analysed image (of one kind), with image, sample and kind
+        columns."""
         frames = []
-        for entry in self.entries.values():
-            if not entry.analysed or entry.ignored:
-                continue
+        for entry in self._used(kind):
             result, _ = self.final_result(entry.name)
             grains = result.grains.copy()
+            grains.insert(0, "kind", KIND_NAMES[entry.kind])
             grains.insert(0, "sample", entry.sample_id)
             grains.insert(0, "image", entry.name)
             frames.append(grains)
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def cross_section_table(self) -> pd.DataFrame:
+        """One row per analysed cross-section: thickness statistics over the image columns,
+        top roughness and the grains inside the film."""
+        rows = []
+        for entry in self._used(CROSS):
+            s = self.final_result(entry.name)[0].summary
+            rows.append(
+                {
+                    "image": entry.name,
+                    "sample": entry.sample_id,
+                    "variation": entry.variation,
+                    "film_bottom": "drawn" if s.get("bottom_drawn") else "automatic",
+                    **{key: s.get(key) for key in CROSS_SUMMARY_KEYS},
+                    "corrected": "clicks" if entry.use_clicks else ("edits" if entry.edits else ""),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def thickness_profiles(self) -> pd.DataFrame:
+        """Thickness per image column of every analysed cross-section (the distribution of
+        heights of a non-uniform film)."""
+        frames = []
+        for entry in self._used(CROSS):
+            thick, px = entry.thickness, entry.sem.pixel_size_nm
+            x = np.arange(len(thick.thickness_nm))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "image": entry.name,
+                        "sample": entry.sample_id,
+                        "x_px": x,
+                        "x_nm": x * px,
+                        "top_px": thick.top,
+                        "bottom_px": thick.bottom,
+                        "thickness_nm": thick.thickness_nm,
+                    }
+                )
+            )
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def cross_sample_table(self) -> pd.DataFrame:
+        """Per sample, over all its cross-sections: the thickness of every image column pooled,
+        and the median grain width and height in the film."""
+        profiles = self.thickness_profiles()
+        if profiles.empty:
+            return pd.DataFrame()
+        profiles = profiles[profiles["thickness_nm"] > 0]
+        grains = self.grains_table(CROSS)
+        rows = []
+        for sample, group in profiles.groupby("sample", sort=False):
+            t = group["thickness_nm"]
+            inner = (
+                grains[(grains["sample"] == sample) & ~grains["touches_edge"].astype(bool)]
+                if not grains.empty
+                else grains
+            )
+            rows.append(
+                {
+                    "sample": sample,
+                    "n_images": group["image"].nunique(),
+                    "thickness_median_nm": t.median(),
+                    "thickness_mean_nm": t.mean(),
+                    "thickness_std_nm": t.std(),
+                    "thickness_p10_nm": t.quantile(0.1),
+                    "thickness_p90_nm": t.quantile(0.9),
+                    "n_grains": len(inner),
+                    "median_width_nm": inner["width_nm"].median() if len(inner) else np.nan,
+                    "median_height_nm": inner["height_nm"].median() if len(inner) else np.nan,
+                }
+            )
+        return pd.DataFrame(rows)
 
     def settings_table(self) -> pd.DataFrame:
         """Every setting used, one row each, for reproducibility. The preset each image got is
@@ -423,14 +601,34 @@ class SemDataManager:
                     "fixed setting for the film-type decision",
                 )
             )
-        for preset, params in gc.PRESETS.items():
+        presets = {**gc.PRESETS, "cross-section": cs.CROSS_PARAMS}
+        for preset, params in presets.items():
             for field_name, value in params.model_dump().items():
                 description = gc.Params.model_fields[field_name].description or ""
                 rows.append((f"{preset}.{field_name}", value, description))
+        rows += [
+            (
+                "cross_section_ratio",
+                cs.CROSS_SECTION_RATIO,
+                "an image is a cross-section when the texture of its top rows is below this "
+                "fraction of its most textured rows",
+            ),
+            ("texture_level", cs.TEXTURE_LEVEL, "film top: texture level between vacuum and film"),
+            (
+                "min_thickness_nm",
+                cs.MIN_THICKNESS_NM,
+                "the film bottom is searched at least this far below the top",
+            ),
+        ]
         for entry in self.entries.values():
             for field_name, value in entry.overrides.items():
                 rows.append(
                     (f"{entry.name}: {field_name}", value, "own setting of this image (slider)")
+                )
+            if entry.bottom_points:
+                points = [[round(y, 1), round(x, 1)] for y, x in entry.bottom_points]
+                rows.append(
+                    (f"{entry.name}: film bottom", points, "drawn film bottom, (row, column) px")
                 )
         return pd.DataFrame(
             [(k, json.dumps(v) if isinstance(v, list) else v, d) for k, v, d in rows],
@@ -449,6 +647,11 @@ class SemDataManager:
                 ("App", f"SEM Crystal Counter {app_version()}"),
                 ("Images", len(images)),
                 ("Ignored images", f"{n_ignored} (listed in Images, left out of every result)"),
+                (
+                    "Images with measurements",
+                    "images with measurement bars or labels drawn in by the SEM software start "
+                    "ignored; untick 'Ignore this image' in the review to use one",
+                ),
                 ("Samples", len(samples)),
                 (
                     "Grain definition",
@@ -457,7 +660,7 @@ class SemDataManager:
                 ),
                 (
                     "Samples sheet",
-                    "per sample: mean and spread over its images (images with "
+                    "per sample: mean and spread over its top views (images with "
                     f"fewer than {gc.MIN_GRAINS_FOR_STATS} grains left out), magnification spread",
                 ),
                 (
@@ -467,8 +670,23 @@ class SemDataManager:
                 ),
                 (
                     "Grains sheet",
-                    "every grain of every image, sizes in nm; touches_edge grains "
-                    "are excluded from the size means",
+                    "every grain of every image (kind: top view or cross-section), sizes in "
+                    "nm; touches_edge grains are excluded from the size means",
+                ),
+                (
+                    "Cross-sections sheet",
+                    "per cross-section: film thickness (median, mean, 10th and 90th percentile, "
+                    "min, max over the image columns), top roughness, grains inside the film "
+                    "(width = horizontal, height = vertical extent)",
+                ),
+                (
+                    "Cross-section samples sheet",
+                    "per sample: the thickness of every column of all its cross-sections pooled, "
+                    "median grain width and height",
+                ),
+                (
+                    "Thickness profiles sheet",
+                    "the film top, bottom and thickness at every image column",
                 ),
                 ("Settings sheet", "every parameter used, for reproducing the results"),
             ],
@@ -481,12 +699,24 @@ class SemDataManager:
                 "Samples": lambda: samples,
                 "Images": lambda: images,
                 "Grains": self.grains_table,
+                "Cross-sections": self.cross_section_table,
+                "Cross-section samples": self.cross_sample_table,
+                "Thickness profiles": self.thickness_profiles,
                 "Settings": self.settings_table,
             }
             for sheet in SHEETS:
                 if sheet in sheets:
                     tables[sheet]().to_excel(writer, sheet_name=sheet, index=False)
         return buffer.getvalue()
+
+
+def _inspect(entry: SemEntry) -> None:
+    """Top view or cross-section, and whether measurements are drawn in. Images with
+    measurements start ignored: the drawn bars and labels spoil the detection, and such images
+    are usually copies of a clean image."""
+    entry.kind = CROSS if cs.is_cross_section(entry.sem) else TOP
+    entry.has_overlay = gc.has_measurement_overlay(entry.sem.image)
+    entry.ignored = entry.has_overlay
 
 
 def _compact(result: gc.Result) -> gc.Result:

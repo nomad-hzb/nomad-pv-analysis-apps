@@ -87,6 +87,44 @@ def sample_bars(samples: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def thickness_histogram(profiles: pd.DataFrame, by: str = "image") -> go.Figure:
+    """Distribution of the film thickness over the image columns (one count per column), per
+    image or per sample: narrow for a uniform film, wide or with several peaks otherwise."""
+    if profiles.empty:
+        return _empty("No analysed cross-sections yet")
+    fig = px.histogram(
+        profiles[profiles["thickness_nm"] > 0],
+        x="thickness_nm",
+        color=by,
+        barmode="overlay",
+        histnorm="probability",
+        nbins=50,
+        opacity=0.65,
+        labels={"thickness_nm": "Film thickness (nm)"},
+    )
+    fig.update_layout(
+        title=f"Film thickness distribution per {by} (every image column)",
+        yaxis_title="Fraction of the film width",
+        height=380,
+    )
+    return fig
+
+
+def thickness_profile(profiles: pd.DataFrame) -> go.Figure:
+    """Thickness along the image width, one line per cross-section."""
+    if profiles.empty:
+        return _empty("No analysed cross-sections yet")
+    fig = px.line(
+        profiles,
+        x="x_nm",
+        y="thickness_nm",
+        color="image",
+        labels={"x_nm": "Position along the image (nm)", "thickness_nm": "Film thickness (nm)"},
+    )
+    fig.update_layout(title="Film thickness along each cross-section", height=380)
+    return fig
+
+
 def _empty(message: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(text=message, showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")

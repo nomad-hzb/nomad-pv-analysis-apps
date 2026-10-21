@@ -24,6 +24,11 @@ You do not need to trace boundaries.
 - **Holes** (pinholes, voids: dark spots where there is no crystal) get counter **2**. They
   are not counted as grains, and in the tuner's click mode their area is reported as the hole
   area fraction.
+- **Cross-sections** (file names starting `cs_`): click the grains inside the perovskite film
+  only. With counter **3**, click points along the **bottom of the film**, left to right, a
+  few more where it bends: everything below that line (ITO, glass) is ignored, and the line
+  is also used as the film bottom when the grains are scored
+  (`evaluate_cross_section.py --grains`).
 
 ## Steps
 

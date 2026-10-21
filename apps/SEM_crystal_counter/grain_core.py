@@ -808,8 +808,12 @@ def has_measurement_overlay(image: np.ndarray) -> bool:
     return False
 
 
-def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True) -> np.ndarray:
-    """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds."""
+def overlay(
+    result: Result, show_seeds: bool = False, show_outlines: bool = True, region=None
+) -> np.ndarray:
+    """RGB uint8: image with grain outlines (interior green, edge grains orange) and seeds.
+    region: where unlabelled pixels are holes (default everywhere; the film of a cross-section,
+    whose surroundings are unlabelled but are not holes)."""
     rgb = np.repeat(result.sem.image[..., None], 3, axis=2).astype(np.uint8)
     if show_outlines:
         lab = result.labels
@@ -819,6 +823,8 @@ def overlay(result: Result, show_seeds: bool = False, show_outlines: bool = True
         rgb[bounds & ~on_edge] = (40, 230, 60)
         rgb[on_edge] = (255, 150, 0)
     holes = result.labels == 0
+    if region is not None:
+        holes &= region
     if holes.any():  # clicked holes: tint red
         rgb[holes] = (0.55 * rgb[holes] + 0.45 * np.array([220, 30, 30])).astype(np.uint8)
     if show_seeds:
@@ -835,6 +841,14 @@ def draw_dots(rgb: np.ndarray, ys, xs, color: tuple, radius: int = 2) -> None:
             rgb[np.clip(ys + dy, 0, rgb.shape[0] - 1), np.clip(xs + dx, 0, rgb.shape[1] - 1)] = (
                 color
             )
+
+
+def draw_line(rgb: np.ndarray, p0, p1, color: tuple, width: int = 1) -> None:
+    """Paint a straight line from p0 to p1 ((y, x) points) in place, clipped to the image."""
+    n = int(max(abs(p1[0] - p0[0]), abs(p1[1] - p0[1]))) + 1
+    ys = np.round(np.linspace(p0[0], p1[0], n)).astype(int)
+    xs = np.round(np.linspace(p0[1], p1[1], n)).astype(int)
+    draw_dots(rgb, ys, xs, color, radius=width)
 
 
 def sample_name(image_name: str) -> str:

@@ -10,6 +10,7 @@ import gui_components as gui
 import ipywidgets as widgets
 import numpy as np
 import plot_manager as pm
+import plotly.graph_objects as go
 import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -208,3 +209,52 @@ def test_detection_settings_re_analyse_one_image(demo):
     panel._reset_settings()
     assert entry.overrides == {}
     assert demo.final_result(name)[0].summary["n_grains"] == before
+
+
+def test_ruler_measures_in_nm(demo):
+    panel = gui.ReviewPanel(demo, on_changed=lambda: None)
+    panel.refresh()
+    panel._image.value = "DEMO_A_01.tif"  # 3.722 nm/px
+    panel._action.value = gui.RULER
+    edits = list(demo.entries["DEMO_A_01.tif"].edits)
+    _click(panel, 10, 10)
+    assert "second point" in panel._ruler_info.value
+    _click(panel, 10, 110)
+    assert "Ruler: 372 nm" in panel._ruler_info.value
+    assert demo.entries["DEMO_A_01.tif"].edits == edits  # the grains are not touched
+    _click(panel, 50, 50)  # a third click starts a new measurement
+    assert panel._ruler == [(50, 50)]
+    panel._undo(None)
+    assert panel._ruler == [] and panel._ruler_info.value == ""
+
+
+def test_review_of_a_cross_section_draws_the_film_bottom(make_tiff, cross_section, monkeypatch):
+    manager = dm.SemDataManager()
+    content = make_tiff(cross_section(top_row=100, film_rows=200), b"Image Pixel Size = 5.0 nm")
+    manager.add_uploads([("VP3_cs.tif", content)])
+    manager.analyse_all()
+    panel = gui.ReviewPanel(manager, on_changed=lambda: None)
+    panel.refresh()
+    assert panel._kind.value == dm.CROSS and gui.BOTTOM in panel._action.options
+    assert "Thickness 1" in panel._info.value  # about 1000 nm
+    panel._action.value = gui.BOTTOM
+    panel._bottom_apply_btn.click()  # no points yet: nothing happens
+    assert manager.entries["VP3_cs.tif"].bottom_points == []
+    _click(panel, 250, 0)
+    _click(panel, 250, 499)
+    panel._bottom_apply_btn.click()
+    summary = manager.final_result("VP3_cs.tif")[0].summary
+    assert summary["bottom_drawn"] and "film bottom drawn" in panel._info.value
+    panel._bottom_auto_btn.click()
+    assert not manager.final_result("VP3_cs.tif")[0].summary["bottom_drawn"]
+
+    shown = []
+    monkeypatch.setattr(gui, "ipydisplay", shown.append)
+    gui.CrossSectionPanel(manager).refresh()
+    tables = [x.data for x in shown if "<table" in str(getattr(x, "data", ""))]
+    assert len(tables) == 2 and "Thickness, median (nm)" in tables[0]
+    assert any(isinstance(x, go.FigureWidget) for x in shown)  # histogram and profile plots
+
+    panel._kind.value = dm.TOP  # the user says it is a top view
+    assert manager.entries["VP3_cs.tif"].kind == dm.TOP
+    assert gui.BOTTOM not in panel._action.options

@@ -41,7 +41,8 @@ def test_results_workbook_holds_every_table(demo):
     import pandas as pd
 
     sheets = pd.read_excel(io.BytesIO(demo.results_workbook()), sheet_name=None)
-    assert list(sheets) == ["About", "Samples", "Images", "Grains", "Settings"]
+    assert list(sheets) == list(dm.SHEETS)
+    assert sheets["Cross-sections"].empty  # the demo has top views only
     grains = sheets["Grains"]
     assert {"image", "sample", "area_nm2", "eq_diameter_nm"} <= set(grains.columns)
     assert set(grains["sample"]) == {"DEMO_A", "DEMO_B"}
@@ -162,3 +163,83 @@ def test_workbook_with_chosen_sheets_only(demo):
     assert list(sheets) == ["Samples", "Grains"]
     with pytest.raises(ValueError):
         demo.results_workbook([])
+
+
+@pytest.fixture
+def mixed(make_tiff, voronoi_film, cross_section):
+    """A top view and a synthetic cross-section (film rows 100-300, 5 nm/px), analysed."""
+    manager = dm.SemDataManager()
+    meta = b"Image Pixel Size = 5.0 nm"
+    manager.add_uploads(
+        [
+            ("VP1_01.tif", make_tiff(voronoi_film[0], meta)),
+            ("VP1_cs.tif", make_tiff(cross_section(top_row=100, film_rows=200), meta)),
+        ]
+    )
+    manager.analyse_all()
+    return manager
+
+
+def test_cross_sections_are_recognised_and_kept_apart(mixed):
+    assert mixed.entries["VP1_01.tif"].kind == dm.TOP
+    assert mixed.entries["VP1_cs.tif"].kind == dm.CROSS
+    images = mixed.image_table().set_index("image")
+    assert images.loc["VP1_cs.tif", "kind"] == "cross-section"
+    assert images.loc["VP1_cs.tif", "thickness_median_nm"] == pytest.approx(1000, rel=0.05)
+    # top-view statistics leave the cross-section out
+    assert mixed.sample_table()["n_images"].tolist() == [1]
+    assert set(mixed.grains_table(dm.TOP)["image"]) == {"VP1_01.tif"}
+    cross = mixed.cross_section_table().set_index("image")
+    assert list(cross.index) == ["VP1_cs.tif"]
+    assert cross.loc["VP1_cs.tif", "film_bottom"] == "automatic"
+    assert cross.loc["VP1_cs.tif", "n_grains"] > 0
+    profiles = mixed.thickness_profiles()
+    assert len(profiles) == 500 and profiles["thickness_nm"].median() == pytest.approx(
+        1000, rel=0.05
+    )
+    samples = mixed.cross_sample_table().set_index("sample")
+    assert samples.loc["VP1", "thickness_p10_nm"] <= samples.loc["VP1", "thickness_p90_nm"]
+
+
+def test_cross_section_corrections_stay_inside_the_film(mixed):
+    name = "VP1_cs.tif"
+    film = mixed.film(name)
+    mixed.set_click_mode(name, True)
+    mixed.start_clicks_from_automatic(name)
+    mixed.add_click(name, 20, 250)  # a click in the vacuum above the film
+    result, _ = mixed.final_result(name)
+    assert (result.labels[~film] == 0).all()
+    assert result.summary["kind"] == "cross-section"
+    mixed.set_click_mode(name, False)
+
+
+def test_drawn_bottom_and_image_type_change(mixed):
+    name = "VP1_cs.tif"
+    mixed.set_bottom_line(name, [(250, 0), (250, 499)])  # 50 rows above the real interface
+    summary = mixed.final_result(name)[0].summary
+    assert summary["bottom_drawn"] and summary["thickness_median_nm"] == pytest.approx(
+        750, rel=0.05
+    )
+    settings = mixed.settings_table().set_index("setting")
+    assert f"{name}: film bottom" in settings.index
+    assert "cross-section.min_grain_diameter_nm" in settings.index
+    mixed.set_bottom_line(name, [])
+    assert mixed.final_result(name)[0].summary["thickness_median_nm"] == pytest.approx(
+        1000, rel=0.05
+    )
+    mixed.set_kind(name, dm.TOP)
+    entry = mixed.entries[name]
+    assert entry.kind == dm.TOP and entry.thickness is None and entry.analysed
+    assert mixed.cross_section_table().empty
+
+
+def test_images_with_drawn_measurements_start_ignored(make_tiff, voronoi_film):
+    image = voronoi_film[0].copy()
+    image[50:70, 100:180] = 0  # a black label box of the SEM software ...
+    image[56:64, 110:170:3] = 255  # ... with white text
+    manager = dm.SemDataManager()
+    manager.add_uploads([("VP2_01.tif", make_tiff(image, b"Image Pixel Size = 5.0 nm"))])
+    entry = manager.entries["VP2_01.tif"]
+    assert entry.has_overlay and entry.ignored
+    row = manager.image_table().iloc[0]
+    assert row["status"] == "ignored" and row["note"] == dm.OVERLAY_NOTE

@@ -43,10 +43,13 @@ class SEMApp:
         self._sources = widgets.Tab(children=[self._nomad_panel(), self._upload_panel.widget])
         self._sources.titles = ("From NOMAD", "Upload TIFFs")
 
-        self._analysis = gui.AnalysisPanel(self._dm)
+        self._cross = gui.CrossSectionPanel(self._dm)
+        self._analysis = gui.AnalysisPanel(self._dm, on_refresh=self._cross.refresh)
         self._review = gui.ReviewPanel(self._dm, on_changed=self._analysis.refresh)
-        self._main = widgets.Tab(children=[self._analysis.widget, self._review.widget])
-        self._main.titles = ("Results", "Review and correct")
+        self._main = widgets.Tab(
+            children=[self._analysis.widget, self._cross.widget, self._review.widget]
+        )
+        self._main.titles = ("Results", "Cross-sections", "Review and correct")
         self._clear_btn = widgets.Button(description="Remove all images", icon="trash")
         self._clear_btn.on_click(self._on_clear)
 

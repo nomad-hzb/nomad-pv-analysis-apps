@@ -7,19 +7,27 @@ Measure the grain size of perovskite films from top-view SEM images:
 - measure every grain in nm;
 - summarise each sample over all its images.
 
+From cross-section SEM images it measures the film thickness (and how uneven it is) and the
+grains inside the film.
+
 When the automatic result is not good enough, you can correct it by hand, and save the
 corrected image as training data. The app only reads from NOMAD; it writes nothing back.
 
 ## Data it needs
 
-- **Top-view SEM images as Zeiss TIFFs.** The pixel size is read from the TIFF metadata
+- **Top-view or cross-section SEM images as Zeiss TIFFs.** The pixel size is read from the TIFF metadata
   (`Image Pixel Size`), so there is no scale bar to measure. The info banner below the image is
   removed automatically. An image without a pixel size cannot be analysed.
 - **From NOMAD:** SEM entries (type `HySprint_SEM`) of the samples in the selected batches. Every
   image file listed in an entry is downloaded.
 - **Or uploaded directly,** without NOMAD. The sample is taken from the file name:
   `VP317_01.tif` belongs to sample `VP317`.
-- **Cross-section images are not supported.**
+- **Top view or cross-section** is recognised automatically when an image loads (a
+  cross-section has dark, smooth vacuum above the film). You can change it per image.
+- **Images with measurements drawn in** by the SEM software (black label boxes with white text,
+  measurement bars) are recognised and **ignored by default**: the drawn bars spoil the
+  detection, and such images are usually copies of a clean image. The Images table notes it;
+  untick *Ignore this image* in the review to use one anyway.
 
 ## What counts as a grain
 
@@ -45,20 +53,40 @@ separately.
    - *Samples*: per sample, the mean and spread over its images, plus `magnification_spread`.
    - Two plots: the grain-size distribution per sample, and the mean diameter per sample with
      the spread between images as error bars.
+   - The *Samples* table and the plots use top views only; the *Images* table lists every
+     image with its type.
    - *Download results (Excel)*: one file with the ticked sheets: *About* (what each sheet
-     holds), *Samples*, *Images*, *Grains* (every grain of every image, the largest sheet) and
-     *Settings* (every parameter used, for reproducibility). All are ticked by default.
+     holds), *Samples*, *Images*, *Grains* (every grain of every image, the largest sheet),
+     *Cross-sections*, *Cross-section samples*, *Thickness profiles* (see below) and *Settings*
+     (every parameter used, for reproducibility). All are ticked by default.
    - *Preset* and *Re-analyse all with this preset*: force smooth or striped for every image.
      Normally leave it on automatic.
-3. **Review and correct tab.** One image at a time.
+3. **Cross-sections tab.**
+   - *Cross-sections*: one row per image: the film thickness (median over the image columns,
+     and the 10th and 90th percentiles: 80% of the film width lies between them), the RMS
+     roughness of the film top, whether the film bottom was found automatically or drawn, and
+     the grains inside the film with their median *width* (horizontal extent) and *height*
+     (vertical extent).
+   - *Per sample*: the thickness of every column of all the sample's cross-sections pooled,
+     and the median grain width and height.
+   - *Film thickness distribution*, per image or per sample: how much of the film width has
+     which thickness. A uniform film gives one narrow peak; a wide peak or several peaks mean an
+     uneven film.
+   - *Film thickness along each cross-section*: the thickness at every position.
+   - The Excel sheet *Thickness profiles* holds the film top, bottom and thickness of every
+     image column.
+4. **Review and correct tab.** One image at a time.
    - **Moving between images:** *◀ Previous* / *Next ▶*, with a counter such as *17 / 85*, or
      pick the image from the list.
-   - **Ignore this image:** leaves the image out of every result, e.g. a cross-section that
-     was loaded with the top views. Untick it to use the image again.
+   - **Image type:** *top view* or *cross-section*, recognised automatically. Changing it
+     re-analyses the image and drops its corrections.
+   - **Ignore this image:** leaves the image out of every result, e.g. a blurred image. Images
+     with measurements drawn in start ignored. Untick it to use the image again.
    - **What the colours mean:** green outline = grain fully inside the image (counted); orange
      outline = grain cut by the image border (left out of the size averages, counted as half a
      grain for the density). Blue dots = your grain clicks, red = holes, magenta = the first
-     point of a merge or cut.
+     point of a merge or cut, yellow = the ruler. On cross-sections: red line = film top, cyan
+     line = film bottom, purple = the film bottom you are drawing.
    - **Zoom:** drag a box over the image, or use the scroll wheel. *Whole image* (or a
      double-click) zooms out again. While an editing action is selected, the first click of a
      double-click also counts as a click; *Undo* removes it.
@@ -74,6 +102,17 @@ separately.
      missing ones and remove wrong ones. *A click* then *adds a grain*, *adds a hole* (pinholes
      or voids, whose area is reported separately) or *removes a dot*. **Ctrl+click** removes
      a dot in any of these modes.
+   - **Ruler** (*A click: measures a distance*, in every mode): click two points and the
+     distance is shown below the image in nm, with its horizontal and vertical parts. A third
+     click starts a new measurement; *Undo* removes the ruler. The grains are not changed.
+   - **Scale bar:** below the image, about a tenth of the visible width, rounded to 1, 2 or 5 x
+     10ⁿ nm. It follows the zoom.
+   - **Film bottom of a cross-section** (*A click: draws the film bottom*, cross-sections
+     only): when the automatic bottom line (cyan) catches a lower layer such as ITO or glass,
+     click a few points along the real bottom of the perovskite film, then press *Use the drawn
+     bottom*. The line runs straight between your points and flat beyond the outer ones;
+     everything below it is ignored, and the image is re-analysed. *Undo* removes the last
+     point; *Automatic bottom* goes back to the detected line.
    - *Undo* and *Clear corrections* work on the current mode. Corrections are kept per image,
      and the tables and plots update with them.
    - **Detection settings for this image** (collapsed): the three settings that matter most,
@@ -127,6 +166,13 @@ Saving the same image again replaces its earlier review.
   images are segmented less well.
 - **Holes** (click mode only) are left out of the grain statistics, and the densities use the
   film area without them.
+- **Cross-sections.** The film top is the first row below the vacuum where the image becomes
+  grainy, snapped to the sharpest dark-to-bright edge nearby. The film bottom is the first
+  strong horizontal edge running across the image at least 150 nm below the top (or your drawn
+  line). The thickness is measured at every image column. Grains are found with the top-view
+  method inside the film only; the vacuum and the layers below are never grains, and
+  corrections cannot reach outside the film. Densities and hole area are relative to the film
+  area.
 
 ## Accuracy
 
@@ -135,6 +181,13 @@ Checked against hand annotations of 10 images:
   is typically within 15%.
 - **Striped films:** F1 about 0.56, and the mean size is typically within 20%, occasionally off
   by about 30% on a single image.
+
+**Cross-sections:** the thickness was checked against 19 thickness bars measured in the SEM
+software on 10 images: mean difference 4%. The largest differences (up to 23%) are spots where
+the bar starts at the front, cleaved grain while grains just behind it reach higher; the app
+measures to the highest visible film surface. The grains inside the film were checked against
+hand annotations of 4 cross-sections: F1 0.58-0.78 (mean 0.71), mean grain area typically
+within 17%.
 
 On striped films two hand annotations of the same image by the same person agree no better
 (F1 0.59), so per-sample means over several images are the robust result there. When a single
@@ -145,6 +198,10 @@ image matters, check it in the review tab and correct it, or use click mode.
 - The pixel size must be in the TIFF metadata (Zeiss SmartSEM format).
 - Loading many images keeps them all in memory (about 10 MB per image). Remove images you no
   longer need with *Remove all images*.
+- Uploaded files are grouped into samples by their name: `cs_VP352_01.tif` belongs to
+  sample `cs_VP352`, not `VP352`. Images from NOMAD use the NOMAD sample.
+- A cross-section whose film bottom has no clear horizontal edge (or catches a lower layer)
+  needs the bottom drawn by hand; check the cyan line on every cross-section.
 - Corrections live in the app session until you *Save as reviewed*. Reloading the page loses
   unsaved corrections.
 

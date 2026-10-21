@@ -13,9 +13,10 @@ from datetime import datetime
 
 import grain_core as gc
 import ipywidgets as widgets
+import numpy as np
 import plot_manager as pm
 import plotly.graph_objects as go
-from data_manager import HOLE, MEASUREMENT_TYPE, SHEETS, SemDataManager
+from data_manager import CROSS, HOLE, MEASUREMENT_TYPE, SHEETS, TOP, SemDataManager
 from IPython.display import HTML
 from IPython.display import display as ipydisplay
 
@@ -116,8 +117,9 @@ class UploadPanel:
 class AnalysisPanel:
     """Analysis controls, tables, plots and downloads."""
 
-    def __init__(self, dm: SemDataManager) -> None:
+    def __init__(self, dm: SemDataManager, on_refresh=None) -> None:
         self.dm = dm
+        self._on_refresh = on_refresh  # other panels showing results (the cross-sections)
         self._preset = widgets.Dropdown(
             options=PRESET_OPTIONS,
             value="auto",
@@ -142,7 +144,7 @@ class AnalysisPanel:
         self._download_btn.on_click(lambda _b: self._download_results())
         self._sheet_boxes = {
             sheet: widgets.Checkbox(
-                value=True, description=sheet, indent=False, layout={"width": "110px"}
+                value=True, description=sheet, indent=False, layout={"width": "auto"}
             )
             for sheet in SHEETS
         }
@@ -156,7 +158,8 @@ class AnalysisPanel:
                 widgets.HTML(
                     "<b>Download</b> one Excel file with the ticked sheets: <i>About</i> (what "
                     "the file holds), <i>Samples</i>, <i>Images</i>, <i>Grains</i> (every "
-                    "grain; the largest sheet) and <i>Settings</i> (every parameter used)."
+                    "grain; the largest sheet), the cross-section sheets (see the "
+                    "<i>Cross-sections</i> tab) and <i>Settings</i> (every parameter used)."
                 ),
                 widgets.HBox(list(self._sheet_boxes.values())),
                 self._download_btn,
@@ -206,8 +209,10 @@ class AnalysisPanel:
         with self._plots:
             self._plots.clear_output(wait=True)
             if not samples.empty:
-                ipydisplay(go.FigureWidget(pm.size_histogram(self.dm.grains_table())))
+                ipydisplay(go.FigureWidget(pm.size_histogram(self.dm.grains_table(TOP))))
                 ipydisplay(go.FigureWidget(pm.sample_bars(samples)))
+        if self._on_refresh is not None:
+            self._on_refresh()
 
     def _download_results(self) -> None:
         if not any(e.analysed for e in self.dm.entries.values()):
@@ -234,6 +239,62 @@ class AnalysisPanel:
             ipydisplay(HTML(f"<script>{js}</script>"))
 
 
+class CrossSectionPanel:
+    """Film thickness and the grains inside the film, for the cross-section images."""
+
+    def __init__(self, dm: SemDataManager) -> None:
+        self.dm = dm
+        self._by = widgets.ToggleButtons(
+            options=[("per image", "image"), ("per sample", "sample")],
+            description="Distribution",
+            style={"button_width": "110px"},
+        )
+        self._by.observe(lambda _c: self._plot_distribution(), names="value")
+        self._tables = widgets.Output()
+        self._distribution = widgets.Output()
+        self._profiles = widgets.Output()
+        self.widget = widgets.VBox(
+            [
+                widgets.HTML(CROSS_HELP),
+                self._tables,
+                self._by,
+                self._distribution,
+                self._profiles,
+            ]
+        )
+
+    def refresh(self) -> None:
+        images = self.dm.cross_section_table()
+        with self._tables:
+            self._tables.clear_output(wait=True)
+            if images.empty:
+                ipydisplay(
+                    widgets.HTML(
+                        "<i>No analysed cross-sections. Images are recognised as cross-sections "
+                        "when they load; change it per image in the review with <b>Image "
+                        "type</b>.</i>"
+                    )
+                )
+            else:
+                ipydisplay(widgets.HTML("<h4>Cross-sections</h4>"))
+                ipydisplay(_readable(images, CROSS_COLUMNS))
+                ipydisplay(widgets.HTML("<h4>Per sample</h4>"))
+                ipydisplay(_readable(self.dm.cross_sample_table(), CROSS_SAMPLE_COLUMNS))
+        self._by.layout.display = "none" if images.empty else ""
+        self._plot_distribution()
+        with self._profiles:
+            self._profiles.clear_output(wait=True)
+            if not images.empty:
+                ipydisplay(go.FigureWidget(pm.thickness_profile(self.dm.thickness_profiles())))
+
+    def _plot_distribution(self) -> None:
+        profiles = self.dm.thickness_profiles()
+        with self._distribution:
+            self._distribution.clear_output(wait=True)
+            if not profiles.empty:
+                ipydisplay(go.FigureWidget(pm.thickness_histogram(profiles, by=self._by.value)))
+
+
 # ---------------------------------------------------------------------------
 # Review and correction
 # ---------------------------------------------------------------------------
@@ -245,6 +306,8 @@ class ReviewPanel:
         self._on_changed = on_changed
         self._pending: tuple[str, tuple[int, int]] | None = None  # (action, first point)
         self._resets = 0  # makes every view reset a real change (see redraw)
+        self._ruler: list[tuple[int, int]] = []  # 0, 1 or 2 points of the ruler
+        self._bottom_draft: list[tuple[int, int]] = []  # film bottom being drawn
 
         # navigation
         self._image = widgets.Dropdown(description="Image", layout={"width": "380px"})
@@ -254,10 +317,24 @@ class ReviewPanel:
         self._prev_btn.on_click(lambda _b: self._step(-1))
         self._next_btn.on_click(lambda _b: self._step(1))
         self._ignore = widgets.Checkbox(
-            description="Ignore this image (left out of every result, e.g. a cross-section)",
+            description="Ignore this image (left out of every result)",
             indent=False,
             layout={"width": "auto"},
         )
+        self._kind = widgets.Dropdown(
+            options=[("top view", TOP), ("cross-section", CROSS)],
+            description="Image type",
+            tooltip="Recognised automatically; changing it re-analyses the image and drops its "
+            "corrections.",
+            layout={"width": "240px"},
+        )
+        self._bottom_apply_btn = WidgetFactory.create_button(
+            "Use the drawn bottom", "primary", min_width=False
+        )
+        self._bottom_auto_btn = WidgetFactory.create_button("Automatic bottom", min_width=False)
+        self._bottom_apply_btn.on_click(lambda _b: self._apply_bottom(drawn=True))
+        self._bottom_auto_btn.on_click(lambda _b: self._apply_bottom(drawn=False))
+        self._bottom_box = widgets.HBox([self._bottom_apply_btn, self._bottom_auto_btn])
 
         # corrections
         self._source = widgets.ToggleButtons(
@@ -281,6 +358,7 @@ class ReviewPanel:
         self._whole_btn = WidgetFactory.create_button("Whole image", icon="expand", min_width=False)
         self._whole_btn.on_click(lambda _b: self.redraw(reset_view=True))
         self._info = widgets.HTML()
+        self._ruler_info = widgets.HTML()
         self._figure = go.FigureWidget(pm.overlay_figure(_blank()))
         self._figure._config = {"scrollZoom": True, "displaylogo": False}
         self._figure.data[0].on_click(self._on_figure_click)
@@ -328,6 +406,7 @@ class ReviewPanel:
 
         self._image.observe(lambda _c: self._select_image(), names="value")
         self._ignore.observe(self._on_ignore, names="value")
+        self._kind.observe(self._on_kind, names="value")
         self._source.observe(self._on_source, names="value")
         self._action.observe(lambda _c: self._on_action(), names="value")
         for box in (self._outlines, self._seeds):
@@ -345,14 +424,16 @@ class ReviewPanel:
                     "program then finds the borders.</p>"
                 ),
                 widgets.HBox([self._prev_btn, self._counter, self._next_btn, self._image]),
-                widgets.HBox([self._ignore, self._outlines, self._seeds]),
+                widgets.HBox([self._kind, self._ignore, self._outlines, self._seeds]),
                 self._source,
                 self._action,
                 self._action_help,
+                self._bottom_box,
                 widgets.HBox([self._start_btn, self._undo_btn, self._clear_btn, self._whole_btn]),
                 self._info,
                 self._figure_box,
                 self._scale_out,
+                self._ruler_info,
                 widgets.HTML(LEGEND_HTML),
                 self._settings,
                 widgets.HBox([self._note, self._save_btn]),
@@ -379,10 +460,24 @@ class ReviewPanel:
         if not name or not self.dm.entries[name].analysed:
             self._figure.data[0].source = pm.png_source(_blank())
             self._info.value = "<i>No analysed image selected.</i>"
+            self._ruler_info.value = ""
             return
         entry = self.dm.entries[name]
         result, warnings = self.dm.final_result(name)
-        rgb = gc.overlay(result, show_seeds=self._seeds.value, show_outlines=self._outlines.value)
+        rgb = gc.overlay(
+            result,
+            show_seeds=self._seeds.value,
+            show_outlines=self._outlines.value,
+            region=self.dm.film(name),
+        )
+        if entry.thickness is not None:
+            _draw_rows(rgb, entry.thickness.top, TOP_COLOR)
+            _draw_rows(rgb, entry.thickness.bottom, BOTTOM_COLOR)
+        if self._bottom_draft:
+            points = sorted(self._bottom_draft, key=lambda p: p[1])
+            for p0, p1 in zip(points, points[1:]):
+                gc.draw_line(rgb, p0, p1, DRAFT_COLOR)
+            gc.draw_dots(rgb, *zip(*points), DRAFT_COLOR, radius=3)
         if entry.use_clicks:
             for kind, color in ((0, (40, 110, 255)), (HOLE, (255, 40, 40))):
                 dots = [(y, x) for y, x, k in entry.clicks if (k == HOLE) == (kind == HOLE)]
@@ -390,6 +485,10 @@ class ReviewPanel:
         if self._pending is not None:
             y, x = self._pending[1]
             gc.draw_dots(rgb, [y], [x], (255, 0, 255), 5)
+        if len(self._ruler) == 2:
+            gc.draw_line(rgb, *self._ruler, RULER_COLOR)
+        if self._ruler:
+            gc.draw_dots(rgb, *zip(*self._ruler), RULER_COLOR, radius=3)
         height, width = rgb.shape[:2]
         with self._figure.batch_update():
             self._figure.data[0].source = pm.png_source(rgb)
@@ -402,6 +501,7 @@ class ReviewPanel:
                 self._figure.layout.height = int(pm.OVERLAY_WIDTH * height / width) + 10
                 self._resets += 1
         self._info.value = _info_html(entry, result, warnings)
+        self._ruler_info.value = _ruler_html(self._ruler, entry.sem.pixel_size_nm)
 
     def _show_scalebar(self, nm_per_px: float) -> None:
         with self._scale_out:
@@ -424,9 +524,14 @@ class ReviewPanel:
 
     def _select_image(self) -> None:
         self._pending = None
+        self._ruler = []
         name = self._image.value
         if name:
             entry = self.dm.entries[name]
+            self._bottom_draft = [(int(y), int(x)) for y, x in entry.bottom_points]
+            self._kind.unobserve(self._on_kind, names="value")
+            self._kind.value = entry.kind
+            self._kind.observe(self._on_kind, names="value")
             # show the image's stored state without triggering the handlers
             self._source.unobserve(self._on_source, names="value")
             self._source.value = CLICKS if entry.use_clicks else AUTO
@@ -450,6 +555,31 @@ class ReviewPanel:
             self.redraw()
             self._on_changed()
 
+    def _on_kind(self, change) -> None:
+        name = self._image.value
+        if not name:
+            return
+        self._info.value = "<i>Re-analysing...</i>"
+        self.dm.set_kind(name, change["new"])
+        self._select_image()
+        self._on_changed()
+
+    def _apply_bottom(self, drawn: bool) -> None:
+        name = self._image.value
+        if not name:
+            return
+        if drawn and len(self._bottom_draft) < 2:
+            self._action_help.value = (
+                "<p style='color:#b00'>Click at least two points along the film bottom first.</p>"
+            )
+            return
+        if not drawn:
+            self._bottom_draft = []
+        self._info.value = "<i>Re-analysing...</i>"
+        self.dm.set_bottom_line(name, self._bottom_draft)
+        self.redraw()
+        self._on_changed()
+
     def _on_source(self, change) -> None:
         name = self._image.value
         if not name:
@@ -465,10 +595,15 @@ class ReviewPanel:
 
     def _set_actions(self) -> None:
         clicks = self._source.value == CLICKS
-        options = CLICK_ACTIONS if clicks else AUTO_ACTIONS
+        name = self._image.value
+        cross = bool(name) and self.dm.entries[name].kind == CROSS
+        options = (CLICK_ACTIONS if clicks else AUTO_ACTIONS) + [RULER]
+        if cross:
+            options.append(BOTTOM)
         self._action.options = options
         self._action.value = options[0]  # replacing the options leaves no button selected
         self._start_btn.layout.display = "" if clicks else "none"
+        self._bottom_box.layout.display = "" if cross else "none"
         self._on_action()
 
     def _on_action(self) -> None:
@@ -487,6 +622,14 @@ class ReviewPanel:
         entry = self.dm.entries[name]
         action = self._action.value
         ctrl = bool(getattr(state, "ctrl", False))
+        if action == RULER:  # a third click starts a new measurement
+            self._ruler = [*self._ruler, (y, x)] if len(self._ruler) == 1 else [(y, x)]
+            self.redraw()
+            return
+        if action == BOTTOM:  # drawn points take effect with "Use the drawn bottom"
+            self._bottom_draft.append((y, x))
+            self.redraw()
+            return
         if entry.use_clicks:
             if ctrl or action == "removes a dot":
                 self.dm.remove_click(name, y, x)
@@ -513,11 +656,18 @@ class ReviewPanel:
             self._on_changed()
 
     def _undo(self, _b) -> None:
-        if self._image.value:
-            self._pending = None
+        if not self._image.value:
+            return
+        self._pending = None
+        if self._action.value == RULER:
+            self._ruler = []
+        elif self._action.value == BOTTOM:
+            if self._bottom_draft:
+                self._bottom_draft.pop()
+        else:
             self.dm.undo(self._image.value)
-            self.redraw()
             self._on_changed()
+        self.redraw()
 
     def _clear(self, _b) -> None:
         if self._image.value:
@@ -539,7 +689,7 @@ class ReviewPanel:
         )
         for i, target in enumerate(targets):
             self._settings_status.value = f"Re-analysing {i + 1} of {len(targets)}: {target}..."
-            preset = gc.PRESETS[self.dm.entries[target].result.summary.get("preset", "smooth")]
+            preset = self.dm.base_params(target)
             overrides = {f: v for f, v in values.items() if v != getattr(preset, f)}
             self.dm.set_overrides(target, overrides)
         self._settings_status.value = (
@@ -574,7 +724,20 @@ class ReviewPanel:
 
 AUTO_ACTIONS = ["does nothing", "merges two grains", "cuts along a line"]
 CLICK_ACTIONS = ["adds a grain", "adds a hole", "removes a dot"]
+RULER = "measures a distance"
+BOTTOM = "draws the film bottom"
+TOP_COLOR, BOTTOM_COLOR = (255, 60, 60), (40, 210, 255)  # as cross_section.overlay
+DRAFT_COLOR = (170, 90, 255)
+RULER_COLOR = (255, 235, 0)
 ACTION_HELP = {
+    RULER: "Click two points: the distance between them is shown below the image, in nm. A "
+    "third click starts a new measurement; <b>Undo</b> removes the ruler. Grains are not "
+    "changed.",
+    BOTTOM: "Click points along the bottom of the perovskite film, from left to right (a few "
+    "are enough; the line runs straight between them and flat beyond the outer ones). Then "
+    "press <b>Use the drawn bottom</b>: everything below the line is ignored and the image is "
+    "re-analysed. <b>Undo</b> removes the last point; <b>Automatic bottom</b> goes back to the "
+    "detected one.",
     "does nothing": "Clicks on the image are ignored. Choose an action to correct the grains.",
     "merges two grains": "Click one grain (it is marked magenta), then the neighbouring grain: "
     "the border between them is removed.",
@@ -595,7 +758,11 @@ LEGEND_HTML = (
     "of the size averages, counted as half a grain in the density). "
     "<b>Dots:</b> <span style='color:#2a6eff'>blue</span> = your grain clicks, "
     "<span style='color:#e02828'>red</span> = holes (hole areas are tinted red), "
-    "<span style='color:#e000e0'>magenta</span> = first point of a merge or cut.<br>"
+    "<span style='color:#e000e0'>magenta</span> = first point of a merge or cut, "
+    "<span style='color:#c8b400'>yellow</span> = ruler.<br>"
+    "<b>Cross-sections:</b> <span style='color:#e03c3c'>red line</span> = film top, "
+    "<span style='color:#1eb4e6'>cyan line</span> = film bottom (nothing below it counts), "
+    "<span style='color:#a05aff'>purple</span> = film bottom you are drawing.<br>"
     "<b>Zoom:</b> drag a box over the image, or use the scroll wheel. <b>Whole image</b> (or a "
     "double-click) zooms back out. While an editing action is selected, the first click of a "
     "double-click also counts as a click: <b>Undo</b> removes it. To move a zoomed image, pick "
@@ -635,7 +802,9 @@ IMAGE_COLUMNS = {
     "hole_area_fraction": "Hole area",
     "reliable": "Reliable",
     "corrected": "Corrected",
+    "kind": "Type",
     "status": "Status",
+    "note": "Note",
 }
 SAMPLE_COLUMNS = {
     "sample": "Sample",
@@ -647,6 +816,65 @@ SAMPLE_COLUMNS = {
     "grains_per_um2_mean": "Grains per µm²",
     "magnification_spread": "Magnification spread",
 }
+
+
+CROSS_COLUMNS = {
+    "image": "Image",
+    "sample": "Sample",
+    "thickness_median_nm": "Thickness, median (nm)",
+    "thickness_p10_nm": "10th pct (nm)",
+    "thickness_p90_nm": "90th pct (nm)",
+    "top_roughness_rms_nm": "Top roughness RMS (nm)",
+    "film_bottom": "Film bottom",
+    "n_grains": "Grains",
+    "median_width_nm": "Grain width, median (nm)",
+    "median_height_nm": "Grain height, median (nm)",
+    "hole_area_fraction": "Hole area",
+    "corrected": "Corrected",
+}
+CROSS_SAMPLE_COLUMNS = {
+    "sample": "Sample",
+    "n_images": "Images",
+    "thickness_median_nm": "Thickness, median (nm)",
+    "thickness_std_nm": "± (nm)",
+    "thickness_p10_nm": "10th pct (nm)",
+    "thickness_p90_nm": "90th pct (nm)",
+    "n_grains": "Grains",
+    "median_width_nm": "Grain width, median (nm)",
+    "median_height_nm": "Grain height, median (nm)",
+}
+CROSS_HELP = (
+    "<p>Cross-section images are recognised automatically (dark, smooth vacuum above the film). "
+    "For each one the app finds the film top and the film bottom, measures the thickness at "
+    "every image column, and finds the grains inside the film only. The <b>10th and 90th "
+    "percentiles</b> show how uneven the film is: 80% of the film width lies between them. The "
+    "distribution below shows the same in detail; several peaks mean regions of different "
+    "thickness. If the bottom line catches a lower layer (ITO, glass), draw it yourself in "
+    "<i>Review and correct</i> with <b>draws the film bottom</b>. <b>Grain width</b> is the "
+    "horizontal, <b>height</b> the vertical extent of a grain.</p>"
+)
+
+
+def _draw_rows(rgb, rows, color) -> None:
+    """A line given as one row per column, 2 px thick (as in cross_section.overlay)."""
+    xs = np.arange(rgb.shape[1])
+    for dy in (0, 1):
+        rgb[np.clip(rows + dy, 0, rgb.shape[0] - 1), xs] = color
+
+
+def _ruler_html(points, nm_per_px: float) -> str:
+    """The ruler reading, shown below the image (above it, a new line would shift the image
+    between the two clicks)."""
+    if len(points) == 1:
+        return "<span style='color:#8a7a00'>Ruler: click the second point.</span>"
+    if len(points) != 2:
+        return ""
+    (y0, x0), (y1, x1) = points
+    dy, dx = abs(y1 - y0) * nm_per_px, abs(x1 - x0) * nm_per_px
+    return (
+        f"<b style='color:#8a7a00'>Ruler: {np.hypot(dx, dy):.0f} nm</b> "
+        f"(horizontal {dx:.0f} nm, vertical {dy:.0f} nm)"
+    )
 
 
 def _readable(table, columns: dict) -> HTML:
@@ -672,7 +900,15 @@ def _info_html(entry, result, warnings) -> str:
         return (
             f"<b>{entry.name}</b>: <span style='color:#b00'>ignored, left out of every "
             "result</span> (untick <i>Ignore this image</i> to use it again)"
+            + (
+                "<br>It has measurements drawn in by the SEM software, so it was ignored "
+                "automatically: the drawn bars and labels spoil the detection."
+                if entry.has_overlay
+                else ""
+            )
         )
+    if entry.kind == CROSS:
+        return _cross_info_html(entry, s, warnings)
     parts = [
         f"<b>{entry.name}</b> (sample {entry.sample_id}, preset "
         f"{entry.result.summary.get('preset')}"
@@ -691,4 +927,24 @@ def _info_html(entry, result, warnings) -> str:
     parts += [f"<span style='color:#b60'>edit skipped: {w}</span>" for w in warnings]
     if s.get("hole_area_fraction"):
         parts.append(f"holes: {100 * s['hole_area_fraction']:.1f}% of the area")
+    return "<br>".join(parts)
+
+
+def _cross_info_html(entry, s, warnings) -> str:
+    parts = [
+        f"<b>{entry.name}</b> (sample {entry.sample_id}, cross-section"
+        f"{' with its own settings' if entry.overrides else ''}, "
+        f"{entry.sem.pixel_size_nm:.3f} nm/px)",
+        f"Thickness {s.get('thickness_median_nm', float('nan')):.0f} nm (median; 80% of the width "
+        f"between {s.get('thickness_p10_nm', float('nan')):.0f} and "
+        f"{s.get('thickness_p90_nm', float('nan')):.0f} nm), top roughness "
+        f"{s.get('top_roughness_rms_nm', float('nan')):.0f} nm RMS, film bottom "
+        f"{'drawn' if s.get('bottom_drawn') else 'automatic'}",
+        f"{s.get('n_grains', 0)} grains in the film, median width "
+        f"{s.get('median_width_nm', float('nan')):.0f} nm, height "
+        f"{s.get('median_height_nm', float('nan')):.0f} nm",
+    ]
+    if entry.has_overlay:
+        parts.append("<span style='color:#b60'>measurements drawn in by the SEM software</span>")
+    parts += [f"<span style='color:#b60'>edit skipped: {w}</span>" for w in warnings]
     return "<br>".join(parts)
