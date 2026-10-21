@@ -4,6 +4,7 @@
 import getpass
 import logging
 import time
+from urllib.parse import quote
 
 import requests
 
@@ -379,6 +380,19 @@ def upload_raw_file_and_wait(
                 raise RuntimeError(f"NOMAD could not process {filename}: {detail}")
             return
     raise TimeoutError(f"processing of {filename} did not finish within {int(max_wait)} s")
+
+
+def download_raw_file(url, token, upload_id, path):
+    """Bytes of one raw file of an upload. `path` is relative to the upload's raw folder, as
+    NOMAD stores it in file references such as an SEM entry's data.detector_data. Raises
+    requests.HTTPError when the file cannot be fetched."""
+    response = requests.get(
+        f"{url}/uploads/{upload_id}/raw/{quote(path, safe='/')}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.content
 
 
 def get_sample_entry_links(url, token, sample_ids):

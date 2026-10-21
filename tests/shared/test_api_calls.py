@@ -193,3 +193,50 @@ def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
         ids = api_calls.get_ids_in_batch("https://e.test/api", "tok", ["B1", "B2"])
     assert ids == ["S1"]
     assert "asked for 2 batches" in caplog.text
+
+
+class _FakeResponse:
+    def __init__(self, status=200, content=b""):
+        self.status_code = status
+        self.content = content
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"{self.status_code} error")
+
+
+def test_download_raw_file_quotes_path_and_returns_bytes(monkeypatch):
+    from hysprint_utils import api_calls
+
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        return _FakeResponse(content=b"tiff-bytes")
+
+    monkeypatch.setattr(api_calls.requests, "get", fake_get)
+    data = api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "sem data/VP 1.tif")
+    assert data == b"tiff-bytes"
+    url, headers, timeout = calls[0]
+    assert url == "https://e.test/api/uploads/UP1/raw/sem%20data/VP%201.tif"
+    assert headers == {"Authorization": "Bearer tok"}
+    assert timeout == api_calls.REQUEST_TIMEOUT
+
+
+def test_download_raw_file_raises_on_http_error(monkeypatch):
+    import pytest
+    import requests
+
+    from hysprint_utils import api_calls
+
+    monkeypatch.setattr(api_calls.requests, "get", lambda *a, **k: _FakeResponse(status=404))
+    with pytest.raises(requests.HTTPError):
+        api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "missing.tif")
+
+
+def test_entry_types_include_sem():
+    from hysprint_utils.config import ENTRY_TYPES
+
+    assert ENTRY_TYPES["sem"] == "HySprint_SEM"
