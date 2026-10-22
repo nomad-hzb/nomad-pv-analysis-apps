@@ -299,6 +299,51 @@ def test_field_overview_matches_auditable_columns(fresh_session):
     assert overview_columns == set(fresh_session.auditable_columns("Substrate"))
 
 
+def _sample_with_jv_plots() -> dict:
+    """A Sample's data as recent nomad-baseclasses stores it: Plotly figures and per-scan
+    jv_history_* lists, both recomputed from the JV measurements on every processing."""
+    return {
+        "name": "S1",
+        "description": "spin coated",
+        "jv_history_efficiency": [14.7, 21.5],
+        "jv_history_cell_name": ["a_rev", "b_rev"],
+        "figures": [
+            {
+                "label": "JV History",
+                "figure": {"data": [{"x": [1, 2, 3], "y": [14.7, 21.5, 20.1], "name": "rev"}]},
+            },
+            {"label": "Best Pixel", "figure": {"data": [{"x": [0.1, 0.2], "y": [5, 6]}]}},
+        ],
+    }
+
+
+def test_auditable_columns_skip_plot_figures_and_jv_history(fresh_session):
+    """Issue #167: every plot point became an auditable field (over 10,000 for one batch),
+    which stalled the results view."""
+    rows = []
+    for name in ("S1", "S2"):
+        row: dict = {"sample_id": name}
+        data = _sample_with_jv_plots()
+        data["name"] = name
+        dm._flatten(data, "", row)
+        rows.append(row)
+    fresh_session.datasets["Sample"] = pd.DataFrame(rows)
+    columns = fresh_session.auditable_columns("Sample")
+    assert "name" in columns and "description" in columns
+    assert not [c for c in columns if c.startswith(("figures", "jv_history_"))]
+
+
+def test_noise_patterns_match_nested_figures_but_not_similar_names():
+    def noise(column):
+        return any(pattern.search(column) for pattern in dm._NOISE_COLUMN_PATTERNS)
+
+    assert noise("figures.1.figure.data.x.2")
+    assert noise("results.figures.label")
+    assert noise("jv_history_efficiency.3")
+    assert not noise("figures_note")
+    assert not noise("my_jv_history_note")
+
+
 # ---------------------------------------------------------------------------
 # apply_correction -- corrects every occurrence and logs only on success
 # ---------------------------------------------------------------------------
