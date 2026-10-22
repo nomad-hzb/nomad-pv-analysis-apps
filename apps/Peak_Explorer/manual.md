@@ -37,8 +37,9 @@ Two sources, both offered in the *Data Loading* box:
    - *Manual*: the mean of a number of curves, starting at a time index, is subtracted from all
      spectra.
    - *Linear*, *Polynomial*, *Exponential*: type the parameters, or press *Auto-Fit Background* to
-     fit them to the **current spectrum** (peaks included, so the result also takes part of the
-     signal; use a spectrum or range without peaks where you can).
+     fit them to the **current spectrum**, using only the points outside the windows of
+     your peak models (centre +/- 3 widths); define the peaks first so the background is fitted
+     between them. Without peak models, all points are used.
    - *Custom*: upload a two-column file (wavelength, intensity).
 
    One background is subtracted from every spectrum. Loading new data or switching the h5
@@ -77,8 +78,10 @@ The button *nm <-> eV* switches the wavelength axis to energy and back, with E =
 and hc = 1239.84 eV nm. A PL spectrum is a density per wavelength interval, so its intensity is
 multiplied by lambda squared / hc on the way to eV (and back by E squared / hc). The integral of
 the spectrum is the same in both units, and fitted peak positions, widths and areas in eV are
-correct. Transmission and absorbance are not rescaled. For a CSV file the app cannot know
-which one it is: the checkbox *CSV intensity is a PL spectrum* decides (on by default).
+correct. Transmission and absorbance are not rescaled. The button is shown only for data on a
+wavelength axis, so not for GIWAXS (q in 1/Å). For a CSV file the app cannot know
+which one it is: the checkbox *CSV intensity is a PL spectrum*, shown once a CSV is loaded,
+decides (on by default).
 The start values of the peak models are converted too (centre, sigma, Voigt gamma, and the
 height of PL data); bounds typed in the old unit are cleared. An applied background is
 converted along with the data. Fit results are removed on every conversion.
@@ -87,7 +90,8 @@ converted along with the data. Fit results are removed on every conversion.
 
 - Absorbance is computed with the natural logarithm, so values are 2.303 times the optical
   density in log10.
-- The background is global and, with *Auto-Fit Background*, includes the peaks (see step 3).
+- The background is global: one curve, fitted on the current spectrum, is subtracted from every
+  spectrum.
 - Polynomial models have no parameter bounds.
 - CSV import replaces NaN/inf cells by 0.
 

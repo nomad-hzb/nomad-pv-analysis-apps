@@ -16,7 +16,6 @@ from pydantic import BaseModel, ValidationError, field_validator
 from hysprint_utils.api_calls import (
     REQUEST_TIMEOUT,
     get_all_mppt,
-    get_batch_ids,
     get_ids_in_batch,
     get_sample_description,
 )
@@ -514,16 +513,6 @@ class DataManager:
         self.entries = entries_df
         self.properties = properties
         return True
-
-    def get_filtered_batch_ids(self):
-        """Return all batch IDs, deduplicated."""
-        batch_ids_list_tmp = list(get_batch_ids(self.url, self.token))
-        batch_ids_list = []
-        for b in batch_ids_list_tmp:
-            if "_".join(b.split("_")[:-1]) in batch_ids_list_tmp:
-                continue
-            batch_ids_list.append(b)
-        return batch_ids_list
 
     def get_mppt_batch_ids(self):
         """Return only batch IDs that contain MPPT data.

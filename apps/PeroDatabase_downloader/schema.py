@@ -53,25 +53,3 @@ def flatten_paths(obj, prefix="", out=None):
             else:
                 out.add(child)
     return out
-
-
-def discover_paths(entries):
-    """Return {path: count} across a sample.
-
-    The count is how many sampled entries hold a non null value at that
-    path. This drives the coverage hint shown next to each suggestion.
-    """
-    counts = {}
-    for entry in entries:
-        for path in flatten_paths(entry):
-            if get_nested_field(entry, path) is not None:
-                counts[path] = counts.get(path, 0) + 1
-    return counts
-
-
-def validate_path(entries, path):
-    """Return (exists, coverage_fraction) for a path over the sample."""
-    if not entries:
-        return False, 0.0
-    hits = sum(1 for e in entries if get_nested_field(e, path) is not None)
-    return hits > 0, hits / len(entries)

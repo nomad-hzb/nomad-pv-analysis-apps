@@ -166,10 +166,6 @@ class AppState:
                 del self.fitted_curves_data[key]
             self._rebuild_fit_results_df()
 
-    def get_sample_fit_results(self, sample_id):
-        """Return {curve_id: fit_dict} for whatever has already been fitted for one sample."""
-        return {key[1]: fit for key, fit in self.fitted_curves_data.items() if key[0] == sample_id}
-
     def _rebuild_fit_results_df(self):
         """Recompute self.fit_results from self.fitted_curves_data - the single
         source of truth is fitted_curves_data; the DataFrame is a derived view
@@ -189,10 +185,3 @@ class AppState:
         self.fit_results = pd.DataFrame(rows) if rows else pd.DataFrame()
         if self.fitted_curves_data:
             self.last_fitted_model = next(iter(self.fitted_curves_data.values()))["model"]
-
-    def get_sample_ids_list(self):
-        """Get list of sample IDs"""
-        sample_ids = self.data.get("sample_ids")
-        if sample_ids is None:
-            return []
-        return list(sample_ids) if hasattr(sample_ids, "__iter__") else [sample_ids]

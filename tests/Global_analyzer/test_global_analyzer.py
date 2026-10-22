@@ -11,14 +11,17 @@ from data_manager import (
     apply_row_filters,
     average_rows_per_sample,
     exclude_samples,
+    fill_missing_with_zero,
     get_categorical_columns,
     get_layer_type_options,
+    label_column_roles,
     merge_results_per_sample,
     merged_result_column_names,
     parse_uploaded_analysis_csv,
     process_type_label,
     result_type_label,
     select_layer_row_per_sample,
+    split_column_roles,
     uploaded_numeric_columns,
     variation_warning,
 )
@@ -199,6 +202,62 @@ def test_load_spin_coating_data_extracts_operator():
 
     assert df is not None
     assert df.loc[0, "operator"] == "Alice"
+
+
+def _spin_entry_with_solutes(concentrations):
+    return {
+        "name": "spin",
+        "solution": [
+            {
+                "solution_volume": 100,
+                "solution_details": {
+                    "solute": [
+                        {
+                            "chemical_2": {"name": f"S{i}"},
+                            "concentration_mol": c,
+                            "chemical_id": f"id{i}",
+                        }
+                        for i, c in enumerate(concentrations, start=1)
+                    ],
+                    "solvent": [
+                        {
+                            "chemical_2": {"name": "DMF"},
+                            "chemical_volume": 8,
+                            "amount_relative": 1.5,
+                        }
+                    ],
+                },
+            }
+        ],
+        "annealing": {"temperature": 100, "ramp": 3},
+    }
+
+
+def test_load_spin_coating_data_keeps_every_solute_concentration():
+    # a concentration that differs between samples must show up as a column of its own
+    fake_data = {
+        "s1": [[_spin_entry_with_solutes([1.0, 2.0, 3.0, 4.0])]],
+        "s2": [[_spin_entry_with_solutes([1.0, 2.0, 3.0, 8.0])]],
+    }
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_spin_coating_data(["s1", "s2"], {"s1": "a", "s2": "b"})
+
+    assert list(df["solute_concentration_S4"]) == [4.0, 8.0]
+    assert list(df["solute_concentration_S1"]) == [1.0, 1.0]
+    assert df.loc[0, "solute_chemical_id_S2"] == "id2"
+    assert df.loc[0, "solvent_volume_DMF"] == 8
+    # values the loader has no dedicated column for are kept as well
+    assert df.loc[0, "annealing.ramp"] == 3
+
+
+def test_load_slot_die_coating_data_keeps_solvent_volume():
+    fake_data = {"s1": [[_spin_entry_with_solutes([1.0])]]}
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_slot_die_coating_data(["s1"], {"s1": "a"})
+
+    assert df.loc[0, "solvent_volume_DMF"] == 8
 
 
 def test_load_slot_die_coating_data_extracts_operator():
@@ -554,6 +613,30 @@ def test_build_parameter_summary_markdown_excludes_batch_column():
     assert "batch" not in markdown
 
 
+def test_parameter_summary_shows_a_variation_that_the_material_name_carries():
+    """The concentration is part of the material name ("+ 20 mmol CsCl"), so it is constant
+    inside each material; the variation only shows in a table over all materials of a
+    layer. Time stamps are never listed."""
+    dm = DataManager(data_loader=None, param_manager=ParameterManager())
+    dm.current_metadata = {
+        "spin_coating": pd.DataFrame(
+            {
+                "sample_id": ["S1", "S2", "S3", "S4"],
+                "layer_type": ["Active Layer"] * 4,
+                "layer_material_name": ["A + 20 mmol", "A + 20 mmol", "A + 50 mmol", "A + 50 mmol"],
+                "solute_concentration_FACl": [2e-5, 2e-5, 5e-5, 5e-5],
+                "solution.datetime": ["2026-06-04T14:10", "2026-06-04T14:11"] * 2,
+            }
+        )
+    }
+
+    markdown = dm.build_parameter_summary_markdown()
+
+    assert "Active Layer - all materials" in markdown
+    assert "solute_concentration_FACl" in markdown
+    assert "datetime" not in markdown
+
+
 def test_load_all_data_for_summary_keeps_every_entry_per_sample(monkeypatch):
     """Regression test for issue #34: a sample re-measured more than once for
     the same result type (e.g. JV measured on two different dates) must keep
@@ -702,6 +785,78 @@ def test_uploaded_numeric_columns_skips_sample_id_text_and_constant_columns():
     )
 
     assert uploaded_numeric_columns(df) == ["temp", "pce"]
+
+
+def test_exported_column_roles_survive_a_csv_round_trip():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2"],
+            "temp": [100, 120],
+            "voc": [1.1, 1.2],
+            "efficiency": [15.0, 17.5],
+        }
+    )
+
+    labelled = label_column_roles(df, ["voc", "efficiency"], ["temp"])
+    assert list(labelled.columns) == [
+        "sample_id",
+        "process: temp",
+        "result: voc",
+        "result: efficiency",
+    ]
+
+    uploaded = parse_uploaded_analysis_csv(labelled.to_csv(index=False).encode())
+    restored, results, process = split_column_roles(uploaded)
+    assert list(restored.columns) == ["sample_id", "temp", "voc", "efficiency"]
+    assert results == ["voc", "efficiency"]
+    assert process == ["temp"]
+
+
+def test_split_column_roles_leaves_unlabelled_csv_alone():
+    df = pd.DataFrame({"sample_id": ["S1"], "temp": [100], "pce": [15.0]})
+
+    restored, results, process = split_column_roles(df)
+
+    assert list(restored.columns) == ["sample_id", "temp", "pce"]
+    assert results == [] and process == []
+
+
+def test_split_column_roles_keeps_prefix_when_name_collides():
+    df = pd.DataFrame({"sample_id": ["S1"], "pce": [1.0], "result: pce": [15.0]})
+
+    restored, results, _ = split_column_roles(df)
+
+    assert list(restored.columns) == ["sample_id", "pce", "result: pce"]
+    assert results == ["result: pce"]
+
+
+def test_fill_missing_with_zero_only_touches_the_given_numeric_columns():
+    df = pd.DataFrame(
+        {
+            "sample_id": ["S1", "S2", None],
+            "additive_conc": [0.5, None, None],
+            "material": ["a", None, "b"],
+            "pce": [15.0, None, 16.0],
+        }
+    )
+
+    filled, n_filled = fill_missing_with_zero(df, ["additive_conc", "material"])
+
+    assert n_filled == 2
+    assert list(filled["additive_conc"]) == [0.5, 0.0, 0.0]
+    assert filled["pce"].isna().sum() == 1
+    assert filled["material"].isna().sum() == 1
+    assert filled["sample_id"].isna().sum() == 1
+    assert df["additive_conc"].isna().sum() == 2  # the input is not modified
+
+
+def test_fill_missing_with_zero_without_missing_values_returns_input():
+    df = pd.DataFrame({"x": [1.0, 2.0]})
+
+    filled, n_filled = fill_missing_with_zero(df, ["x"])
+
+    assert n_filled == 0
+    assert filled is df
 
 
 def _bo_dataset():

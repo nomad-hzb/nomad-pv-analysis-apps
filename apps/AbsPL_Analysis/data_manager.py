@@ -231,9 +231,3 @@ class AbsPlDataManager:
     def get_pivot_table(self, value_col: str, group_by_col: str) -> pd.DataFrame:
         """One column per group, one row per measurement in it (every measurement is kept)."""
         return pivot_by_group(self.data, value_col, group_by_col)
-
-    def pivot_to_csv_string(self, value_col: str, group_by_col: str) -> str:
-        """Return pivot table as a CSV string."""
-        buf = io.StringIO()
-        self.get_pivot_table(value_col, group_by_col).to_csv(buf)
-        return buf.getvalue()

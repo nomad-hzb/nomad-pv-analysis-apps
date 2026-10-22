@@ -432,6 +432,7 @@ class PlotSettingsPanel:
 
 class PlotPanel:
     def __init__(self) -> None:
+        self._figure: go.FigureWidget | None = None
         self._out = widgets.Output(
             layout=widgets.Layout(
                 min_height="540px",
@@ -442,7 +443,10 @@ class PlotPanel:
     def show_figure(self, fig: go.Figure) -> None:
         with self._out:
             self._out.clear_output(wait=True)
-            ipydisplay(go.FigureWidget(fig))
+            if self._figure is not None:
+                self._figure.close()  # clear_output only hides it: free the replaced widget
+            self._figure = go.FigureWidget(fig)
+            ipydisplay(self._figure)
 
     def show_message(self, msg: str) -> None:
         with self._out:

@@ -4,20 +4,17 @@ Manages tab structure, user interactions, and coordination between modules.
 """
 
 import base64
-import json
 import logging
 import warnings
-from datetime import datetime
 
 import ipywidgets as widgets
 import numpy as np
-import pandas as pd
 from data_manager import DataManager
 from gui_components import GUIComponents
 from IPython.display import clear_output, display
 from plot_manager import PlotManager
 from sampling_algorithms import SamplingEngine, get_notes
-from utils import Constants, ValidationUtils
+from utils import ValidationUtils
 
 from hysprint_utils.manual import manual_panel
 
@@ -522,57 +519,3 @@ class DoEApplication:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    def get_status(self):
-        return {
-            "variables_count": len(self.data_manager.get_variables()),
-            "samples_generated": (
-                len(self.current_samples) if self.current_samples is not None else 0
-            ),
-            "current_algorithm": self.current_algorithm,
-            "has_quality_metrics": bool(self.quality_metrics),
-        }
-
-    def get_current_tab(self):
-        return self.tabs.selected_index if hasattr(self, "tabs") else 0
-
-    def export_configuration(self):
-        config = {
-            "timestamp": datetime.now().isoformat(),
-            "algorithm": self.current_algorithm,
-            "variables": [var.to_dict() for var in self.data_manager.get_variables()],
-            "samples": (
-                self.current_samples.to_dict("records")
-                if self.current_samples is not None
-                else None
-            ),
-            "quality_metrics": self.quality_metrics,
-            "version": Constants.APPLICATION_VERSION,
-        }
-        return json.dumps(config, indent=2, default=str)
-
-    def import_configuration(self, config_json):
-        try:
-            config = json.loads(config_json)
-
-            self.current_algorithm = config.get("algorithm", "Latin Hypercube Sampling")
-
-            variables = config.get("variables", [])
-            self.data_manager.set_variables(variables)
-
-            if config.get("samples"):
-                self.current_samples = pd.DataFrame(config["samples"])
-
-            self.quality_metrics = config.get("quality_metrics", {})
-
-            self.gui_components.update_from_configuration(config)
-            self._update_results_display()
-            self._update_metrics_display()
-            self._update_visualizations()
-
-            self._update_status("Configuration imported successfully")
-            return True
-
-        except Exception as e:
-            self._update_status(f"Error importing configuration: {str(e)}", error=True)
-            return False

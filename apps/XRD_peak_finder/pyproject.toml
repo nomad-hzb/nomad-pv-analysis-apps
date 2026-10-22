@@ -7,6 +7,7 @@ dependencies = [
     "hysprint-utils",
     "ipywidgets>=8.0",
     "plotly>=5.0",
+    "anywidget>=0.9",  # go.FigureWidget needs it
     "pandas>=2.0",
     "numpy>=1.24",
     "natsort>=8.0",

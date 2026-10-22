@@ -11,13 +11,15 @@ import warnings
 import config
 import ipywidgets as widgets
 import numpy as np
+from background_handlers import BackgroundHandlersMixin
 from data_manager import DataManager
 from exporters import ResultExporter
+from fit_handlers import FitHandlersMixin
 from fitting_engine import FittingEngine
 from gui_components import GUIComponents
 from IPython.display import display
 from plot_manager import PlotManager
-from utils import debug_output, debug_print
+from utils import debug_print, get_debug_output
 
 from hysprint_utils.manual import manual_panel
 
@@ -377,7 +379,7 @@ class GUILayouts:
 # =============================================================================
 
 
-class PLAnalysisApp:
+class PLAnalysisApp(BackgroundHandlersMixin, FitHandlersMixin):
     """Main Photoluminescence Analysis Application"""
 
     def __init__(self):
@@ -388,8 +390,6 @@ class PLAnalysisApp:
         self.data_manager = DataManager()
         self.fitting_engine = FittingEngine()
         self.plot_manager = PlotManager()
-        self.plot_manager.app_ref = self
-        debug_print("PlotManager app_ref set", "APP")
         self.export_utils = ResultExporter()
 
         # Initialize GUI components
@@ -405,9 +405,11 @@ class PLAnalysisApp:
 
         # State management
         self.peak_models = []  # List of peak model widgets
+        self._peak_counter = 0  # Id of the next peak row: never reused, so a removal cannot clash
         self.last_fit_result = None
         self.original_data_matrix = None  # For background subtraction
         self.background_applied = False
+        self.background_model = None  # the background curve shown/applied, if any
         self.background_accordion = None  # Reference to background accordion
         self._fit_vis_indices = []  # Sorted list of successful fit result indices
 
@@ -538,85 +540,6 @@ class PLAnalysisApp:
 
         debug_print("Callbacks setup complete", "APP")
 
-    def _update_wavelength_range_on_spectrum(self, wavelength_range):
-        """Update only the wavelength range lines on spectrum plot"""
-        debug_print(f"Updating spectrum range to {wavelength_range}", "SPECTRUM")
-        debug_print(f"self.plot_manager = {self.plot_manager}", "SPECTRUM")
-        debug_print(
-            f"self.plot_manager.spectrum_fig = {self.plot_manager.spectrum_fig}", "SPECTRUM"
-        )
-        debug_print(f"spectrum_fig is None? {self.plot_manager.spectrum_fig is None}", "SPECTRUM")
-
-        if self.plot_manager.spectrum_fig is None:
-            debug_print("No spectrum fig, returning early", "SPECTRUM")
-            return
-
-        fig = self.plot_manager.spectrum_fig
-        debug_print(f"Number of shapes before: {len(fig.layout.shapes)}", "SPECTRUM")
-
-        # Debug: print all existing shapes
-        for i, shape in enumerate(fig.layout.shapes):
-            debug_print(
-                f"Shape {i}: type={shape.type}, color={getattr(shape.line, 'color', 'N/A')}, dash={getattr(shape.line, 'dash', 'N/A')}, x0={shape.x0}, x1={shape.x1}",
-                "SPECTRUM",
-            )
-
-        # Remove existing wavelength range shapes (vertical green dashed lines)
-        new_shapes = []
-        for shape in fig.layout.shapes:
-            # Remove if it's a vertical green dashed line
-            is_green = getattr(shape.line, "color", None) == "green"
-            is_dashed = getattr(shape.line, "dash", None) == "dash"
-            is_vertical = shape.type == "line" and shape.x0 == shape.x1
-
-            should_remove = is_green and is_dashed and is_vertical
-            debug_print(
-                f"Shape: green={is_green}, dashed={is_dashed}, vertical={is_vertical}, remove={should_remove}",
-                "SPECTRUM",
-            )
-
-            if should_remove:
-                continue  # Skip this shape (remove it)
-            new_shapes.append(shape)
-
-        fig.layout.shapes = new_shapes
-        debug_print(f"Number of shapes after removal: {len(fig.layout.shapes)}", "SPECTRUM")
-
-        # Add new shapes if range is specified
-        if wavelength_range is not None:
-            # Get y-axis range from figure
-            if fig.data and len(fig.data) > 0:
-                y_data = fig.data[0].y
-                y_min, y_max = min(y_data), max(y_data)
-            else:
-                y_min, y_max = 0, 1
-
-            debug_print(
-                f"Adding lines at x={wavelength_range[0]} and x={wavelength_range[1]}", "SPECTRUM"
-            )
-
-            # Add left line
-            fig.add_shape(
-                type="line",
-                x0=wavelength_range[0],
-                x1=wavelength_range[0],
-                y0=y_min,
-                y1=y_max,
-                line=dict(color="green", width=2, dash="dash"),
-            )
-
-            # Add right line
-            fig.add_shape(
-                type="line",
-                x0=wavelength_range[1],
-                x1=wavelength_range[1],
-                y0=y_min,
-                y1=y_max,
-                line=dict(color="green", width=2, dash="dash"),
-            )
-
-            debug_print(f"Number of shapes after adding: {len(fig.layout.shapes)}", "SPECTRUM")
-
     def _update_wavelength_range_on_heatmap(self, wavelength_range):
         """Update only the wavelength range lines on heatmap"""
         if self.plot_manager.heatmap_fig is None:
@@ -711,14 +634,18 @@ class PLAnalysisApp:
                 with self.widgets["status_output"]:
                     self.widgets["status_output"].clear_output()
                     print("✅ Successfully loaded data!")
+                    if str(mode).startswith("absorbance"):
+                        print(
+                            "ℹ️ Absorbance is A = -ln(T / T_ref), the natural logarithm: divide by 2.303 for log10."
+                        )
                     print(
                         f"📊 {data_info['time_points']} time points, {data_info['wavelengths']} wavelengths"
                     )
                     print(
-                        f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} s"
+                        f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} {self.data_manager.time_unit}"
                     )
                     print(
-                        f"🌈 Wavelength range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} nm"
+                        f"🌈 Range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} {self.data_manager.unit}"
                     )
                 return
 
@@ -813,10 +740,10 @@ class PLAnalysisApp:
                     f"📊 {data_info['time_points']} time points, {data_info['wavelengths']} wavelengths"
                 )
                 print(
-                    f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} s"
+                    f"⏱️ Time range: {data_info['time_range'][0]:.3f} - {data_info['time_range'][1]:.3f} {self.data_manager.time_unit}"
                 )
                 print(
-                    f"🌈 Wavelength range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} nm"
+                    f"🌈 Range: {data_info['wavelength_range'][0]:.1f} - {data_info['wavelength_range'][1]:.1f} {self.data_manager.unit}"
                 )
 
         except Exception as e:
@@ -898,17 +825,22 @@ class PLAnalysisApp:
             if getattr(self, "background_model", None) is not None:
                 self.background_model = self.background_model * factor
 
+    def _update_source_widgets(self):
+        """Show the CSV PL checkbox only for CSV data, and the nm <-> eV button only for
+        data on a wavelength axis (nm, or eV after a conversion): PL, transmission and
+        absorbance, not GIWAXS (1/Å)."""
+        is_csv = self.data_manager.data_source == "csv"
+        on_wavelength_axis = self.wavelength_unit in ("nm", "eV")
+        self.widgets["csv_density_checkbox"].layout.display = None if is_csv else "none"
+        self.widgets["convert_energy_btn"].layout.display = None if on_wavelength_axis else "none"
+        self.widgets["convert_energy_btn"].disabled = not on_wavelength_axis
+
     def update_ui_after_data_load(self):
         """Update UI controls after data is loaded"""
         debug_print("Updating UI after data load", "update_ui_after_data_load")
         self._reset_background_state()
         self._clear_fit_results()
-
-        # Enable energy conversion button for PL data
-        if self.wavelength_unit in ["nm", "eV"]:
-            self.widgets["convert_energy_btn"].disabled = False
-        else:
-            self.widgets["convert_energy_btn"].disabled = True
+        self._update_source_widgets()
 
         # change display of energy unit
         self.widgets["energy_unit_display"].value = f"Current unit: {self.wavelength_unit}"
@@ -1258,7 +1190,8 @@ class PLAnalysisApp:
                 "type": config.DEFAULT_PEAK_MODEL,
             }
 
-        peak_idx = len(self.peak_models)
+        peak_idx = self._peak_counter
+        self._peak_counter += 1
         debug_print(f"Adding peak model {peak_idx}", "APP")
 
         # Create peak row widget
@@ -1348,7 +1281,7 @@ class PLAnalysisApp:
                     with self.widgets["status_output"]:
                         self.widgets["status_output"].clear_output()
                         print("✅ Converted to wavelength (nm)")
-                        print(f"   Range: {wl_min:.1f} - {wl_max:.1f} nm")
+                        print(f"   Range: {wl_min:.1f} - {wl_max:.1f} {self.wavelength_unit}")
             else:
                 debug_print("Unknown wavelength unit, cannot convert", "APP")
 
@@ -1434,6 +1367,7 @@ class PLAnalysisApp:
         """Clear all peak models"""
         debug_print("Clearing all peak models", "APP")
         self.peak_models.clear()
+        self._peak_counter = 0
         self.update_peak_list_container()
 
     def update_peak_list_container(self):
@@ -1449,789 +1383,6 @@ class PLAnalysisApp:
     # FITTING OPERATIONS
     # =========================================================================
 
-    def prepare_fit_parameters(self):
-        """Prepare fitting parameters from UI inputs"""
-        params = {
-            "background_model": "None",
-            "poly_degree": 2,
-            "center_bound": self.widgets["center_bound_input"].value,
-            "peak_models": [],
-        }
-
-        for peak_model in self.peak_models:
-            model_type = peak_model._widgets["type"].value
-
-            peak_params = {"type": model_type, "name": peak_model._widgets["name"].value}
-
-            # Add parameters based on model type
-            if model_type == "Linear":
-                peak_params["slope"] = peak_model._widgets["slope"].value
-                peak_params["intercept"] = peak_model._widgets["intercept"].value
-
-            elif model_type == "Polynomial":
-                peak_params["poly_degree"] = peak_model._widgets["poly_degree"].value
-
-                # Use fitted coefficients if available
-                if hasattr(peak_model, "_fitted_coeffs"):
-                    peak_params["fitted_coeffs"] = peak_model._fitted_coeffs
-
-            else:  # Gaussian, Voigt, Lorentzian, Skewed Gaussian, Skewed Voigt
-                peak_params["center"] = peak_model._widgets["center"].value
-                peak_params["height"] = peak_model._widgets["height"].value
-                peak_params["sigma"] = peak_model._widgets["sigma"].value
-
-                # Add gamma for models that use it
-                if model_type in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
-                    peak_params["gamma"] = peak_model._widgets["gamma"].value
-
-                # Add fix flags
-                peak_params["fix_center"] = peak_model._widgets["fix_center"].value
-                peak_params["fix_height"] = peak_model._widgets["fix_height"].value
-                peak_params["fix_sigma"] = peak_model._widgets["fix_sigma"].value
-
-                if model_type in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
-                    peak_params["fix_gamma"] = peak_model._widgets["fix_gamma"].value
-
-                # Add bounds (empty string = use default).
-                # Accept both "." and "," as decimal separators so users in
-                # comma-decimal locales don't silently lose their bound.
-                def _parse_bound(val):
-                    try:
-                        return float(val.strip().replace(",", "."))
-                    except (ValueError, AttributeError):
-                        return None
-
-                for key in (
-                    "center_min",
-                    "center_max",
-                    "height_min",
-                    "height_max",
-                    "sigma_min",
-                    "sigma_max",
-                ):
-                    v = _parse_bound(peak_model._widgets[key].value)
-                    if v is not None:
-                        peak_params[key] = v
-
-                if model_type in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
-                    for key in ("gamma_min", "gamma_max"):
-                        v = _parse_bound(peak_model._widgets[key].value)
-                        if v is not None:
-                            peak_params[key] = v
-
-            params["peak_models"].append(peak_params)
-
-        # Print bounds summary to status output
-        bound_keys = (
-            "center_min",
-            "center_max",
-            "height_min",
-            "height_max",
-            "sigma_min",
-            "sigma_max",
-            "gamma_min",
-            "gamma_max",
-        )
-        with self.widgets["status_output"]:
-            for i, pm in enumerate(params["peak_models"]):
-                active_bounds = {k: pm[k] for k in bound_keys if k in pm}
-                if active_bounds:
-                    bounds_str = ", ".join(f"{k}={v:.4g}" for k, v in active_bounds.items())
-                    print(f"Model {i + 1} bounds: {bounds_str}")
-
-        debug_print(f"Prepared fit parameters: {len(params['peak_models'])} models", "APP")
-        return params
-
-    def load_custom_background(self, file_content):
-        """
-        Load custom background from uploaded file
-
-        Parameters:
-        -----------
-        file_content : bytes
-            File content with 2 columns: wavelength, intensity
-
-        Returns:
-        --------
-        array: Background intensity values
-        """
-        import io
-
-        try:
-            # Convert bytes to string
-            if isinstance(file_content, bytes):
-                content_str = file_content.decode("utf-8")
-            elif isinstance(file_content, memoryview):
-                content_str = file_content.tobytes().decode("utf-8")
-            else:
-                content_str = str(file_content)
-
-            # Parse the file
-            data = np.loadtxt(io.StringIO(content_str), delimiter=",")
-
-            if data.shape[1] != 2:
-                raise ValueError("File must have exactly 2 columns: wavelength, intensity")
-
-            bg_wavelengths = data[:, 0]
-            bg_intensities = data[:, 1]
-
-            # Interpolate to match current wavelength grid
-            from scipy.interpolate import interp1d
-
-            interp_func = interp1d(
-                bg_wavelengths,
-                bg_intensities,
-                kind="linear",
-                bounds_error=False,
-                fill_value="extrapolate",
-            )
-
-            background = interp_func(self.data_manager.wavelengths)
-
-            debug_print(f"Loaded custom background: {len(bg_wavelengths)} points", "APP")
-            return background
-
-        except Exception as e:
-            raise ValueError(f"Error loading custom background: {str(e)}")
-
-    def on_custom_background_upload(self, change):
-        """Handle custom background file upload"""
-        if not change["new"]:
-            return
-
-        try:
-            # Get the uploaded files - change['new'] is a tuple of FileUpload objects
-            uploaded_files = change["new"]
-            if not uploaded_files or len(uploaded_files) == 0:
-                return
-
-            # Get first file from tuple
-            file_upload = uploaded_files[0]
-            file_name = file_upload["name"]
-            file_content = file_upload["content"]
-
-            # Try to load and validate the file
-            background = self.load_custom_background(file_content)
-
-            # Update status
-            self.widgets[
-                "bg_custom_status"
-            ].value = f"✅ Loaded: {file_name} ({len(background)} points)"
-
-            # Enable apply button
-            self.widgets["bg_apply_btn"].disabled = False
-
-            debug_print(f"Custom background uploaded: {file_name}", "APP")
-
-        except Exception as e:
-            self.widgets["bg_custom_status"].value = f"❌ Error: {str(e)}"
-            debug_print(f"Error loading custom background: {e}", "APP")
-
-    def on_fit_current(self, button):
-        """Fit current spectrum"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        try:
-            debug_print("Fitting current spectrum", "APP")
-
-            # Check if we have any peak models
-            if len(self.peak_models) == 0:
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print("❌ No peak models defined. Add at least one peak model first.")
-                return
-
-            # Prepare fitting parameters
-            fit_params = self.prepare_fit_parameters()
-            debug_print(f"Fit params: {fit_params}", "APP")
-
-            self.fitting_engine.create_fit_parameters(**fit_params)
-
-            # Get wavelength range from slider
-            wl_range = self.widgets["wavelength_range_slider"].value
-            wavelengths = self.data_manager.wavelengths
-            spectrum = self.data_manager.get_current_spectrum()
-
-            # Check if range is limited (not the full range)
-            wl_min = float(wavelengths.min())
-            wl_max = float(wavelengths.max())
-            is_limited = (wl_range[0] > wl_min) or (wl_range[1] < wl_max)
-
-            if is_limited:
-                # Fit only in the selected range
-                mask = (wavelengths >= wl_range[0]) & (wavelengths <= wl_range[1])
-                wavelengths_fit = wavelengths[mask]
-                spectrum_fit = spectrum[mask]
-
-                debug_print(
-                    f"Fitting limited range: {wl_range[0]:.1f} - {wl_range[1]:.1f} {self.wavelength_unit}",
-                    "APP",
-                )
-                debug_print(
-                    f"Full data points: {len(wavelengths)}, Fit data points: {len(wavelengths_fit)}",
-                    "APP",
-                )
-                debug_print(
-                    f"Wavelength fit range: {wavelengths_fit.min():.2f} - {wavelengths_fit.max():.2f}",
-                    "APP",
-                )
-            else:
-                wavelengths_fit = wavelengths
-                spectrum_fit = spectrum
-                debug_print("Fitting full wavelength range", "APP")
-                debug_print(f"Data points: {len(wavelengths)}", "APP")
-
-            # Perform fitting
-            result = self.fitting_engine.fit_current_spectrum(wavelengths_fit, spectrum_fit)
-
-            debug_print(f"Fit result: success={result.success}, rsquared={result.rsquared}", "APP")
-
-            # Store for parameter update
-            self.last_fit_result = result
-
-            # Update R-squared display
-            self.widgets["r_squared_display"].value = f"<b>R²:</b> {result.rsquared:.4f}"
-
-            # Enable update parameters button (the start values are only updated below when
-            # the fit is good, otherwise by this button)
-            self.widgets["update_params_btn"].disabled = False
-
-            # The plotter uses result.fit_x as x-axis for all fit traces, so no
-            # padding is needed. For a limited wavelength range the fit was already
-            # run on the masked subset, so fit_x is already the correct shorter array.
-            debug_print(
-                f"Fit x-axis: {len(result.fit_x)} points out of {len(wavelengths)} wavelengths",
-                "APP",
-            )
-
-            # Update spectrum plot with fit
-            with self.widgets["spectrum_output"]:
-                self.widgets["spectrum_output"].clear_output()
-
-                # Pass wavelength range if limited
-                wl_range_display = wl_range if is_limited else None
-
-                peak_name_map = {
-                    f"p{i}": pm._widgets["name"].value for i, pm in enumerate(self.peak_models)
-                }
-                fig = self.plot_manager.create_spectrum_plot(
-                    self.data_manager.wavelengths,
-                    self.data_manager.get_current_spectrum(),
-                    fit_result=result,
-                    wavelength_range=wl_range_display,
-                    wavelength_unit=self.wavelength_unit,
-                    name_map=peak_name_map,
-                )
-
-                display(fig)
-
-            # Automatically update parameters from successful fit
-            if result.rsquared > 0.5:  # Only auto-update if fit is decent
-                self.on_update_parameters(None)
-                auto_updated = True
-            else:
-                auto_updated = False
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"✅ Fit completed. R² = {result.rsquared:.4f}")
-                if is_limited:
-                    print(f"   Range: {wl_range[0]:.1f} - {wl_range[1]:.1f} {self.wavelength_unit}")
-                if auto_updated:
-                    print("✅ Parameters automatically updated for batch fitting")
-                else:
-                    print("⚠️ Low R² - click 'Update from Fit' manually if needed")
-
-            debug_print(
-                f"Fit complete: R²={result.rsquared:.4f}, auto-updated={auto_updated}", "APP"
-            )
-
-        except Exception as e:
-            import traceback
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error fitting spectrum: {str(e)}")
-                print("\n🔍 Full traceback:")
-                print(traceback.format_exc())
-            debug_print(f"Error in fitting: {e}", "APP")
-
-    def on_update_parameters(self, button):
-        """Update model parameters with fitted values"""
-        try:
-            debug_print("DEBUG: on_update_parameters called")
-            if self.last_fit_result is None:
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    debug_print("❌ No fit result available. Please fit current spectrum first.")
-                return
-
-            debug_print("Updating parameters from fit result", "APP")
-
-            result = self.last_fit_result
-            fitted_params = result.params
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("🔄 Updating model parameters with fitted values...")
-
-            # Update ALL model parameters in UI
-            updated_count = 0
-            for i, model in enumerate(self.peak_models):
-                model_type = model._widgets["type"].value
-                prefix = f"p{i}_"
-
-                if model_type in [
-                    "Gaussian",
-                    "Voigt",
-                    "Lorentzian",
-                    "Skewed Gaussian",
-                    "Skewed Voigt",
-                ]:
-                    # Update center
-                    center_param = f"{prefix}center"
-                    if center_param in fitted_params:
-                        model._widgets["center"].value = round(fitted_params[center_param].value, 3)
-                        print(f"  Model {i + 1} center: {fitted_params[center_param].value:.3f}")
-                        updated_count += 1
-
-                    # Update sigma
-                    sigma_param = f"{prefix}sigma"
-                    if sigma_param in fitted_params:
-                        model._widgets["sigma"].value = round(fitted_params[sigma_param].value, 3)
-                        print(f"  Model {i + 1} sigma: {fitted_params[sigma_param].value:.3f}")
-                        updated_count += 1
-
-                    # Update gamma for models that have it
-                    if model_type in ["Voigt", "Skewed Gaussian", "Skewed Voigt"]:
-                        gamma_param = f"{prefix}gamma"
-                        if gamma_param in fitted_params:
-                            model._widgets["gamma"].value = round(
-                                fitted_params[gamma_param].value, 3
-                            )
-                            print(f"  Model {i + 1} gamma: {fitted_params[gamma_param].value:.3f}")
-                            updated_count += 1
-
-                    # Update height: a fitted parameter for every peak type (see
-                    # FittingModels._set_height), so no conversion from the area
-                    height_param = f"{prefix}height"
-                    if height_param in fitted_params:
-                        height = fitted_params[height_param].value
-                        model._widgets["height"].value = round(height, 3)
-                        print(f"  Model {i + 1} height: {height:.3f}")
-                        updated_count += 1
-
-                elif model_type == "Linear":
-                    # Update slope and intercept
-                    slope_param = f"{prefix}slope"
-                    intercept_param = f"{prefix}intercept"
-
-                    if slope_param in fitted_params:
-                        model._widgets["slope"].value = round(fitted_params[slope_param].value, 3)
-                        print(f"  Model {i + 1} slope: {fitted_params[slope_param].value:.3f}")
-                        updated_count += 1
-
-                    if intercept_param in fitted_params:
-                        model._widgets["intercept"].value = round(
-                            fitted_params[intercept_param].value, 3
-                        )
-                        print(
-                            f"  Model {i + 1} intercept: {fitted_params[intercept_param].value:.3f}"
-                        )
-                        updated_count += 1
-
-                elif model_type == "Polynomial":
-                    # Update polynomial coefficients
-                    # First, figure out the degree
-                    degree = model._widgets["poly_degree"].value
-
-                    # Extract all coefficients
-                    coeffs = []
-                    for j in range(degree + 1):
-                        coeff_param = f"{prefix}c{j}"
-                        if coeff_param in fitted_params:
-                            coeffs.append(fitted_params[coeff_param].value)
-                        else:
-                            coeffs.append(0.0)  # Fallback
-
-                    # Store them (we'll need to add a way to pass these)
-                    # For now, just print them
-                    print(f"  Model {i + 1} (Polynomial degree {degree}):")
-                    for j, coeff in enumerate(coeffs):
-                        print(f"    c{j}: {coeff:.6f}")
-
-                    # Store coefficients in the model for later use
-                    if not hasattr(model, "_fitted_coeffs"):
-                        model._fitted_coeffs = {}
-                    model._fitted_coeffs = coeffs
-                    updated_count += 1
-
-            with self.widgets["status_output"]:
-                print(f"✅ Updated {updated_count} parameters from fit")
-
-            debug_print(f"Updated {updated_count} parameters from fit", "APP")
-
-        except Exception as e:
-            import traceback
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error updating parameters: {str(e)}")
-                print("\n🔍 Traceback:")
-                traceback.print_exc()
-            debug_print(f"Error updating parameters: {e}", "APP")
-
-    def on_fit_all(self, button):
-        """Fit all spectra using batch processing"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        try:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("Starting batch fitting... This may take a while.")
-
-            debug_print("Starting batch fitting for all spectra", "APP")
-
-            # Show progress bar
-            self.widgets["fit_progress"].layout.visibility = "visible"
-            self.widgets["fit_progress"].value = 0
-            self.widgets["fit_progress"].description = "Fitting..."
-
-            # Prepare fitting parameters
-            fit_params = self.prepare_fit_parameters()
-            self.fitting_engine.create_fit_parameters(**fit_params)
-
-            # Get wavelength range from slider
-            wl_range = self.widgets["wavelength_range_slider"].value
-            wavelengths = self.data_manager.wavelengths
-            wl_min = float(wavelengths.min())
-            wl_max = float(wavelengths.max())
-            is_limited = (wl_range[0] > wl_min) or (wl_range[1] < wl_max)
-
-            # Apply wavelength range mask if limited
-            if is_limited:
-                mask = (wavelengths >= wl_range[0]) & (wavelengths <= wl_range[1])
-                wavelengths_fit = wavelengths[mask]
-                data_matrix_fit = self.data_manager.data_matrix[:, mask]
-                debug_print(
-                    f"Batch fitting with wavelength range: {wl_range[0]:.1f} - {wl_range[1]:.1f} {self.wavelength_unit}",
-                    "APP",
-                )
-                debug_print(
-                    f"Full wavelengths: {len(wavelengths)}, Fit wavelengths: {len(wavelengths_fit)}",
-                    "APP",
-                )
-            else:
-                wavelengths_fit = wavelengths
-                data_matrix_fit = self.data_manager.data_matrix
-                debug_print("Batch fitting full wavelength range", "APP")
-
-            # Perform batch fitting
-            fit_sequential = self.widgets["fit_sequential_checkbox"].value
-            results = self.fitting_engine.fit_all_spectra(
-                wavelengths_fit,
-                data_matrix_fit,
-                self.data_manager.timestamps,
-                use_smart_init=fit_sequential,
-            )
-
-            # Count successful fits
-            successful = sum(1 for r in results.values() if r and r.get("success", False))
-
-            # Store results for export
-            self.fitting_engine.fitting_results = results
-
-            # Enable export button
-            self.widgets["export_btn"].disabled = False
-
-            # Create time series visualizations with explicit clear
-            with self.widgets["time_series_output"]:
-                self.widgets["time_series_output"].clear_output(wait=True)
-
-            self.create_time_series_plots()
-            self.refresh_fit_vis()
-
-            debug_print("Time series plots refreshed", "APP")
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("✅ Batch fitting completed!")
-                print(f"📊 Fitted {successful}/{len(results)} spectra successfully.")
-
-            # Update progress bar to complete
-            self.widgets["fit_progress"].value = 100
-            self.widgets["fit_progress"].description = "Complete!"
-            self.widgets["fit_progress"].bar_style = "success"
-
-            debug_print(f"Batch fitting complete: {successful}/{len(results)} successful", "APP")
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error in batch fitting: {str(e)}")
-            debug_print(f"Error in batch fitting: {e}", "APP")
-
-    def on_fit_range(self, button):
-        """Fit spectra in selected range"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        try:
-            start_idx = self.widgets["fit_start_idx"].value
-            end_idx = self.widgets["fit_end_idx"].value
-
-            if start_idx >= end_idx:
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print("❌ Start index must be less than end index")
-                return
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"Starting range fitting ({start_idx} to {end_idx})...")
-
-            debug_print(f"Starting range fitting: {start_idx} to {end_idx}", "APP")
-
-            # Show progress bar
-            self.widgets["fit_progress"].layout.visibility = "visible"
-            self.widgets["fit_progress"].value = 0
-            self.widgets["fit_progress"].description = "Fitting..."
-
-            # Prepare fitting parameters
-            fit_params = self.prepare_fit_parameters()
-            self.fitting_engine.create_fit_parameters(**fit_params)
-
-            # Get wavelength range from slider
-            wl_range = self.widgets["wavelength_range_slider"].value
-            wavelengths = self.data_manager.wavelengths
-            wl_min = float(wavelengths.min())
-            wl_max = float(wavelengths.max())
-            is_limited = (wl_range[0] > wl_min) or (wl_range[1] < wl_max)
-
-            # Apply wavelength range mask if limited
-            if is_limited:
-                mask = (wavelengths >= wl_range[0]) & (wavelengths <= wl_range[1])
-                wavelengths_fit = wavelengths[mask]
-                data_matrix_fit = self.data_manager.data_matrix[:, mask]
-                debug_print(
-                    f"Range fitting with wavelength range: {wl_range[0]:.1f} - {wl_range[1]:.1f} {self.wavelength_unit}",
-                    "APP",
-                )
-                debug_print(
-                    f"Full wavelengths: {len(wavelengths)}, Fit wavelengths: {len(wavelengths_fit)}",
-                    "APP",
-                )
-            else:
-                wavelengths_fit = wavelengths
-                data_matrix_fit = self.data_manager.data_matrix
-                debug_print("Range fitting full wavelength range", "APP")
-
-            # Perform batch fitting on range with progress callback
-            fit_sequential = self.widgets["fit_sequential_checkbox"].value
-            results = self.fitting_engine.fit_all_spectra(
-                wavelengths_fit,
-                data_matrix_fit,
-                self.data_manager.timestamps,
-                fit_range=(start_idx, end_idx),
-                use_smart_init=fit_sequential,
-            )
-
-            # Count successful fits
-            successful = sum(1 for r in results.values() if r and r.get("success", False))
-
-            # Enable export button
-            self.widgets["export_btn"].disabled = False
-
-            # Create time series visualizations with explicit clear
-            with self.widgets["time_series_output"]:
-                self.widgets["time_series_output"].clear_output(wait=True)
-
-            self.create_time_series_plots()
-            self.refresh_fit_vis()
-
-            debug_print("Time series plots refreshed", "APP")
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("✅ Range fitting completed!")
-                print(f"📊 Fitted {successful}/{len(results)} spectra successfully.")
-
-            # Update progress bar to complete
-            self.widgets["fit_progress"].value = 100
-            self.widgets["fit_progress"].description = "Complete!"
-            self.widgets["fit_progress"].bar_style = "success"
-
-            debug_print(f"Range fitting complete: {successful}/{len(results)} successful", "APP")
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error in range fitting: {str(e)}")
-            debug_print(f"Error in range fitting: {e}", "APP")
-
-    # =========================================================================
-    # EXPORT
-    # =========================================================================
-
-    def on_export_results(self, button):
-        """Export fitting results"""
-        if not self.fitting_engine.has_fitting_results():
-            with self.widgets["export_output"]:
-                self.widgets["export_output"].clear_output()
-                print("❌ No fitting results to export. Please fit spectra first.")
-            return
-
-        try:
-            debug_print("Exporting results", "APP")
-
-            import base64
-            from datetime import datetime
-
-            from IPython.display import HTML, display
-
-            # Create filename
-            filename = f"pl_fitting_results_{datetime.now().strftime(config.TIMESTAMP_FORMAT)}.xlsx"
-
-            # Export to Excel in memory
-            import io
-
-            excel_buffer = io.BytesIO()
-
-            # Use export_utils to create Excel file
-            self.export_utils.export_to_excel(
-                self.fitting_engine.fitting_results,
-                self.data_manager.timestamps,
-                filename=excel_buffer,  # Write to buffer instead of file
-            )
-
-            # Get the buffer content
-            excel_buffer.seek(0)
-            excel_data = excel_buffer.read()
-
-            # Encode to base64
-            b64 = base64.b64encode(excel_data).decode()
-
-            # Create download link with JavaScript
-            js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}';
-            link.download = '{filename}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.widgets["export_output"]:
-                self.widgets["export_output"].clear_output()
-                print("✅ Results prepared for download!")
-                print(f"📊 File: {filename}")
-                print()
-
-                # Display download button
-                download_button_html = f"""
-                <button onclick="{js_code}" style="
-                    background-color: #28a745;
-                    color: white;
-                    padding: 10px 20px;
-                    border: none;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    font-size: 14px;
-                    font-weight: bold;
-                ">
-                    📥 Download {filename}
-                </button>
-                """
-
-                display(HTML(download_button_html))
-                print()
-                print(
-                    "💡 Click the button above to download. If it doesn't work automatically, the download should start shortly."
-                )
-
-            debug_print(f"Results prepared for download: {filename}", "APP")
-
-        except Exception as e:
-            import traceback
-
-            with self.widgets["export_output"]:
-                self.widgets["export_output"].clear_output()
-                print(f"❌ Error exporting results: {str(e)}")
-                print("\n🔍 Full traceback:")
-                print(traceback.format_exc())
-            debug_print(f"Error exporting: {e}", "APP")
-
-    # =========================================================================
-    # VISUALIZATION
-    # =========================================================================
-
-    def on_save_into_h5(self, button):
-        debug_print("Save into H5 triggered", "SAVE_H5")
-
-        has_results = self.fitting_engine.has_fitting_results()
-        debug_print(f"has_fitting_results: {has_results}", "SAVE_H5")
-        if not has_results:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("❌ No fitting results to export. Please fit spectra first.")
-            return
-
-        if self.data_manager.data_source != "h5":
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(
-                    "❌ Only data loaded from an h5 file can be saved into it (not a CSV upload)."
-                )
-            return
-
-        h5_path = self.data_manager.h5_path
-        time_unit = self.data_manager.time_unit
-        h5_mode = self.data_manager.h5_mode
-        debug_print(f"h5_path: {h5_path}", "SAVE_H5")
-        debug_print(f"time_unit: {time_unit}", "SAVE_H5")
-        debug_print(f"h5_mode: {h5_mode}", "SAVE_H5")
-        debug_print(f"wavelength_unit: {self.wavelength_unit}", "SAVE_H5")
-        debug_print(
-            f"fitting_results keys: {list(self.fitting_engine.fitting_results.keys())[:5]}",
-            "SAVE_H5",
-        )
-
-        try:
-            self.export_utils.export_to_isa_h5(
-                self.fitting_engine.fitting_results,
-                h5_path,
-                time_unit=time_unit,
-                h5_mode=h5_mode,
-                wavelength_unit=self.wavelength_unit,
-                fit_settings=self.fitting_engine.batch_settings,
-            )
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("✅ Fitting results saved to H5 file.")
-        except OSError as e:
-            if "lock" in str(e).lower() or "unable to open" in str(e).lower():
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print(
-                        "⚠️ Could not save: the H5 file is currently open in another program. Please close it and try again."
-                    )
-            else:
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print(f"❌ OSError saving to H5: {e}")
-            debug_print(f"OSError saving to H5: {e}", "SAVE_H5")
-        except Exception as e:
-            import traceback
-
-            tb = traceback.format_exc()
-            debug_print(f"Unexpected error saving to H5: {e}\n{tb}", "SAVE_H5")
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Unexpected error saving to H5: {type(e).__name__}: {e}")
-                print(tb)
-
     def update_visualizations(self, update_heatmap: bool = False):
         """Update both heatmap and spectrum visualizations
         Parameters
@@ -2244,7 +1395,9 @@ class PLAnalysisApp:
 
         # Update time display
         current_time = self.data_manager.get_current_time_value()
-        self.widgets["time_display"].value = f"Time: {current_time:.3f}s"
+        self.widgets[
+            "time_display"
+        ].value = f"Time: {current_time:.3f} {self.data_manager.time_unit}"
 
         # Update heatmap
         self.update_heatmap(update_heatmap=update_heatmap)
@@ -2311,6 +1464,7 @@ class PLAnalysisApp:
                 wavelength_range=wl_range_display,
                 wavelength_unit=self.wavelength_unit,
                 name_map=peak_name_map,
+                background_model=self.background_model,
             )
 
             # Apply current wavelength range visualization BEFORE displaying
@@ -2429,384 +1583,6 @@ class PLAnalysisApp:
     # UTILITY METHODS
     # =========================================================================
 
-    def on_background_method_change(self, change):
-        """Handle background method selection change"""
-        method = change["new"]
-        debug_print(f"Background method changed to: {method}", "APP")
-
-        # Get data loaded state
-        data_loaded = self.data_manager.is_data_loaded()
-
-        # Hide all containers first
-        if hasattr(self.gui_layouts, "_bg_containers"):
-            for container in self.gui_layouts._bg_containers.values():
-                container.layout.visibility = "hidden"
-                container.layout.display = "none"
-
-        # If None is selected, disable all buttons and return
-        if method == "None":
-            self.widgets["bg_apply_btn"].disabled = True
-            self.widgets["bg_autofit_btn"].disabled = True
-            self.widgets["bg_autofit_btn"].layout.visibility = "hidden"
-            return
-
-        # Show and enable the selected method's container
-        if (
-            hasattr(self.gui_layouts, "_bg_containers")
-            and method in self.gui_layouts._bg_containers
-        ):
-            self.gui_layouts._bg_containers[method].layout.visibility = "visible"
-            self.gui_layouts._bg_containers[method].layout.display = "flex"
-
-            # Enable widgets for the selected method
-            if method == "Manual" and data_loaded:
-                self.widgets["bg_manual_start"].disabled = False
-                self.widgets["bg_manual_num"].disabled = False
-            elif method == "Linear" and data_loaded:
-                self.widgets["bg_linear_slope"].disabled = False
-                self.widgets["bg_linear_intercept"].disabled = False
-            elif method == "Polynomial" and data_loaded:
-                self.widgets["bg_poly_degree"].disabled = False
-                self.widgets["bg_poly_coeffs"].disabled = False
-            elif method == "Exponential" and data_loaded:
-                self.widgets["bg_exp_amplitude"].disabled = False
-                self.widgets["bg_exp_decay"].disabled = False
-                self.widgets["bg_exp_offset"].disabled = False
-            elif method == "Custom" and data_loaded:
-                self.widgets["bg_custom_upload"].disabled = False
-
-        # Enable/disable action buttons
-        can_apply = data_loaded
-        self.widgets["bg_apply_btn"].disabled = not can_apply
-
-        # Auto-fit button only for model-based methods
-        if method in ["Linear", "Polynomial", "Exponential"]:
-            self.widgets["bg_autofit_btn"].disabled = not data_loaded
-            self.widgets["bg_autofit_btn"].layout.visibility = "visible"
-        else:
-            self.widgets["bg_autofit_btn"].disabled = True
-            self.widgets["bg_autofit_btn"].layout.visibility = "hidden"
-
-    def on_background_autofit(self, button):
-        """Auto-fit background model to current spectrum"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        method = self.widgets["background_method"].value
-        current_spectrum = self.data_manager.get_current_spectrum()
-        wavelengths = self.data_manager.wavelengths
-
-        try:
-            debug_print(f"Auto-fitting background: {method}", "APP")
-
-            if method == "Linear":
-                # Fit linear: y = slope * x + intercept
-                coeffs = np.polyfit(wavelengths, current_spectrum, 1)
-                self.widgets["bg_linear_slope"].value = float(coeffs[0])
-                self.widgets["bg_linear_intercept"].value = float(coeffs[1])
-                self.background_model = coeffs[0] * wavelengths + coeffs[1]
-                debug_print(
-                    f"Background model set (Linear): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
-                    "APP",
-                )
-
-            elif method == "Polynomial":
-                degree = self.widgets["bg_poly_degree"].value
-                coeffs = np.polyfit(wavelengths, current_spectrum, degree)
-                self.widgets["bg_poly_coeffs"].value = ", ".join([f"{c:.2e}" for c in coeffs])
-                self.background_model = np.polyval(coeffs, wavelengths)
-                debug_print(
-                    f"Background model set (Polynomial): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
-                    "APP",
-                )
-
-            elif method == "Exponential":
-                # Fit exponential: y = amplitude * exp(-decay * x) + offset
-                from scipy.optimize import curve_fit
-
-                def exp_func(x, amplitude, decay, offset):
-                    return amplitude * np.exp(-decay * x) + offset
-
-                # Initial guess
-                p0 = [current_spectrum.max(), 0.001, current_spectrum.min()]
-                popt, _ = curve_fit(exp_func, wavelengths, current_spectrum, p0=p0, maxfev=5000)
-
-                self.widgets["bg_exp_amplitude"].value = float(popt[0])
-                self.widgets["bg_exp_decay"].value = float(popt[1])
-                self.widgets["bg_exp_offset"].value = float(popt[2])
-                self.background_model = exp_func(wavelengths, *popt)
-                debug_print(
-                    f"Background model set (Exponential): shape={self.background_model.shape}, min={self.background_model.min():.2f}, max={self.background_model.max():.2f}",
-                    "APP",
-                )
-
-            # Update spectrum plot to show background
-            self.update_spectrum_with_background()
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"✅ {method} background auto-fitted")
-                print("   Adjust parameters if needed, then click 'Apply Background'")
-
-            debug_print(f"Background auto-fit complete: {method}", "APP")
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error auto-fitting background: {str(e)}")
-            debug_print(f"Error in background autofit: {e}", "APP")
-
-    def on_background_apply(self, button):
-        """Apply background removal to data"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        method = self.widgets["background_method"].value
-
-        if method == "None":
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("⚠️ Select a background method first")
-            return
-
-        try:
-            debug_print(f"Applying background: {method}", "APP")
-
-            # Store original if not already stored
-            if self.original_data_matrix is None:
-                self.original_data_matrix = self.data_manager.data_matrix.copy()
-
-            wavelengths = self.data_manager.wavelengths
-
-            if method == "Manual":
-                start_idx = self.widgets["bg_manual_start"].value
-                num_curves = self.widgets["bg_manual_num"].value
-                end_idx = min(start_idx + num_curves, len(self.data_manager.timestamps))
-
-                # Calculate average background
-                background = np.nanmean(self.original_data_matrix[start_idx:end_idx, :], axis=0)
-
-            elif method == "Linear":
-                slope = self.widgets["bg_linear_slope"].value
-                intercept = self.widgets["bg_linear_intercept"].value
-                background = slope * wavelengths + intercept
-
-            elif method == "Polynomial":
-                coeffs_str = self.widgets["bg_poly_coeffs"].value
-                coeffs = [float(c.strip()) for c in coeffs_str.split(",")]
-                background = np.polyval(coeffs, wavelengths)
-
-            elif method == "Exponential":
-                amplitude = self.widgets["bg_exp_amplitude"].value
-                decay = self.widgets["bg_exp_decay"].value
-                offset = self.widgets["bg_exp_offset"].value
-                background = amplitude * np.exp(-decay * wavelengths) + offset
-
-            elif method == "Custom":
-                # Check if file was uploaded
-                uploaded_files = self.widgets["bg_custom_upload"].value
-                if not uploaded_files or len(uploaded_files) == 0:
-                    with self.widgets["status_output"]:
-                        self.widgets["status_output"].clear_output()
-                        print("❌ Please upload a background file first")
-                    return
-
-                # Get the uploaded file - value is a tuple
-                file_upload = uploaded_files[0]
-                background = self.load_custom_background(file_upload["content"])
-
-            # Apply background subtraction
-            self.data_manager.data_matrix = self.original_data_matrix - background
-            self.data_manager.current_spectrum = self.data_manager.data_matrix[
-                self.data_manager.current_time_idx, :
-            ]
-
-            self.background_applied = True
-            self.background_model = background
-
-            # Enable remove button
-            self.widgets["bg_remove_btn"].disabled = False
-
-            # Update visualizations
-            self.plot_manager.heatmap_fig = None
-            self.update_visualizations()
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"✅ {method} background applied to all data")
-
-                # Close the background handling accordion
-                if self.background_accordion is not None:
-                    self.background_accordion.selected_index = None
-                    debug_print("Closed background handling accordion", "APP")
-
-            # Close the background handling accordion
-            try:
-                # Find the background accordion widget
-                for widget in self.gui_layouts.create_fitting_control_section().children:
-                    if hasattr(widget, "set_title") and hasattr(widget, "selected_index"):
-                        # Check if this is the background handling accordion
-                        if widget.get_title(0) == "🎨 Background Handling":
-                            widget.selected_index = None
-                            debug_print("Closed background handling accordion", "APP")
-                            break
-            except Exception as e:
-                debug_print(f"Could not close accordion: {e}", "APP")
-
-            debug_print(f"Background applied: {method}", "APP")
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error applying background: {str(e)}")
-            debug_print(f"Error applying background: {e}", "APP")
-
-    def on_background_remove(self, button):
-        """Remove applied background and restore original data"""
-        if self.original_data_matrix is None:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("⚠️ No background to remove")
-            return
-
-        try:
-            debug_print("Removing background", "APP")
-
-            # Restore original data
-            self.data_manager.data_matrix = self.original_data_matrix.copy()
-            self.data_manager.current_spectrum = self.data_manager.data_matrix[
-                self.data_manager.current_time_idx, :
-            ]
-
-            self.background_applied = False
-            self.background_model = None
-
-            # Disable remove button
-            self.widgets["bg_remove_btn"].disabled = True
-
-            # Update visualizations
-            self.plot_manager.heatmap_fig = None
-            self.update_visualizations()
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print("✅ Background removed - original data restored")
-
-            debug_print("Background removed", "APP")
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error removing background: {str(e)}")
-            debug_print(f"Error removing background: {e}", "APP")
-
-    def update_spectrum_with_background(self):
-        """Update spectrum plot showing the fitted background"""
-        with self.widgets["spectrum_output"]:
-            self.widgets["spectrum_output"].clear_output()
-
-            import plotly.graph_objects as go
-
-            fig = go.Figure()
-
-            # Current spectrum
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data_manager.wavelengths,
-                    y=self.data_manager.get_current_spectrum(),
-                    mode="lines",
-                    name="Spectrum",
-                    line=dict(color="blue", width=2),
-                )
-            )
-
-            # Background model
-            if self.background_model is not None:
-                fig.add_trace(
-                    go.Scatter(
-                        x=self.data_manager.wavelengths,
-                        y=self.background_model,
-                        mode="lines",
-                        name="Background Model",
-                        line=dict(color="red", width=2, dash="dash"),
-                    )
-                )
-
-            fig.update_layout(
-                title="Spectrum with Background Model",
-                xaxis_title="Wavelength (nm)",
-                yaxis_title="Intensity",
-                height=500,
-                template="plotly_white",
-            )
-
-            fig.show(renderer=config.PLOT_RENDERER)
-
-    def on_subtract_background(self, button):
-        """Apply or remove manual background subtraction"""
-        if not self.data_manager.is_data_loaded():
-            return
-
-        try:
-            start_idx = self.widgets["background_time_start"].value
-            num_curves = self.widgets["background_num_curves"].value
-
-            # Ensure we don't go beyond the data
-            end_idx = min(start_idx + num_curves, len(self.data_manager.timestamps))
-
-            if start_idx >= len(self.data_manager.timestamps):
-                with self.widgets["status_output"]:
-                    self.widgets["status_output"].clear_output()
-                    print("❌ Start time index is beyond the data range")
-                return
-
-            # Calculate background (average of selected time range)
-            background_spectra = self.data_manager.data_matrix[start_idx:end_idx, :]
-            background_average = np.nanmean(background_spectra, axis=0)
-
-            # Store original data if not already stored
-            if self.original_data_matrix is None:
-                self.original_data_matrix = self.data_manager.data_matrix.copy()
-
-            # Apply or remove background subtraction
-            if self.widgets["background_subtract_checkbox"].value:
-                self.data_manager.data_matrix = self.original_data_matrix - background_average
-            else:
-                self.data_manager.data_matrix = self.original_data_matrix.copy()
-
-            # Update current spectrum
-            self.data_manager.current_spectrum = self.data_manager.data_matrix[
-                self.data_manager.current_time_idx, :
-            ]
-
-            # Force heatmap recreation since data changed
-            self.plot_manager.heatmap_fig = None
-
-            # Update visualizations
-            self.update_visualizations()
-
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                if self.widgets["background_subtract_checkbox"].value:
-                    time_start = self.data_manager.timestamps[start_idx]
-                    time_end = self.data_manager.timestamps[end_idx - 1]
-                    print("✅ Manual background subtracted from data")
-                    print(f"   Region: {time_start:.3f}s - {time_end:.3f}s ({num_curves} curves)")
-                    print("   💡 Tip: You can still use model-based background during fitting")
-                else:
-                    print("✅ Manual background removed - original data restored")
-
-            debug_print(
-                f"Background subtraction applied: {self.widgets['background_subtract_checkbox'].value}",
-                "APP",
-            )
-
-        except Exception as e:
-            with self.widgets["status_output"]:
-                self.widgets["status_output"].clear_output()
-                print(f"❌ Error in background subtraction: {str(e)}")
-            debug_print(f"Error in background subtraction: {e}", "APP")
-
     # =========================================================================
     # DISPLAY
     # =========================================================================
@@ -2821,7 +1597,7 @@ class PLAnalysisApp:
         self._store_accordion_reference()
 
         if config.DEBUG_MODE:
-            display(debug_output)
+            display(get_debug_output())
         display(header)
         display(manual_panel(__file__))
         display(main_content)

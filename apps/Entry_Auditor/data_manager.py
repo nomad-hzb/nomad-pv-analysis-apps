@@ -22,7 +22,11 @@ import yaml
 from pydantic import BaseModel
 
 from hysprint_utils.api_calls import get_sample_entry_links
-from hysprint_utils.consistency import get_string_columns, summarize_field_values
+from hysprint_utils.consistency import (
+    DEFAULT_EXCLUDE_COLUMNS,
+    get_string_columns,
+    summarize_field_values,
+)
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -91,6 +95,13 @@ _NOISE_COLUMN_PATTERNS = (
     # own header/tooltip; for a many-sample entry it also explodes into dozens of
     # columns that are blank for every other (normal, single-sample) entry.
     re.compile(r"^(samples|entities)(\.\d+)?\."),
+    # Plotly figures stored on the entry (NOMAD PlotSection "figures", e.g. the JV
+    # history plots of a Sample or Batch) and a Sample's per-scan "jv_history_*" lists.
+    # The plugin recomputes both from the JV measurements on every processing, so a
+    # correction would not stick; and every plot point is a column of its own (over
+    # 10,000 for one batch), which stalled the results view (issue #167).
+    re.compile(r"(^|\.)figures\."),
+    re.compile(r"^jv_history_"),
 )
 
 
@@ -155,66 +166,30 @@ def get_sample_links_chunked(
     return result
 
 
-def get_entry_links(url: str, token: str, sample_ids: list[str], entry_type: str) -> dict[str, str]:
-    """{sample_id: gui_url} for entries of entry_type, mapped back to sample_ids via
-    the entry's own 'samples' field."""
-    if not sample_ids:
-        return {}
-    headers = {"Authorization": f"Bearer {token}"}
-    base_url = url.split("/api/")[0]
-
-    response = requests.post(
-        f"{url}/entries/query",
-        headers=headers,
-        json={
-            "required": {"include": ["entry_id"]},
-            "owner": "visible",
-            "query": {"results.eln.lab_ids:any": sample_ids},
-            "pagination": {"page_size": 10000},
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    sample_entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
-    if not sample_entry_ids:
-        return {}
-
-    response = requests.post(
-        f"{url}/entries/archive/query",
-        headers=headers,
-        json={
-            "required": {"data": {"samples": "*"}, "metadata": "*"},
-            "owner": "visible",
-            "query": {
-                "entry_references.target_entry_id:any": sample_entry_ids,
-                "entry_type": entry_type,
-            },
-            "pagination": {"page_size": 10000},
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-
-    result: dict[str, str] = {}
-    for entry in response.json()["data"]:
-        meta = entry.get("archive", {}).get("metadata", {})
-        data = entry.get("archive", {}).get("data", {})
-        entry_id = meta.get("entry_id", "")
-        upload_id = meta.get("upload_id", "")
-        gui_url = f"{base_url}/gui/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}"
-        samples = data.get("samples", [])
-        if samples:
-            lab_id = samples[0].get("lab_id", "")
-            if lab_id in sample_ids:
-                result[lab_id] = gui_url
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Generic entry loading (flatten arbitrary archive data into audit-table columns)
 # ---------------------------------------------------------------------------
 
 _REF_PATTERN = re.compile(r"archive/([A-Za-z0-9_\-]+)(?:#|$)")
+
+
+def _is_number(value: Any) -> bool:
+    """int/float leaf (a bool is a flag, not a value to audit)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _number_from_text(text: str, like: Any) -> int | float | None:
+    """`text` as a number of the same kind as `like` (an int stays an int when it can),
+    or None when it is not a number."""
+    try:
+        if isinstance(like, int):
+            return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
@@ -237,6 +212,8 @@ def _flatten(obj: Any, prefix: str, out: dict[str, str]) -> None:
                 _flatten(item, f"{prefix}.{index}", out)
     elif isinstance(obj, str) and obj.strip():
         out[prefix] = obj
+    elif _is_number(obj):
+        out[prefix] = str(obj)
 
 
 def _extract_ref_ids(obj: Any, ref_ids: set[str]) -> None:
@@ -542,8 +519,9 @@ def _dump_archive_text(data: Any, mainfile: str, original_text: str) -> str:
 def _set_at_flat_path(
     obj: Any, parts: list[str], old_value: str, new_value: str
 ) -> tuple[Any, int]:
-    """Replace the string at the flattened path `parts` when it equals old_value; returns
-    (obj, n_changed) with n_changed 0 or 1. Mirrors _flatten: a single-item list is
+    """Replace the string (a number is written back as a number) at the flattened path
+    `parts` when it equals old_value; returns (obj, n_changed) with n_changed 0 or 1.
+    Mirrors _flatten: a single-item list is
     transparent (consumes no path part), a longer list consumes its 1-based index."""
     if isinstance(obj, list):
         if len(obj) == 1:
@@ -564,6 +542,9 @@ def _set_at_flat_path(
         return obj, 0
     if isinstance(obj, str) and not parts and obj == old_value:
         return new_value, 1
+    if _is_number(obj) and not parts and str(obj) == old_value:
+        number = _number_from_text(new_value, obj)
+        return (obj, 0) if number is None else (number, 1)
     return obj, 0
 
 
@@ -1039,7 +1020,7 @@ class EntryAuditSession:
                 continue
             if df is not None and not df.empty:
                 self.datasets[label] = df
-                auditable = len(get_string_columns(df))
+                auditable = len(self.auditable_columns(label))
                 messages[label] = f"Loaded {len(df)} entries, {auditable} auditable field(s)"
             else:
                 messages[label] = "No entries"
@@ -1073,18 +1054,22 @@ class EntryAuditSession:
         df = self.datasets.get(label)
         if df is None:
             return []
-        columns = get_string_columns(df)
-        return [
+        # Drop the noise columns before get_string_columns, not after: its per-column
+        # checks are the slow part when an entry carries thousands of plot-point columns.
+        noise = {
             column
-            for column in columns
-            if not any(pattern.search(column) for pattern in _NOISE_COLUMN_PATTERNS)
-        ]
+            for column in df.columns
+            if any(pattern.search(column) for pattern in _NOISE_COLUMN_PATTERNS)
+        }
+        return get_string_columns(df, exclude_columns=DEFAULT_EXCLUDE_COLUMNS | noise)
 
     def field_summary(self, label: str, column: str) -> list[dict]:
         df = self.datasets.get(label)
         if df is None:
             return []
-        return summarize_field_values(df, column)
+        # Only this column: summarize_field_values copies the frame it gets once per value,
+        # which takes seconds per field when an entry carries thousands of plot columns.
+        return summarize_field_values(df[[column]], column)
 
     def field_overview(self, label: str) -> list[dict]:
         """One entry per auditable column, for the always-visible summary table:

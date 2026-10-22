@@ -65,10 +65,40 @@ def test_flatten_list_of_dicts_keeps_shared_prefix():
     assert out == {"layer.layer_type": "ETL"}
 
 
-def test_flatten_skips_blank_and_non_string_leaves():
+def test_flatten_skips_blank_none_and_bool_leaves_but_keeps_numbers():
     out: dict = {}
-    dm._flatten({"a": "", "b": None, "c": 5, "d": "kept"}, "", out)
-    assert out == {"d": "kept"}
+    dm._flatten({"a": "", "b": None, "c": 5, "d": "kept", "e": 1.42, "f": True}, "", out)
+    assert out == {"c": "5", "d": "kept", "e": "1.42"}
+
+
+def test_flatten_keeps_a_varying_solute_concentration():
+    out: dict = {}
+    data = {"solution": [{"solution_details": {"solute": [{"concentration_mol": 1.42}]}}]}
+    dm._flatten(data, "", out)
+    assert out == {"solution.solution_details.solute.concentration_mol": "1.42"}
+
+
+def test_modify_file_field_writes_a_number_back_as_a_number():
+    file_text = '{"data": {"solute": [{"concentration_mol": 1.42}, {"concentration_mol": 2}]}}'
+    modified, count = dm.modify_file_field(
+        file_text, "entry.archive.json", "solute.1.concentration_mol", "1.42", "1.5"
+    )
+    assert count == 1
+    assert '"concentration_mol": 1.5' in modified
+    assert '"1.5"' not in modified
+    # an integer stays an integer when the new value is one
+    modified, count = dm.modify_file_field(
+        file_text, "entry.archive.json", "solute.2.concentration_mol", "2", "3"
+    )
+    assert count == 1
+    assert '"concentration_mol": 3}' in modified
+
+
+def test_modify_file_field_refuses_text_for_a_number():
+    file_text = '{"data": {"conc": 1.42}}'
+    modified, count = dm.modify_file_field(file_text, "e.archive.json", "conc", "1.42", "abc")
+    assert count == 0
+    assert modified == file_text
 
 
 def test_flatten_multi_item_list_numbers_each_item_instead_of_overwriting():
@@ -267,6 +297,51 @@ def test_field_overview_matches_auditable_columns(fresh_session):
     fresh_session.load_offline(FIXTURE_PATH)
     overview_columns = {entry["column"] for entry in fresh_session.field_overview("Substrate")}
     assert overview_columns == set(fresh_session.auditable_columns("Substrate"))
+
+
+def _sample_with_jv_plots() -> dict:
+    """A Sample's data as recent nomad-baseclasses stores it: Plotly figures and per-scan
+    jv_history_* lists, both recomputed from the JV measurements on every processing."""
+    return {
+        "name": "S1",
+        "description": "spin coated",
+        "jv_history_efficiency": [14.7, 21.5],
+        "jv_history_cell_name": ["a_rev", "b_rev"],
+        "figures": [
+            {
+                "label": "JV History",
+                "figure": {"data": [{"x": [1, 2, 3], "y": [14.7, 21.5, 20.1], "name": "rev"}]},
+            },
+            {"label": "Best Pixel", "figure": {"data": [{"x": [0.1, 0.2], "y": [5, 6]}]}},
+        ],
+    }
+
+
+def test_auditable_columns_skip_plot_figures_and_jv_history(fresh_session):
+    """Issue #167: every plot point became an auditable field (over 10,000 for one batch),
+    which stalled the results view."""
+    rows = []
+    for name in ("S1", "S2"):
+        row: dict = {"sample_id": name}
+        data = _sample_with_jv_plots()
+        data["name"] = name
+        dm._flatten(data, "", row)
+        rows.append(row)
+    fresh_session.datasets["Sample"] = pd.DataFrame(rows)
+    columns = fresh_session.auditable_columns("Sample")
+    assert "name" in columns and "description" in columns
+    assert not [c for c in columns if c.startswith(("figures", "jv_history_"))]
+
+
+def test_noise_patterns_match_nested_figures_but_not_similar_names():
+    def noise(column):
+        return any(pattern.search(column) for pattern in dm._NOISE_COLUMN_PATTERNS)
+
+    assert noise("figures.1.figure.data.x.2")
+    assert noise("results.figures.label")
+    assert noise("jv_history_efficiency.3")
+    assert not noise("figures_note")
+    assert not noise("my_jv_history_note")
 
 
 # ---------------------------------------------------------------------------
@@ -899,3 +974,39 @@ def test_a_wrong_path_still_changes_nothing_in_a_wrapped_file():
     text = json.dumps(_wrapped_archive())
     modified, count = dm.modify_file_field(text, "e.archive.json", "data.location", "x", "y")
     assert count == 0 and modified == text
+
+
+def test_load_generic_data_keeps_a_field_that_only_some_entries_have(monkeypatch):
+    from hysprint_utils.consistency import get_string_columns
+
+    def entry(entry_id, solutes):
+        return {
+            "archive": {
+                "metadata": {"entry_id": entry_id, "upload_id": "u", "mainfile": entry_id},
+                "data": {
+                    "samples": [{"lab_id": "s1"}],
+                    "solution": [{"solution_details": {"solute": solutes}}],
+                },
+            }
+        }
+
+    entries = [
+        entry("e1", [{"concentration_mol": 0.1}, {"concentration_mol": 0.2}]),
+        entry("e2", [{"concentration_mol": 0.1}]),
+    ]
+
+    class _Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": entries}
+
+    monkeypatch.setattr(dm.requests, "post", lambda *a, **k: _Response())
+    monkeypatch.setattr(dm, "_resolve_sample_entry_ids", lambda *a, **k: [])
+
+    df = dm.load_generic_data("http://x/api/v1", "t", ["s1"], "HySprint_SpinCoating")
+
+    column = "solution.solution_details.solute.2.concentration_mol"
+    assert column in get_string_columns(df)
+    assert df[column].dropna().tolist() == ["0.2"]

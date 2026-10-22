@@ -1,11 +1,35 @@
 [project]
 name = "sem-crystal-counter"
-version = "0.1.0"
-description = "HySPRINT SEM crystal counter app"
+version = "0.2.0"
+description = "Grain size analysis of top-view SEM images of perovskite films"
 requires-python = ">=3.10"
 dependencies = [
     "hysprint-utils",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "pillow>=10.0",
+    "pydantic>=2.0",
+    "scikit-image>=0.22",
+    "ipywidgets>=8.0",
+    "plotly>=5.0",
+    "anywidget>=0.9",  # go.FigureWidget needs it
+    "openpyxl>=3.1",  # Excel export
 ]
+
+[project.optional-dependencies]
+# Dev tools only (tuner.py with click editing, legacy.py baseline); never installed on the Oasis.
+dev = [
+    "streamlit>=1.40",
+    "opencv-python-headless>=4.8",
+    "streamlit-image-coordinates>=0.4",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
 
 [build-system]
 requires = ["hatchling"]

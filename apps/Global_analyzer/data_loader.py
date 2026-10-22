@@ -59,6 +59,72 @@ def _flatten_process_entry(entry: Dict, prefix: str = "") -> Dict:
     return out
 
 
+def _solution_columns(solution_details: Dict) -> Dict:
+    """Every per-solute and per-solvent scalar of a solution, one column each, named after
+    the chemical (falling back to its position). Used by the coating loaders so a
+    concentration or volume that differs between samples is never dropped."""
+    out: Dict = {}
+    for kind, fields in (
+        ("solute", {"concentration_mol": "concentration", "chemical_id": "chemical_id"}),
+        (
+            "solvent",
+            {
+                "amount_relative": "amount",
+                "chemical_volume": "volume",
+                "chemical_id": "chemical_id",
+            },
+        ),
+    ):
+        for i, item in enumerate(solution_details.get(kind, []) or []):
+            name = (
+                (item.get("chemical_2") or {}).get("name") or item.get("name") or f"{kind}{i + 1}"
+            )
+            for source, label in fields.items():
+                if source in item:
+                    out[f"{kind}_{label}_{name}"] = item[source]
+    return out
+
+
+def _is_datetime_key(key: str) -> bool:
+    """A time stamp (the entry's own or a nested one) is never a process parameter."""
+    return key.split(".")[-1] == "datetime"
+
+
+def _remaining_fields(data: Dict, row_data: Dict, handled: set) -> None:
+    """Add every scalar the entry has that the loader did not already extract, so that no
+    recorded value is silently missing. Top-level keys in `handled` are fully covered by
+    the loader's own columns; the solution's own scalars (volume, age, ...) are kept and
+    its solutes/solvents are covered by _solution_columns."""
+    for key, value in data.items():
+        if key in handled or key == "solution":
+            continue
+        for flat_key, flat_value in _flatten_process_entry({key: value}).items():
+            if not _is_datetime_key(flat_key):
+                row_data.setdefault(flat_key, flat_value)
+    for solution in (data.get("solution") or [])[:1]:
+        details = solution.get("solution_details") or {}
+        own = {k: v for k, v in solution.items() if k != "solution_details"}
+        own.update({k: v for k, v in details.items() if k not in ("solute", "solvent")})
+        for flat_key, flat_value in _flatten_process_entry({"solution": own}).items():
+            if not _is_datetime_key(flat_key):
+                row_data.setdefault(flat_key, flat_value)
+        for column, value in _solution_columns(details).items():
+            row_data.setdefault(column, value)
+
+
+_COMMON_HANDLED = {
+    "name",
+    "datetime",
+    "description",
+    "location",
+    "positon_in_experimental_plan",
+    "operator",
+    "m_def",
+    "samples",
+    "lab_id",
+}
+
+
 class HySprintDataLoader:
     """
     A class to load and process different types of HySprint measurement data.
@@ -229,6 +295,7 @@ class HySprintDataLoader:
                             }
                         )
 
+                _remaining_fields(ijp_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
@@ -480,6 +547,7 @@ class HySprintDataLoader:
                     }
                 )
 
+                _remaining_fields(sdc_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
@@ -587,6 +655,7 @@ class HySprintDataLoader:
                         }
                     )
 
+                _remaining_fields(spin_data, row_data, _COMMON_HANDLED)
                 sample_data_list.append(pd.DataFrame([row_data]))
 
         return pd.concat(sample_data_list, ignore_index=True) if sample_data_list else None
@@ -929,51 +998,6 @@ class HySprintDataLoader:
 
     # UTILITY METHODS
 
-    def get_available_metadata_types(self, sample_ids: List[str]) -> List[str]:
-        """Get available metadata measurement types for given samples."""
-        available_types = []
-        for measurement_type in self.METADATA_TYPES:
-            data = self.get_all_data(self.url, self.token, sample_ids, eqe_type=measurement_type)
-            if data:
-                available_types.append(measurement_type)
-        return available_types
-
-    def get_available_result_types(self, sample_ids: List[str]) -> List[str]:
-        """Get available result measurement types for given samples."""
-        available_types = []
-        for measurement_type in self.RESULT_TYPES:
-            data = self.get_all_data(self.url, self.token, sample_ids, eqe_type=measurement_type)
-            if data:
-                available_types.append(measurement_type)
-        return available_types
-
-    def load_all_metadata(
-        self, sample_ids: List[str], variation: Dict[str, str]
-    ) -> Dict[str, pd.DataFrame]:
-        """Load all available metadata for given samples."""
-        metadata_dict = {}
-
-        # Load each type of metadata
-        metadata_loaders = {
-            "inkjet_printing": self.load_inkjet_printing_data,
-            "cleaning": self.load_cleaning_data,
-            "substrate": self.load_substrate_data,
-            "evaporation": self.load_evaporation_data,
-            "slot_die_coating": self.load_slot_die_coating_data,
-            "spin_coating": self.load_spin_coating_data,
-        }
-
-        for name, loader_func in metadata_loaders.items():
-            try:
-                data = loader_func(sample_ids, variation)
-                if data is not None and not data.empty:
-                    metadata_dict[name] = data
-                    logger.info("Loaded %s data: %d entries", name, len(data))
-            except Exception as e:
-                logger.error("Error loading %s data: %s", name, e)
-
-        return metadata_dict
-
     def load_all_results(
         self, sample_ids: List[str], variation: Dict[str, str]
     ) -> Dict[str, pd.DataFrame]:
@@ -1000,126 +1024,6 @@ class HySprintDataLoader:
                 logger.error("Error loading %s data: %s", name, e)
 
         return results_dict
-
-    def merge_metadata_with_results(
-        self, metadata_dict: Dict[str, pd.DataFrame], results_dict: Dict[str, pd.DataFrame]
-    ) -> Dict[str, pd.DataFrame]:
-        """Merge metadata with results based on sample_id."""
-        merged_dict = {}
-
-        # Create a combined metadata DataFrame
-        if metadata_dict:
-            # Start with the first metadata type as base
-            base_metadata = None
-            for meta_name, meta_df in metadata_dict.items():
-                if base_metadata is None:
-                    base_metadata = meta_df.copy()
-                else:
-                    # Merge with existing metadata on sample_id
-                    base_metadata = pd.merge(
-                        base_metadata,
-                        meta_df,
-                        on="sample_id",
-                        how="outer",
-                        suffixes=("", f"_{meta_name}"),
-                    )
-
-            # Now merge each result type with the combined metadata
-            for result_name, result_df in results_dict.items():
-                if base_metadata is not None:
-                    merged_df = pd.merge(
-                        base_metadata,
-                        result_df,
-                        on="sample_id",
-                        how="outer",
-                        suffixes=("_meta", "_result"),
-                    )
-                    merged_dict[result_name] = merged_df
-                else:
-                    merged_dict[result_name] = result_df
-        else:
-            merged_dict = results_dict
-
-        return merged_dict
-
-    def create_summary_table(self, sample_ids: List[str]) -> pd.DataFrame:
-        """Create a summary table showing available data types for each sample."""
-        summary_data = []
-
-        for sample_id in sample_ids:
-            row = {"sample_id": sample_id}
-
-            # Check metadata types
-            for meta_type in self.METADATA_TYPES:
-                try:
-                    data = self.get_all_data(self.url, self.token, [sample_id], eqe_type=meta_type)
-                    row[f"{meta_type}_available"] = bool(data and sample_id in data)
-                except Exception:
-                    row[f"{meta_type}_available"] = False
-
-            # Check result types
-            for result_type in self.RESULT_TYPES:
-                try:
-                    data = self.get_all_data(
-                        self.url, self.token, [sample_id], eqe_type=result_type
-                    )
-                    row[f"{result_type}_available"] = bool(data and sample_id in data)
-                except Exception:
-                    row[f"{result_type}_available"] = False
-
-            summary_data.append(row)
-
-        return pd.DataFrame(summary_data)
-
-
-# Convenience functions for backward compatibility
-def load_ijp_data_legacy(
-    url: str, token: str, get_all_data_func, sample_ids: List[str], variation: Dict[str, str]
-) -> Optional[pd.DataFrame]:
-    """
-    Legacy function that combines inkjet printing and JV measurement data
-    similar to the original get_ijp_data function.
-    """
-    loader = HySprintDataLoader(url, token, get_all_data_func)
-
-    # Load inkjet printing metadata
-    ijp_data = loader.load_inkjet_printing_data(sample_ids, variation)
-
-    # Load JV measurement results
-    jv_data = loader.load_jv_measurement_data(sample_ids, variation)
-
-    if ijp_data is None and jv_data is None:
-        return None
-
-    if ijp_data is None:
-        return jv_data
-
-    if jv_data is None:
-        return ijp_data
-
-    # Merge the two datasets on sample_id
-    merged_data = pd.merge(ijp_data, jv_data, on="sample_id", how="outer", suffixes=("_ijp", "_jv"))
-
-    return merged_data
-
-
-# Example usage and helper functions
-def example_usage():
-    """
-    Example of how to use the HySprintDataLoader class.
-    """
-
-    # Load specific data types
-
-    # Load all metadata
-
-    # Load all results
-
-    # Create merged datasets
-
-    # Create summary table
-
-    pass
 
 
 if __name__ == "__main__":
