@@ -13,6 +13,15 @@
 			{"process": "Experiment Info"}
 		]
 	},
+    "single_slot_die_coating": {
+      "name": "Single Slot Die Coating",
+      "description": "Template for a single slot die coated layer",
+      "category": "Slot Die Coating Single Layer",
+      "process_sequence": [
+        {"process": "Experiment Info"},
+        {"process": "Slot Die Coating", "config": {"solvents": 3, "solutes": 5}}
+      ]
+    },
     "bypass_diodes": {
       "name": "Bypass diodes",
       "description": "Bypass process with UV-Ozone cleaning and perovskite layer",

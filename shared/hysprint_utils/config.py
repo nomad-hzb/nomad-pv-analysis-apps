@@ -27,6 +27,7 @@ API_ENDPOINT: str = os.environ.get("HYSPRINT_API_ENDPOINT", "/nomad-oasis/api/v1
 ENTRY_TYPES: dict[str, str] = {
     # ELN entry types
     "batch": "HySprint_Batch",
+    "sample": "HySprint_Sample",
     "jv": "HySprint_JVmeasurement",
     "eqe": "HySprint_EQEmeasurement",
     "mppt": "HySprint_SimpleMPPTracking",

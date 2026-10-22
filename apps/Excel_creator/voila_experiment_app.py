@@ -1,4 +1,5 @@
 import base64
+import html
 import io
 import json
 import logging
@@ -6,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import ipywidgets as widgets
+import nomad_prefill
 from IPython.display import display
 
 from hysprint_utils.manual import manual_panel
@@ -168,6 +170,8 @@ class MinimalistExperimentBuilder:
         self.process_sequence_area = widgets.VBox([])
 
         # Generation controls
+        # Unticked while the prefill panel is open (_on_prefill_toggle): a prefilled file is
+        # meant to be uploaded, and an example row left in it would become a sample.
         self.is_testing_checkbox = widgets.Checkbox(
             value=True,
             description="Add example values on 1st row",
@@ -189,9 +193,125 @@ class MinimalistExperimentBuilder:
         self.download_area = widgets.HTML(value="")
         self.status_output = widgets.Output()
 
+        # Prefill from NOMAD: hidden in normal use, opened by its own button. Nothing is
+        # fetched until the panel is opened.
+        self.prefill_toggle = widgets.ToggleButton(
+            value=False,
+            description="Optional: prefill from NOMAD",
+            tooltip=(
+                "Only if the samples already exist in NOMAD: fill one row per sample of one of "
+                "your NOMAD uploads, with its Nomad ID and what NOMAD knows of the sample and "
+                "its substrate"
+            ),
+            # Small and grey on its own line under Generate Excel: an extra, not a second
+            # main action.
+            style={"font_size": "12px", "text_color": "#666666"},
+            # align_self: in the VBox an auto-width button would stretch across the page
+            layout=widgets.Layout(
+                width="auto", height="26px", margin="0 0 10px 0", align_self="flex-start"
+            ),
+        )
+        self.prefill_upload_dropdown = widgets.Dropdown(
+            options=[(self.PREFILL_PLACEHOLDER, None)],
+            value=None,
+            description="NOMAD upload:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="600px"),
+        )
+        self.prefill_info = widgets.HTML(value="")
+        # What NOMAD's Excel parser does with the file (nomad-hysprint HySprintExperimentParser:
+        # it writes every entry with create_archive, which never replaces an existing file).
+        self.prefill_note = widgets.HTML(
+            value=(
+                "<div style='font-size: 0.9em; color: #555; max-width: 600px;'>"
+                "Upload the generated file into <b>this same upload</b>: only there are the new "
+                "processes linked to these samples. Samples and process steps that already exist "
+                "in the upload are kept as they are; new values for them in this file are "
+                "ignored. Measurements need no new Excel.</div>"
+            )
+        )
+        self.prefill_panel = widgets.VBox(
+            [self.prefill_upload_dropdown, self.prefill_info, self.prefill_note],
+            layout=widgets.Layout(display="none", margin="0 0 10px 0"),
+        )
+        self.prefill_samples = []
+        self._prefill_connection = None  # (url, token) once the uploads were loaded
+        self._example_row_before_prefill = self.is_testing_checkbox.value
+
         # Event handlers
         self.apply_button.on_click(self._on_apply_template)
         self.generate_button.on_click(self._on_generate_excel)
+        self.prefill_toggle.observe(self._on_prefill_toggle, names="value")
+        self.prefill_upload_dropdown.observe(self._on_prefill_upload_change, names="value")
+
+    PREFILL_PLACEHOLDER = "Select an upload..."
+
+    def _prefill_message(self, message, kind="info"):
+        color = {"error": "#c0392b", "warning": "#b9770e"}.get(kind, "#2c3e50")
+        self.prefill_info.value = f"<span style='color: {color};'>{html.escape(message)}</span>"
+
+    def _on_prefill_toggle(self, change):
+        """Open or close the prefill panel. The first opening loads the uploads; a closed
+        panel means no prefill, whatever upload was chosen in it. Opening unticks the example
+        row and closing gives it back the value it had before."""
+        self.prefill_panel.layout.display = None if change["new"] else "none"
+        if change["new"]:
+            self._example_row_before_prefill = self.is_testing_checkbox.value
+            self.is_testing_checkbox.value = False
+        else:
+            self.is_testing_checkbox.value = self._example_row_before_prefill
+        if change["new"] and self._prefill_connection is None:
+            self._load_prefill_uploads()
+
+    def _load_prefill_uploads(self):
+        self._prefill_message("Loading your NOMAD uploads...")
+        try:
+            url, token = nomad_prefill.connect()
+            uploads = nomad_prefill.fetch_uploads(url, token)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Could not load the NOMAD uploads")
+            self._prefill_message(f"Could not load your NOMAD uploads: {exc}", "error")
+            return
+        self._prefill_connection = (url, token)
+        self.prefill_upload_dropdown.options = [
+            (self.PREFILL_PLACEHOLDER, None),
+            *nomad_prefill.upload_choices(uploads),
+        ]
+        self.prefill_upload_dropdown.value = None
+        if uploads:
+            self._prefill_message(f"{len(uploads)} uploads found. Pick the one of this batch.")
+        else:
+            self._prefill_message("You have no NOMAD uploads.", "warning")
+
+    def _on_prefill_upload_change(self, change):
+        """Fetch the samples of the chosen upload, so the user sees what will be filled."""
+        self.prefill_samples = []
+        upload_id = change["new"]
+        if upload_id is None or self._prefill_connection is None:
+            self._prefill_message("")
+            return
+        self._prefill_message("Loading the samples of this upload...")
+        try:
+            self.prefill_samples = nomad_prefill.fetch_samples_in_upload(
+                *self._prefill_connection, upload_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Could not load the samples of upload %s", upload_id)
+            self._prefill_message(f"Could not load the samples of this upload: {exc}", "error")
+            return
+        if self.prefill_samples:
+            first, last = self.prefill_samples[0].lab_id, self.prefill_samples[-1].lab_id
+            columns = ", ".join(nomad_prefill.filled_columns(self.prefill_samples))
+            self._prefill_message(
+                f"{len(self.prefill_samples)} samples ({first} to {last}). Filled columns: "
+                f"{columns}."
+            )
+        else:
+            self._prefill_message("This upload has no samples.", "warning")
+
+    def _samples_to_prefill(self):
+        """The samples to write into the sheet: only while the prefill panel is open."""
+        return self.prefill_samples if self.prefill_toggle.value else []
 
     def _update_template_dropdown(self):
         """Update template dropdown with all available templates"""
@@ -483,10 +603,13 @@ class MinimalistExperimentBuilder:
             return
 
         try:
-            excel_data = self._generate_excel_data()
+            samples = self._samples_to_prefill()
+            excel_data = self._generate_excel_data(samples)
             filename = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             self.download_area.value = self._create_download_link(excel_data, filename)
             self._status(f"Excel file generated: {filename}", "success")
+            if samples:
+                self._status(f"Prefilled {len(samples)} samples from NOMAD.", "success")
 
             if self.include_readme_checkbox.value:
                 readme_html = self._create_readme_download_link(
@@ -497,11 +620,15 @@ class MinimalistExperimentBuilder:
             logger.exception("Excel generation failed")
             self._status(f"The Excel file could not be generated: {exc}", "error")
 
-    def _generate_excel_data(self):
-        """The Excel file's bytes from ExperimentExcelBuilder; raises when it cannot be built."""
+    def _generate_excel_data(self, samples=None):
+        """The Excel file's bytes from ExperimentExcelBuilder; raises when it cannot be built.
+        samples: PrefillSamples to prefill, or None."""
         if not EXCEL_BUILDER_AVAILABLE:
             raise RuntimeError("ExperimentExcelBuilder is not available (import failed).")
-        builder = ExperimentExcelBuilder(self.current_sequence, self.is_testing_checkbox.value)
+        rows = [sample.as_row() for sample in samples or []]
+        builder = ExperimentExcelBuilder(
+            self.current_sequence, self.is_testing_checkbox.value, samples=rows or None
+        )
         builder.build_excel()
         buffer = io.BytesIO()
         builder.workbook.save(buffer)
@@ -520,7 +647,8 @@ class MinimalistExperimentBuilder:
 ---
 
 # Approach
-(Briefly describe the experimental design, key parameters, and any deviations from standard protocol.)  # noqa: E501
+(Briefly describe the experimental design, key parameters, and any deviations from standard
+protocol.)
 
 ## Conditions
 | Parameter | Value |
@@ -577,19 +705,24 @@ class MinimalistExperimentBuilder:
     def _create_download_link(self, excel_data, filename):
         """Create download link"""
         b64_data = base64.b64encode(excel_data).decode()
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        testing = "On" if self.is_testing_checkbox.value else "Off"
 
         return f"""
-        <div style="padding: 12px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px; margin: 10px 0;">  # noqa: E501
+        <div style="padding: 12px; background-color: #d4edda; border: 1px solid #c3e6cb;
+                    border-radius: 6px; margin: 10px 0;">
             <div style="display: flex; align-items: center; margin-bottom: 8px;">
                 <span style="font-size: 18px; margin-right: 8px;">📊</span>
                 <strong style="color: #155724;">Excel Ready</strong>
             </div>
             <div style="font-size: 14px; color: #155724; margin-bottom: 10px;">
-                {filename} • {len(self.current_sequence)} processes • Testing: {"On" if self.is_testing_checkbox.value else "Off"}  # noqa: E501
+                {filename} • {len(self.current_sequence)} processes • Testing: {testing}
             </div>
-            <a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64_data}"   # noqa: E501
+            <a href="data:{mime};base64,{b64_data}"
                download="{filename}" 
-               style="display: inline-block; padding: 8px 16px; background-color: #28a745; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">  # noqa: E501
+               style="display: inline-block; padding: 8px 16px; background-color: #28a745;
+                      color: white; text-decoration: none; border-radius: 4px;
+                      font-weight: bold; font-size: 14px;">
                 📥 Download
             </a>
         </div>
@@ -600,7 +733,8 @@ class MinimalistExperimentBuilder:
         b64_data = base64.b64encode(readme_content.encode("utf-8")).decode()
 
         return f"""
-        <div style="padding: 12px; background-color: #e7f3ff; border: 1px solid #b3d9ff; border-radius: 6px; margin: 10px 0;">  # noqa: E501
+        <div style="padding: 12px; background-color: #e7f3ff; border: 1px solid #b3d9ff;
+                    border-radius: 6px; margin: 10px 0;">
             <div style="display: flex; align-items: center; margin-bottom: 8px;">
                 <span style="font-size: 18px; margin-right: 8px;">📝</span>
                 <strong style="color: #004085;">README Template</strong>
@@ -610,7 +744,9 @@ class MinimalistExperimentBuilder:
             </div>
             <a href="data:text/markdown;base64,{b64_data}" 
                download="{filename}" 
-               style="display: inline-block; padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">  # noqa: E501
+               style="display: inline-block; padding: 8px 16px; background-color: #007bff;
+                      color: white; text-decoration: none; border-radius: 4px;
+                      font-weight: bold; font-size: 14px;">
                 📥 Download README
             </a>
         </div>
@@ -622,9 +758,11 @@ class MinimalistExperimentBuilder:
         # Compact header
         header = widgets.HTML(
             value="""
-            <div style="padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px; margin-bottom: 20px;">  # noqa: E501
+            <div style="padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white; border-radius: 8px; margin-bottom: 20px;">
                 <h2 style="margin: 0 0 5px 0; font-size: 1.8em;">🧪 Experiment Builder</h2>
-                <p style="margin: 0; font-size: 0.95em; opacity: 0.9;">Configure processes and generate Excel files</p>  # noqa: E501
+                <p style="margin: 0; font-size: 0.95em; opacity: 0.9;">
+                    Configure processes and generate Excel files</p>
             </div>
             """
         )
@@ -664,6 +802,8 @@ class MinimalistExperimentBuilder:
                     layout=widgets.Layout(margin="0 0 10px 0"),
                 ),
                 widgets.HBox([self.generate_button], layout=widgets.Layout(margin="0 0 10px 0")),
+                self.prefill_toggle,
+                self.prefill_panel,
                 self.download_area,
             ]
         )

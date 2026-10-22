@@ -10,13 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 class ExperimentExcelBuilder:
-    def __init__(self, process_sequence, is_testing=False):
+    def __init__(self, process_sequence, is_testing=False, samples=None):
         self.process_sequence = process_sequence
         self.is_testing = is_testing
+        self.samples = samples  # {header: value} rows to prefill, see add_experiment_sheet
         self.workbook = Workbook()
 
     def build_excel(self):
-        add_experiment_sheet(self.workbook, self.process_sequence, self.is_testing)
+        add_experiment_sheet(
+            self.workbook, self.process_sequence, self.is_testing, samples=self.samples
+        )
         add_guide_sheet(self.workbook)
         add_citation_sheet(self.workbook)
 

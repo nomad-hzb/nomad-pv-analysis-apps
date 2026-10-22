@@ -41,11 +41,30 @@ def lighten_color(hex_color, factor=0.50):
     return f"{r:02x}{g:02x}{b:02x}".upper()
 
 
-def add_experiment_sheet(workbook, process_sequence, is_testing=False):
+def write_samples(ws, samples, info_columns, first_row):
+    """Write one sample per row from first_row on. A sample is {Experiment Info header:
+    value}; its "Nomad ID" replaces that row's formula. info_columns maps the Experiment Info
+    headers to their column numbers: headers are looked up by name because the Ink
+    Recycling variant of Experiment Info has fewer columns, and a value whose column the
+    sheet does not have is not written (it would land in another process's columns)."""
+    if "Nomad ID" not in info_columns:
+        raise ValueError("the sheet has no Experiment Info 'Nomad ID' column to prefill")
+    for row, sample in enumerate(samples, start=first_row):
+        for header, value in sample.items():
+            column = info_columns.get(header)
+            if column is not None and value is not None:
+                ws.cell(row=row, column=column, value=value)
+
+
+def add_experiment_sheet(workbook, process_sequence, is_testing=False, samples=None):
+    """samples: optional {Experiment Info header: value} rows, one per sample (see
+    write_samples). They start below the example row when is_testing, so that row stays a
+    complete example."""
     ws = workbook.active
     ws.title = "Experiment Data"
     start_col = 1
     incremental_number = 0
+    info_columns = {}  # Experiment Info header -> column number
 
     def make_label(label, test_val=None, dropdown_key=None):
         """
@@ -545,6 +564,8 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
             cell = ws.cell(row=2, column=col_index)
             cell.value = step_label
             cell.fill = PatternFill(start_color=row2_color, end_color=row2_color, fill_type="solid")
+            if process_name == "Experiment Info":
+                info_columns.setdefault(step_label, col_index)
 
             # Write test value if testing mode
             if is_testing and test_val is not None:
@@ -577,6 +598,9 @@ def add_experiment_sheet(workbook, process_sequence, is_testing=False):
         ws[
             f"F{row}"
         ].value = f'=IF(B{row}="","",CONCATENATE("HZB_",B{row},"_",C{row},"_",D{row},"_C-",E{row}))'
+
+    if samples:
+        write_samples(ws, samples, info_columns, first_row=4 if is_testing else 3)
 
     # Adjust column widths
     for col in ws.columns:
