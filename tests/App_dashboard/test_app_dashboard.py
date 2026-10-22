@@ -315,3 +315,17 @@ def test_project_cards_open_exactly_the_paths_of_the_ml_uploads():
     for name, (folder, notebook) in expected.items():
         url = build_voila_url(apps[name], "u", "unused")
         assert url.endswith(f"/uploads/{folder}/{notebook}"), name
+
+
+def test_sem_crystal_counter_is_a_device_characterization_app():
+    sem = [
+        (group, entry)
+        for group, entries in CATEGORIES.items()
+        for entry in entries
+        if entry.folder == "SEM_crystal_counter"
+    ]
+    assert len(sem) == 1
+    group, entry = sem[0]
+    assert group == "Device Characterization"
+    assert not entry.experimental
+    assert entry.notebook == "SEM_Analyzer.ipynb"

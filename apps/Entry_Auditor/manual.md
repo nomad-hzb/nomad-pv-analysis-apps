@@ -68,6 +68,8 @@ the correction log. *Refresh* reloads it and *Export CSV* gives a `corrections.c
   inside longer texts). A number field only accepts a number as its corrected value and is
   written back as a number. A field with more than 50 different values is not listed. A field that only some entries
   have (for example the fourth solute) is listed too; the other entries count as empty.
+  Stored plots (`figures`) and a sample's JV history (`jv_history_...`) are not listed: NOMAD
+  recomputes them from the JV measurements, so a correction there would not last.
 - A correction needs write access to the uploads of the entries; entries you cannot change are
   reported as errors.
 - The demo data cannot be corrected.

@@ -22,7 +22,11 @@ import yaml
 from pydantic import BaseModel
 
 from hysprint_utils.api_calls import get_sample_entry_links
-from hysprint_utils.consistency import get_string_columns, summarize_field_values
+from hysprint_utils.consistency import (
+    DEFAULT_EXCLUDE_COLUMNS,
+    get_string_columns,
+    summarize_field_values,
+)
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE
@@ -91,6 +95,13 @@ _NOISE_COLUMN_PATTERNS = (
     # own header/tooltip; for a many-sample entry it also explodes into dozens of
     # columns that are blank for every other (normal, single-sample) entry.
     re.compile(r"^(samples|entities)(\.\d+)?\."),
+    # Plotly figures stored on the entry (NOMAD PlotSection "figures", e.g. the JV
+    # history plots of a Sample or Batch) and a Sample's per-scan "jv_history_*" lists.
+    # The plugin recomputes both from the JV measurements on every processing, so a
+    # correction would not stick; and every plot point is a column of its own (over
+    # 10,000 for one batch), which stalled the results view (issue #167).
+    re.compile(r"(^|\.)figures\."),
+    re.compile(r"^jv_history_"),
 )
 
 
@@ -1009,7 +1020,7 @@ class EntryAuditSession:
                 continue
             if df is not None and not df.empty:
                 self.datasets[label] = df
-                auditable = len(get_string_columns(df))
+                auditable = len(self.auditable_columns(label))
                 messages[label] = f"Loaded {len(df)} entries, {auditable} auditable field(s)"
             else:
                 messages[label] = "No entries"
@@ -1043,18 +1054,22 @@ class EntryAuditSession:
         df = self.datasets.get(label)
         if df is None:
             return []
-        columns = get_string_columns(df)
-        return [
+        # Drop the noise columns before get_string_columns, not after: its per-column
+        # checks are the slow part when an entry carries thousands of plot-point columns.
+        noise = {
             column
-            for column in columns
-            if not any(pattern.search(column) for pattern in _NOISE_COLUMN_PATTERNS)
-        ]
+            for column in df.columns
+            if any(pattern.search(column) for pattern in _NOISE_COLUMN_PATTERNS)
+        }
+        return get_string_columns(df, exclude_columns=DEFAULT_EXCLUDE_COLUMNS | noise)
 
     def field_summary(self, label: str, column: str) -> list[dict]:
         df = self.datasets.get(label)
         if df is None:
             return []
-        return summarize_field_values(df, column)
+        # Only this column: summarize_field_values copies the frame it gets once per value,
+        # which takes seconds per field when an entry carries thousands of plot columns.
+        return summarize_field_values(df[[column]], column)
 
     def field_overview(self, label: str) -> list[dict]:
         """One entry per auditable column, for the always-visible summary table:

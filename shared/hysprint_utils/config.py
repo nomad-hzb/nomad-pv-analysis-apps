@@ -35,6 +35,7 @@ ENTRY_TYPES: dict[str, str] = {
     "xrd": "HySprint_XRD_XY",
     "trpl": "HySprint_TimeResolvedPhotoluminescence",
     "nmr": "HySprint_Simple_NMR",
+    "sem": "HySprint_SEM",
     # NOMAD baseclass qualified names
     "base_measurement": "baseclasses.BaseMeasurement",
     "base_process": "baseclasses.BaseProcess",
