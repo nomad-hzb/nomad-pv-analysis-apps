@@ -352,13 +352,13 @@ def _install_app() -> None:
         logger.info("could not write the install marker %s", marker)
 
 
-# A tag of a tracked dependency: the series prefix, then dot-separated numbers ("v0.2.7").
-_TAG_NUMBERS = re.compile(r"\.(\d+(?:\.\d+)*)$")
-GIT_LS_REMOTE_TIMEOUT_S = 30
+# Short: the lookup runs on every launch of a tracking app, and normally answers in about a
+# second. A hanging proxy would otherwise hold every start for the whole timeout.
+GIT_LS_REMOTE_TIMEOUT_S = 10
 
 
 def _read_track_tags(pyproject: Path) -> dict[str, dict]:
-    """The app's [tool.hysprint.track-tags] table: {distribution: {"url", "series"}}.
+    """The app's [tool.hysprint.track-tags] table: {distribution: {"url", optional "series"}}.
 
     tomllib is stdlib from Python 3.11 on; older kernels fall back to the copy pip itself
     ships, which every container that can run bootstrap has.
@@ -372,12 +372,16 @@ def _read_track_tags(pyproject: Path) -> dict[str, dict]:
     return data.get("tool", {}).get("hysprint", {}).get("track-tags", {})
 
 
-def _newest_tag(url: str, series: str) -> str | None:
-    """The newest tag of *series* (e.g. "v0.2" -> "v0.2.7") on the git remote *url*.
+def _newest_tag(url: str, series: str = "") -> str | None:
+    """The newest release tag on the git remote *url*: of any line ("v0.3.0" beats "v0.2.18"),
+    or only of *series* when one is given (e.g. "v0.2" -> "v0.2.18"). Release tags are "v" and
+    dot-separated numbers, compared numerically; anything else ("v0.3.0-rc1") is ignored.
 
     One `git ls-remote` round trip (through the proxy when one is set). None when the remote
-    cannot be reached or has no tag of the series.
+    cannot be reached or has no matching tag.
     """
+    numbers = re.escape(series) + r"\.(\d+(?:\.\d+)*)" if series else r"v(\d+(?:\.\d+)*)"
+    tag_pattern = re.compile(numbers)
     try:
         result = subprocess.run(
             ["git", "ls-remote", "--tags", "--refs", url],
@@ -396,9 +400,7 @@ def _newest_tag(url: str, series: str) -> str | None:
     candidates = []
     for line in result.stdout.splitlines():
         tag = line.rpartition("refs/tags/")[2]
-        if not tag.startswith(series):
-            continue
-        match = _TAG_NUMBERS.fullmatch(tag[len(series) :])
+        match = tag_pattern.fullmatch(tag)
         if match:
             candidates.append((tuple(int(n) for n in match.group(1).split(".")), tag))
     return max(candidates)[1] if candidates else None
@@ -428,20 +430,24 @@ def _installed_tag(name: str) -> str | None:
 def _install_tracked_tags() -> None:
     """Keep each dependency in the app's [tool.hysprint.track-tags] on its newest tag.
 
-    An entry names a git URL and a release series instead of one fixed tag:
+    An entry names a git URL instead of one fixed tag, and optionally a release series to
+    stay on:
 
         [tool.hysprint.track-tags]
-        insitu_analyser = { url = "https://.../insitu_analyser.git", series = "v0.2" }
+        insitu_analyser = { url = "https://.../insitu_analyser.git" }
+        other_package = { url = "https://.../other_package.git", series = "v1.4" }
 
-    Every launch asks the remote for the newest tag of the series and installs it when the
-    kernel has a different one (or none), so a new release reaches the Oasis with no commit
-    here. Pushing that tag is the release; moving to a new series (a breaking release) stays
-    a deliberate edit of `series`. Checked on every launch rather than once per container
-    like _install_app, since the pyproject that keys that marker does not change when a tag
-    is pushed.
+    Every launch asks the remote for the newest release tag (of the series, if given) and
+    installs it when the kernel has a different one (or none), so a new release reaches the
+    Oasis with no commit here. Pushing that tag is the release, a new minor or major line
+    included; `series` holds a package back on one line, e.g. while the app is not yet ready
+    for a breaking release. Checked on every launch rather than once per container like
+    _install_app, since the pyproject that keys that marker does not change when a tag is
+    pushed.
 
-    Non-fatal like _install_app: without a route to the git host the installed version
-    keeps running. A local development (editable) install is never replaced.
+    Non-fatal like _install_app: without a route to the git host, or with an entry that has
+    no url, the installed version keeps running. A local development (editable) install is
+    never replaced.
     """
     pyproject = Path.cwd() / "pyproject.toml"
     if not pyproject.exists():
@@ -453,19 +459,25 @@ def _install_tracked_tags() -> None:
         return
 
     for name, spec in tracked.items():
+        url = spec.get("url") if isinstance(spec, dict) else None
+        if not url:
+            logger.warning("[tool.hysprint.track-tags] entry %s has no url; skipped", name)
+            continue
+        series = spec.get("series", "")
+        kind = f"{series} release tag" if series else "release tag"
         installed = _installed_tag(name)
         if installed == "editable":
             logger.info("%s is a local editable install; not tracking its tags", name)
             continue
-        newest = _newest_tag(spec["url"], spec["series"])
+        newest = _newest_tag(url, series)
         if newest is None:
-            logger.warning("no %s tag of %s found; keeping %s", spec["series"], name, installed)
+            logger.warning("no %s of %s found; keeping %s", kind, name, installed)
             continue
         if newest == installed:
-            logger.info("%s is on the newest %s tag, %s", name, spec["series"], newest)
+            logger.info("%s is on the newest %s, %s", name, kind, newest)
             continue
 
-        returncode, output = _pip_install(f"{name} @ git+{spec['url']}@{newest}")
+        returncode, output = _pip_install(f"{name} @ git+{url}@{newest}")
         if returncode != 0:
             logger.warning(
                 "could not install %s %s (pip exit %d); keeping %s:\n%s",

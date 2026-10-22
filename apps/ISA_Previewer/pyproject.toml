@@ -13,13 +13,13 @@ dependencies = [
     "matplotlib>=3.0",
 ]
 
-# insitu_analyser follows the newest tag of one release series: bootstrap.py checks the remote
-# on every launch and installs a newer tag of the series, so an insitu_analyser release (a pushed
-# tag) reaches the Oasis without a commit here. Still always an exact tag, never a branch, so
-# the running version stays known (bootstrap logs it). Change `series` only to adopt a breaking
-# release line (e.g. v0.3, the NeXus file format).
+# insitu_analyser follows its newest release tag: bootstrap.py checks the remote on every launch
+# and installs a newer tag, a new line (v0.2 -> v0.3) included, so an insitu_analyser release (a
+# pushed tag) reaches the Oasis without a commit here. Still always an exact tag, never a branch,
+# so the running version stays known (bootstrap logs it). To hold it on one line, e.g. while
+# this app is not yet ready for a breaking release, add `series = "v0.2"`.
 [tool.hysprint.track-tags]
-insitu_analyser = { url = "https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git", series = "v0.2" }
+insitu_analyser = { url = "https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git" }
 
 [tool.hatch.metadata]
 allow-direct-references = true
