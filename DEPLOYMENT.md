@@ -301,18 +301,19 @@ fall back to the HZB URL and get no proxy, so they will not work on a second
 Oasis. They are pre-existing raw notebooks (`!pip install impedance` in cell 0,
 star imports) that have not been through the unification pass.
 
-**`ISA_Previewer` needs outbound git access.** It pins `insitu_analyser` from
-`codebase.helmholtz.cloud`, installed by `bootstrap.py` with the rest of that
-app's dependencies (section 8). The clone runs through `git`, which reads
-`HTTPS_PROXY` from the environment and inherits it from pip's subprocess.
-Verified on CE-AME: that host is reachable through the proxy, so no extra
-routing is needed. If the app ever reports `ModuleNotFoundError: No module
-named 'insitu_analyser'`, install it by hand in a NORTH terminal to see the
-real error:
+**`ISA_Previewer` needs outbound git access.** It tracks the newest
+`insitu_analyser` release tag on `codebase.helmholtz.cloud`
+(section 8, step 3). Both the tag lookup (`git ls-remote`) and the clone run
+through `git`, which reads `HTTPS_PROXY` from the environment. Verified on
+CE-AME: that host is reachable through the proxy, so no extra routing is
+needed. If the app ever reports `ModuleNotFoundError: No module named
+'insitu_analyser'`, install it by hand in a NORTH terminal to see the real
+error, with the newest `vX.Y.Z` tag from `git ls-remote`:
 
 ```bash
 export HTTPS_PROXY=http://proxy.example.org:3128
-pip install "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@v0.2.0"
+git ls-remote --tags --refs https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git
+pip install "insitu_analyser @ git+https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git@<newest tag>"
 ```
 
 **Some `/nomad-oasis/...` path literals bypass `API_ENDPOINT`.** GUI-link and
@@ -403,6 +404,27 @@ from cell 0, in this order:
 2. **The app's own directory**, when it has a `pyproject.toml`. The cwd is the
    notebook's own folder, so this installs exactly the app being launched,
    along with everything in its `dependencies` list.
+3. **Tracked git tags**, when the app's `pyproject.toml` has a
+   `[tool.hysprint.track-tags]` table. Each entry names a git URL instead of
+   one fixed tag:
+
+   ```toml
+   [tool.hysprint.track-tags]
+   insitu_analyser = { url = "https://codebase.helmholtz.cloud/hzb-se-alm/insitu_analyser.git" }
+   ```
+
+   On every launch bootstrap asks the remote for the newest release tag
+   (`vX.Y.Z`, compared numerically, so `v0.3.0` beats `v0.2.18`; tags such as
+   `v0.3.0-rc1` are ignored) and installs it when the kernel has a different
+   one. A new release of that dependency is then just a pushed tag, a new
+   line included: no commit in this repo. To hold a package on one line, for
+   example while an app is not ready for a breaking release, add
+   `series = "v0.2"` to its entry. The lookup gives up after 10 s, so an
+   unreachable git host delays a launch by at most that. The installed tag is
+   read from pip's own record of the install, logged on every launch, and a
+   local editable install is never replaced. Unreachable remote, an entry
+   without `url` or a failed install: a warning, and the installed version
+   keeps running.
 
 Step 2 is why `apps/<App>/pyproject.toml` is worth keeping accurate: it is the
 only thing that installs an app's third-party requirements. Before it existed,
@@ -410,7 +432,8 @@ those lists were inert at runtime - which is how `ISA_Previewer` came to fail
 with `ModuleNotFoundError: No module named 'insitu_analyser'` on a fresh
 CE-AME container while the pin sat in its dependency list all along.
 
-**It runs once per container, not once per launch.** On success bootstrap
+**Step 2 runs once per container, not once per launch** (step 3 runs on every
+launch, since pushing a tag changes nothing in `pyproject.toml`). On success bootstrap
 writes a marker into the temp directory, keyed on the app's path and the
 contents of its `pyproject.toml`. Later launches of the same app skip the
 install entirely; editing the dependency list changes the key, so the next

@@ -111,7 +111,10 @@ The `_ =` stops the notebook from rendering bootstrap's globals. bootstrap.py ap
 applies the HZB outbound proxy by default for the HZB SE Oasis (opt out with
 `HTTP_PROXY = ""`/`HTTPS_PROXY = ""`), installs `shared/` and inserts it into `sys.path` (that
 insert fixes "the app needs two runs"; keep it), installs the app's own pyproject deps once per
-container, and mutes import-time stdout (`HYSPRINT_KEEP_IMPORT_OUTPUT=1` to debug). Details:
+container, on every launch installs the newest release tag of each `[tool.hysprint.track-tags]`
+entry (ISA_Previewer: insitu_analyser, any line; never turn a tracked package back into a fixed
+pin, add `series` only to hold one back from a breaking line), and mutes import-time stdout
+(`HYSPRINT_KEEP_IMPORT_OUTPUT=1` to debug). Details:
 bootstrap.py docstrings and DEPLOYMENT.md. Never add per-app install cells or banner suppression.
 
 **Voila widget callbacks.** A bare `display(...)` inside `on_click`/`observe` is silently
