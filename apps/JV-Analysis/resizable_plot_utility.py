@@ -7,6 +7,7 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
+import html
 import logging
 import uuid
 
@@ -56,7 +57,11 @@ class ResizablePlotManager:
 
         for i, (fig, name) in enumerate(zip(figs, names)):
             try:
-                display(widgets.HTML(f'<h4 style="margin:12px 0 2px 0;padding:0;">{name}</h4>'))
+                display(
+                    widgets.HTML(
+                        f'<h4 style="margin:12px 0 2px 0;padding:0;">{html.escape(str(name))}</h4>'
+                    )
+                )
                 # Reduce the bottom margin so there is no large blank gap below each plot
                 try:
                     b = fig.layout.margin.b
