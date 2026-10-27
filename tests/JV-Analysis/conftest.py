@@ -35,6 +35,13 @@ sys.modules["pm_jv"] = _pm
 sys.modules["plot_manager"] = _pm
 _pm_spec.loader.exec_module(_pm)
 
+sys.modules.pop("utils", None)
+_utils_spec = importlib.util.spec_from_file_location("utils_jv", _APP_DIR / "utils.py")
+_utils = importlib.util.module_from_spec(_utils_spec)
+sys.modules["utils_jv"] = _utils
+sys.modules["utils"] = _utils
+_utils_spec.loader.exec_module(_utils)
+
 from data_manager import DataManager  # noqa: E402
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"

@@ -8,7 +8,9 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
+import html
 from datetime import date
+from urllib.parse import quote
 
 from openpyxl.utils.dataframe import dataframe_to_rows
 
@@ -16,6 +18,21 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 def dated_filename(filename):
     """Prefix a filename with today's date (YYYY-MM-DD) for easy identification."""
     return f"{date.today().isoformat()}_{filename}"
+
+
+def measurement_link_html(api_url, entry_id, entry_type):
+    """An <a> tag opening one measurement entry in the NOMAD GUI, labelled with the last part
+    of its entry type (SEM entries open on their image preview).
+
+    The GUI sits next to the API (".../nomad-oasis/api/v1" -> ".../nomad-oasis/gui"), so the
+    link follows whatever API_ENDPOINT this deployment uses. entry_id and entry_type come from
+    NOMAD and are escaped."""
+    gui_base = api_url.split("/api/")[0]
+    path = f"{gui_base}/gui/entry/id/{quote(str(entry_id), safe='')}/data/data"
+    if "SEM" in entry_type:
+        path += "/images:0/image_preview/preview"
+    label = html.escape(entry_type.split("_")[-1])
+    return f'<a href="{html.escape(path)}" rel="noopener noreferrer" target="_blank">{label}</a>'
 
 
 # Summary-table columns storing signed current density (stored negative internally
