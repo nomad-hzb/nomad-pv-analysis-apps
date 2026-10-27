@@ -257,6 +257,8 @@ class JVAnalysisApp:
                 print("Demo data loaded: %d JV records." % n)
             else:
                 print("Demo fixture contained no valid JV measurements.")
+        if success:
+            self._after_data_loaded()
 
     def _load_data_from_selection(self, batch_selector):
         """Load data from batch selection with user feedback"""
@@ -265,24 +267,29 @@ class JVAnalysisApp:
         success = self.data_manager.load_batch_data(batch_ids, self.load_status_output)
 
         if success:
-            # Set data for sample selection in filter UI
-            data = self.data_manager.get_data()
-            self.filter_ui.set_sample_data(data)
+            self._after_data_loaded()
 
-            # Show initial data summary
-            with self.load_status_output:
-                logger.info("\nData Loading Summary:")
-                logger.info("   Total records loaded: %s", len(data["jvc"]))
-                logger.info("   Unique samples: %s", data["jvc"]["sample"].nunique())
-                logger.info(
-                    "   Unique cells: %s", data["jvc"].groupby("sample")["cell"].nunique().sum()
-                )
-                logger.info("   Batches: %s", data["jvc"]["batch"].nunique())
-                logger.info("\nData ready for variable assignment and filtering!")
+    def _after_data_loaded(self):
+        """Steps after any successful load (batch or demo): sample selection, summary,
+        variables menu, next tab."""
+        # Set data for sample selection in filter UI
+        data = self.data_manager.get_data()
+        self.filter_ui.set_sample_data(data)
 
-            self._enable_tab(1)
-            self.tabs.selected_index = 1
-            self._make_variables_menu()
+        # Show initial data summary
+        with self.load_status_output:
+            logger.info("\nData Loading Summary:")
+            logger.info("   Total records loaded: %s", len(data["jvc"]))
+            logger.info("   Unique samples: %s", data["jvc"]["sample"].nunique())
+            logger.info(
+                "   Unique cells: %s", data["jvc"].groupby("sample")["cell"].nunique().sum()
+            )
+            logger.info("   Batches: %s", data["jvc"]["batch"].nunique())
+            logger.info("\nData ready for variable assignment and filtering!")
+
+        self._enable_tab(1)
+        self.tabs.selected_index = 1
+        self._make_variables_menu()
 
     def _make_variables_menu(self):
         """Create variables menu using DataManager's summary"""
