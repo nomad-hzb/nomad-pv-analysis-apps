@@ -334,6 +334,22 @@ export HYSPRINT_API_ENDPOINT=/nomad-oasis/api/v1
 
 See `README.md` for the local install and how to supply an access token.
 
+**Outside HZB, against the HZB SE Oasis.** bootstrap applies the HZB proxy by default,
+which does not resolve off-site, so pip and every NOMAD call stall. If the Oasis is directly
+reachable from your machine, set a proxy yourself (bootstrap then leaves the proxy alone) and
+exclude the Oasis host from it; a container or shell `NO_PROXY` is kept:
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9
+export NO_PROXY=nomad-hzb-se.helmholtz-berlin.de,localhost,127.0.0.1
+export NOMAD_CLIENT_ACCESS_TOKEN=<a current token>   # or a NOMAD_TOKEN in secrets.py
+cd apps/<App> && voila <notebook>.ipynb
+```
+
+The dummy proxy makes pip fail fast instead of hanging (installs are skipped while the
+packages are already present). Without a valid token, apps that list batches at startup show
+an empty list with a notice; *Load demo data* works either way.
+
 ## 7. Git cheat sheet for the NORTH terminal
 
 Everything here assumes `HTTPS_PROXY` is exported first on a proxied Oasis
