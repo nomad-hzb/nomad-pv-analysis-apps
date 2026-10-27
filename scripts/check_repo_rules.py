@@ -64,6 +64,10 @@ def check_notebooks(problems):
                     problems.append(("sys.path", rel(notebook), "notebook changes sys.path"))
                 if any(line.lstrip().startswith(("!pip", "%pip")) for line in source.splitlines()):
                     problems.append(("notebook", rel(notebook), "notebook installs packages"))
+            # A saved widget output points at a model id that no longer exists, and a saved
+            # traceback or table ships whatever the last local run showed.
+            if any(c.get("outputs") or c.get("execution_count") is not None for c in code):
+                problems.append(("notebook", rel(notebook), "notebook has saved outputs"))
 
 
 def _parents(tree):
