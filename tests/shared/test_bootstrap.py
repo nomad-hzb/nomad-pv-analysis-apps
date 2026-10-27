@@ -323,3 +323,13 @@ def test_install_tracked_tags_without_table_or_pyproject_does_nothing(bs, app):
     (app.dir / "pyproject.toml").write_text("[project]\nname = 'nmr'\n", encoding="utf-8")
     bs._install_tracked_tags()  # an app without track-tags, e.g. NMR_Analysis
     assert app.lookups == app.pips == []
+
+
+def test_container_no_proxy_is_kept(bs, monkeypatch):
+    for key in ("HTTP_PROXY", "HTTPS_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("HYSPRINT_URL_BASE", raising=False)
+    monkeypatch.setenv("NO_PROXY", "oasis.example.org,localhost")
+    bs._apply_proxy_env({})
+    assert bs.os.environ["NO_PROXY"] == "oasis.example.org,localhost"
+    assert bs.os.environ["HTTPS_PROXY"] == bs.HZB_SE_PROXY
