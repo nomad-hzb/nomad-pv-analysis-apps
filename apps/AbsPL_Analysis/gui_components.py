@@ -5,6 +5,7 @@ When migrating to Panel (or another framework), only this file needs to change.
 """
 
 import base64
+import html
 import io
 import logging
 
@@ -549,11 +550,16 @@ class StatisticsPanel:
                 print("Select a column for the statistics first.")
                 return
 
-            ipydisplay(HTML(f"<h4>Overall statistics for {col}</h4>"))
+            ipydisplay(HTML(f"<h4>Overall statistics for {html.escape(str(col))}</h4>"))
             ipydisplay(self.dm.data[col].describe())
 
             if groupby != "None":
-                ipydisplay(HTML(f"<h4>Statistics for {col} grouped by {groupby}</h4>"))
+                ipydisplay(
+                    HTML(
+                        f"<h4>Statistics for {html.escape(str(col))} grouped by "
+                        f"{html.escape(str(groupby))}</h4>"
+                    )
+                )
                 ipydisplay(self.dm.data.groupby(groupby)[col].describe())
                 try:
                     fig = self.pm.statistics_box(self.dm.data, col, groupby)

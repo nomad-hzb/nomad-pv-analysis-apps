@@ -4,6 +4,7 @@ Manages tab structure, user interactions, and coordination between modules.
 """
 
 import base64
+import html
 import logging
 import warnings
 
@@ -514,7 +515,11 @@ class DoEApplication:
             with self.plot_area:
                 clear_output(wait=True)
                 display(self.current_figure)
-                display(widgets.HTML(f"<p style='color: #c0392b;'>Export failed: {str(e)}</p>"))
+                display(
+                    widgets.HTML(
+                        f"<p style='color: #c0392b;'>Export failed: {html.escape(str(e))}</p>"
+                    )
+                )
 
     # ------------------------------------------------------------------
     # Public API
