@@ -136,6 +136,13 @@ APP_LINKS = {
         # from what it finds there, so no dataset of this h5 decides whether it has anything
         # to show.
     ),
+    "video_visualizer": AppLink(
+        label="Open Video Visualizer",
+        folder="",
+        notebook="video_visualizer.ipynb",
+        # Ungated for the same reason as the Timely Teller: it opens the whole upload and
+        # offers per run only the modes that run holds.
+    ),
 }
 
 LINK_ORDER = (
@@ -145,6 +152,7 @@ LINK_ORDER = (
     "thickness",
     "peak_analyzer",
     "timely_teller",
+    "video_visualizer",
 )
 """Order the links are rendered in. A variant offers all of them except its own (see
 Variant.link_key), so which links a given notebook shows is decided by the h5 in front of it
@@ -161,7 +169,15 @@ and by which notebook it is."""
 #   cuts          display_cuts()
 #   comparison    display_comparison()                   returns two widgets
 #   export        display_export()
-#   timely_teller TIMELYTELLER(...).display()            the only section of an upload variant
+#   timely_teller TIMELYTELLER(...).display()            the section of the timely variant
+#   video_visualizer VIDEOVISUALIZERGUI(...).display()   the section of the video variant
+
+UPLOAD_SOURCE_TIMELY = "timely_teller"
+"""What an upload variant opens on the selected upload folder: the Timely Teller..."""
+
+UPLOAD_SOURCE_VIDEO = "video_visualizer"
+"""...or the Video Visualizer, insitu_analyser's video GUI, which renders combined videos of
+the upload's runs into a new subfolder of it."""
 
 
 @dataclass(frozen=True)
@@ -174,6 +190,9 @@ class Variant:
     selection: str = SELECTION_MEASUREMENT
     """How far the selector row goes, and therefore what a section is built from: an opened h5
     (SELECTION_MEASUREMENT) or an opened upload folder (SELECTION_UPLOAD)."""
+    upload_source: str = UPLOAD_SOURCE_TIMELY
+    """Only read for SELECTION_UPLOAD: which tool opens the upload folder
+    (UPLOAD_SOURCE_TIMELY or UPLOAD_SOURCE_VIDEO)."""
     initialize_overview: bool = True
     """PERFECTPREVIEWER(initialize_overview=...). False skips building the heatmaps and the
     reshaped image, which the two analysis variants do not show and which dominate load
@@ -229,5 +248,16 @@ VARIANTS = {
         # Set for completeness only: an upload variant shows no link row at all, because it
         # has no single file the links could be about.
         link_key="timely_teller",
+    ),
+    "video": Variant(
+        title="ISA Video Visualizer",
+        sections=("video_visualizer",),
+        # The video GUI picks the runs of the upload itself (one video per selected run) and
+        # writes the videos into a new subfolder of that upload, so it needs the folder.
+        selection=SELECTION_UPLOAD,
+        upload_source=UPLOAD_SOURCE_VIDEO,
+        initialize_overview=False,
+        select_from_store=True,
+        link_key="video_visualizer",
     ),
 }

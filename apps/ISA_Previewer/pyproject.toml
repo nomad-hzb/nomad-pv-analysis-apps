@@ -1,6 +1,6 @@
 [project]
 name = "isa-previewer"
-version = "0.4.1"
+version = "0.5.0"
 description = "Preview and analyse in-situ (GIWAXS, optical, logging) HDF5 runs produced by insitu_analyser"
 requires-python = ">=3.10"
 dependencies = [
@@ -11,6 +11,10 @@ dependencies = [
     "ipympl>=0.9",
     "ipywidgets>=8.0",
     "matplotlib>=3.0",
+    # The video notebook: insitu_analyser keeps these in its optional [video] extra (the h5
+    # creation does not need them), and bootstrap installs tracked tags without extras.
+    "opencv-python-headless",
+    "pymediainfo",
 ]
 
 # insitu_analyser follows its newest release tag: bootstrap.py checks the remote on every launch
