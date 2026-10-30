@@ -42,8 +42,8 @@ outside a cell execution is silently dropped under Voila."""
 class Session:
     """One opened selection: the object the sections were built from, and those widgets.
 
-    The source is a PERFECTPREVIEWER for a measurement variant and a TIMELYTELLER for an
-    upload variant; this class only has to hold it alive and let go of it again.
+    The source is a PERFECTPREVIEWER for a measurement variant and a TIMELYTELLER or the video
+    GUI for an upload variant; this class only has to hold it alive and let go of it again.
 
     Exists so a new selection can tear the previous one down completely. clear_output only
     hides widgets, it neither closes them nor frees the figures behind them, and an ISA h5
@@ -56,6 +56,11 @@ class Session:
 
     def dispose(self) -> None:
         """Close every figure and widget this session owns."""
+        # The video GUI may still be rendering in a background thread; let it finish its
+        # current frame before its figures are closed under it.
+        stop = getattr(self.source, "stop", None)
+        if callable(stop):
+            stop()
         # plt.close("all") rather than staticfunctions.close_figs: the previewer does not
         # hand out its figure objects, and by this point every figure alive belongs to the
         # session being dropped.
@@ -257,13 +262,21 @@ def preselect_from_store(
 def open_source(target: str, variant: config.Variant, screenwidth: int):
     """Open what the variant selects and return the object its sections are built from.
 
-    A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant a
-    TIMELYTELLER on the selected upload folder, which scans that folder for h5 files itself.
+    A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant the
+    tool its upload_source names on the selected upload folder (TIMELYTELLER or the video
+    GUI), which scans that folder for h5 files itself.
     """
     # Both constructors report their progress on stdout ("Optical 2 h5 path: ..."), which
     # under Voila renders above the app rather than inside it.
     with data_manager.quiet_stdout():
         if variant.selection == config.SELECTION_UPLOAD:
+            if variant.upload_source == config.UPLOAD_SOURCE_VIDEO:
+                # Imported here, not at the top: the video GUI arrived in a later
+                # insitu_analyser release than the rest, and an older install must not take
+                # the other variants down with it.
+                from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+
+                return VIDEOVISUALIZERGUI(search_dir=target)
             return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
         return PERFECTPREVIEWER(
             target,
@@ -305,6 +318,7 @@ def section_builders(source, variant: config.Variant) -> dict:
         "comparison": lambda: source.display_comparison(),
         "export": lambda: source.display_export(),
         "timely_teller": lambda: source.display(),
+        "video_visualizer": lambda: source.display(),
     }
 
 

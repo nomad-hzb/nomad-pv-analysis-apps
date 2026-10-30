@@ -3,6 +3,7 @@ measurement listing and section assembly. Nothing here talks to NOMAD or opens a
 
 import logging
 import os
+import sys
 
 import pytest
 
@@ -29,9 +30,10 @@ def test_analysis_variants_accept_a_file_from_the_main_previewer(cfg):
     assert cfg.VARIANTS["giwaxs"].select_from_store is True
     assert cfg.VARIANTS["optical"].select_from_store is True
     assert cfg.VARIANTS["timely"].select_from_store is True
+    assert cfg.VARIANTS["video"].select_from_store is True
 
 
-def test_only_the_timely_variant_selects_by_upload(cfg):
+def test_only_the_upload_tools_select_by_upload(cfg):
     """Selection depth decides what a variant opens, so an unknown value would open nothing."""
     known = {cfg.SELECTION_MEASUREMENT, cfg.SELECTION_UPLOAD}
     by_upload = set()
@@ -40,7 +42,19 @@ def test_only_the_timely_variant_selects_by_upload(cfg):
         if variant.selection == cfg.SELECTION_UPLOAD:
             by_upload.add(name)
 
-    assert by_upload == {"timely"}
+    assert by_upload == {"timely", "video"}
+
+
+def test_every_upload_variant_names_a_known_upload_source(cfg):
+    """open_source picks the tool by upload_source; an unknown value would open the wrong one."""
+    known = {cfg.UPLOAD_SOURCE_TIMELY, cfg.UPLOAD_SOURCE_VIDEO}
+    sources = {
+        name: variant.upload_source
+        for name, variant in cfg.VARIANTS.items()
+        if variant.selection == cfg.SELECTION_UPLOAD
+    }
+    assert set(sources.values()) <= known
+    assert sources == {"timely": cfg.UPLOAD_SOURCE_TIMELY, "video": cfg.UPLOAD_SOURCE_VIDEO}
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +222,7 @@ def test_available_links_drops_links_whose_dataset_is_missing(dm, cfg, monkeypat
         cfg.APP_LINKS["thickness"].label,
         cfg.APP_LINKS["peak_analyzer"].label,
         cfg.APP_LINKS["timely_teller"].label,
+        cfg.APP_LINKS["video_visualizer"].label,
     ]
 
 
@@ -356,6 +371,58 @@ def test_open_source_opens_the_upload_folder_for_an_upload_variant(gui, cfg, mon
     gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["timely"], 1200)
 
     assert seen == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv", "screenwidth": 1200}
+
+
+class _FakeVideoGui:
+    """Stands in for VIDEOVISUALIZERGUI: one widget from display(), stop() for a running render."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.stopped = False
+
+    def display(self):
+        return "video_visualizer"
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_open_source_opens_the_video_gui_for_the_video_variant(gui, cfg, monkeypatch):
+    """The video variant hands the upload folder to the video GUI, not to TIMELYTELLER."""
+    module = type(sys)("insitu_analyser.video_visualizer_gui")
+    module.VIDEOVISUALIZERGUI = _FakeVideoGui
+    monkeypatch.setitem(sys.modules, "insitu_analyser.video_visualizer_gui", module)
+    monkeypatch.setattr(gui, "TIMELYTELLER", lambda **kwargs: pytest.fail("opened the teller"))
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert isinstance(source, _FakeVideoGui)
+    assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
+
+
+def test_build_sections_of_the_video_variant_shows_the_video_gui(gui, cfg):
+    assert gui.build_sections(_FakeVideoGui(), cfg.VARIANTS["video"]) == ["video_visualizer"]
+
+
+def test_dispose_stops_a_running_render_before_closing(gui, monkeypatch):
+    """A new selection must not close the figures of a video still rendering in its thread."""
+    order = []
+    source = _FakeVideoGui()
+    source.stop = lambda: order.append("stop")
+    monkeypatch.setattr(gui.plt, "close", lambda which: order.append("close"))
+
+    gui.Session(source, []).dispose()
+
+    assert order == ["stop", "close"]
+
+
+def test_dispose_of_a_source_without_stop_just_closes(gui, monkeypatch):
+    closed = []
+    monkeypatch.setattr(gui.plt, "close", lambda which: closed.append(which))
+
+    gui.Session(_FakeTeller(), []).dispose()
+
+    assert closed == ["all"]
 
 
 def test_open_source_opens_one_file_for_a_measurement_variant(gui, cfg, monkeypatch):

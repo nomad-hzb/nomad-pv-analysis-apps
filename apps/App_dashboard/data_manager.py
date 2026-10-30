@@ -214,6 +214,14 @@ CATEGORIES: dict[str, list[AppEntry]] = {
             "fa-chart-line",
         ),
         AppEntry(
+            "ISA_Previewer",
+            "video_visualizer.ipynb",
+            "Video Visualizer",
+            "Render combined videos of an upload's in-situ runs: heatmaps, 1D curves, "
+            "GIWAXS images, optical spectra and cameras.",
+            "fa-film",
+        ),
+        AppEntry(
             "Thickness_tracer",
             "thickness_tracer.ipynb",
             "Thickness Tracer",

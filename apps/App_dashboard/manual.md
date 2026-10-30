@@ -20,7 +20,7 @@ It does not read or change any data.
    - *Device Characterization*: JV Analysis, EQE Analyzer, MPPT Analyzer, AbsPL Analysis, TRPL
      Analysis, XRD Peak Finder, SEM Crystal Counter, NMR Analysis, Peak Explorer.
    - *In-situ and GIWAXS Data Analysis*: ISA Previewer, GIWAXS Analysis, Optical Analysis, Timely
-     Teller, Thickness Tracer (not implemented yet).
+     Teller, Video Visualizer, Thickness Tracer (not implemented yet).
    - *Utilities & Calculators*: Design of Experiments, Global Analyzer, Hansen Calculator, Wetting
      Envelope, Bitmap Maker.
    - *Projects*: a card per project (for example *Slot-die coater ML*). Click it to see the apps of
