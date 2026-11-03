@@ -22,6 +22,8 @@ from insitu_analyser.utils.nomad_api_calls import (
     get_uploads_with_entry_type,
 )
 
+from hysprint_utils.north import get_current_user  # noqa: F401 (gui_components uses it)
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,11 +132,6 @@ def upload_id_from_path(h5_path: str) -> str | None:
         logger.warning("Path %s is not inside an upload folder", h5_path)
         return None
     return upload_id
-
-
-def get_current_user() -> str:
-    """The NOMAD user the north tool runs as, which every Voila link path contains."""
-    return os.environ.get("NOMAD_CLIENT_USER", "")
 
 
 # ---------------------------------------------------------------------------
