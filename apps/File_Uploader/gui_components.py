@@ -747,9 +747,8 @@ def on_search_field_change(change, batch_ids_list, batch_ids):
     """Filter the batch selector based on the search field value."""
     if change["type"] == "change" and change["name"] == "value":
         term = change["new"].lower()
-        batch_ids.options = (
-            batch_ids_list if not term else [d for d in batch_ids_list if term in d.lower()]
-        )
+        matches = batch_ids_list if not term else [d for d in batch_ids_list if term in d.lower()]
+        batch_ids.options = sorted(matches, key=natural_sort_key)
 
 
 # ---------------------------------------------------------------------------
