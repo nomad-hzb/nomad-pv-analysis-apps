@@ -64,6 +64,8 @@ the correction log. *Refresh* reloads it and *Export CSV* gives a `corrections.c
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
 - Text and number fields are audited, and a correction replaces whole values (it does not search
   inside longer texts). A number field only accepts a number as its corrected value and is
   written back as a number. A field with more than 50 different values is not listed. A field that only some entries

@@ -165,3 +165,11 @@ def test_csv_has_the_sample_id_once_and_no_index_column():
         mgr.to_csv_string().splitlines()[0]
         == "sample_id,measurement,variation,name,angle,intensity"
     )
+
+
+def test_to_csv_string_escapes_text_a_spreadsheet_would_run(loaded_manager):
+    key = next(iter(loaded_manager.data))
+    loaded_manager.data[key]["name"] = "=HYPERLINK(x)"
+    df = pd.read_csv(io.StringIO(loaded_manager.to_csv_string()))
+    assert set(df.loc[df["name"].str.contains("HYPERLINK", na=False), "name"]) == {"'=HYPERLINK(x)"}
+    assert pd.api.types.is_numeric_dtype(df["angle"])

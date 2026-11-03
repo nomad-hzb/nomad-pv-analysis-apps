@@ -57,6 +57,8 @@ Spectra: `wavelength` (nm), `luminescence_flux_density` and `raw_spectrum_counts
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
 - The numbers are shown as stored in NOMAD: the app does not recompute QFLS, quantum yield or
   band gap from the spectra.
 - A measurement without a spectrum in the chosen data column is skipped in the spectral plot.

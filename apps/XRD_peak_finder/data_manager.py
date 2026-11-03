@@ -24,6 +24,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
+from hysprint_utils.table_utils import csv_safe
 
 logger = logging.getLogger(__name__)
 MEASUREMENT_TYPE = ENTRY_TYPES["xrd"]
@@ -234,4 +235,4 @@ class XRDDataManager:
                 rows.append(row)
         if not rows:
             return ""
-        return pd.DataFrame(rows).to_csv(index=False)
+        return csv_safe(pd.DataFrame(rows)).to_csv(index=False)
