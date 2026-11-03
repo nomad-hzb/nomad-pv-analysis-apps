@@ -5,6 +5,7 @@ Thin assembly layer.  Instantiates data managers, builds panels, wires tabs.
 
 from __future__ import annotations
 
+import html
 import logging
 
 import data_manager as dm
@@ -92,7 +93,10 @@ class HansenApp:
             tabs.append(gc.InksPanel(self._ink_dm).widget)
         else:
             tabs.append(
-                widgets.HTML(f"<p style='padding:20px;color:red'>Inks not loaded: {msg_ink}</p>")
+                widgets.HTML(
+                    "<p style='padding:20px;color:red'>Inks not loaded: "
+                    f"{html.escape(str(msg_ink))}</p>"
+                )
             )
         labels.append("Inks")
 

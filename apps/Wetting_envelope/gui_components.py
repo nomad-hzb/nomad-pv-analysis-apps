@@ -451,7 +451,9 @@ class PlotPanel:
     def show_message(self, msg: str) -> None:
         with self._out:
             self._out.clear_output(wait=True)
-            ipydisplay(widgets.HTML(value=f"<p style='color:#b33; padding:12px'>{msg}</p>"))
+            ipydisplay(
+                widgets.HTML(value=f"<p style='color:#b33; padding:12px'>{html.escape(msg)}</p>")
+            )
 
     def clear(self) -> None:
         with self._out:
