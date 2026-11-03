@@ -89,7 +89,7 @@ class GUIComponents:
                     self.app_controller.enable_sample_tab()
 
         try:
-            # get_mppt_batch_ids, not the shared query: archive queries fail for MPPT entries.
+            # get_mppt_batch_ids: the shared batch lookup, with a slower fallback for MPPT.
             batch_widget = create_batch_selection(
                 self.data_manager.url,
                 self.data_manager.token,
