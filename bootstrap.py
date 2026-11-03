@@ -107,7 +107,9 @@ def _apply_proxy_env(config: dict[str, str]) -> None:
     if https_proxy:
         os.environ["HTTPS_PROXY"] = https_proxy
 
-    no_proxy = config.get("NO_PROXY")
+    # Container variables win, as for every other setting: a NO_PROXY the container already
+    # sets is kept, not overwritten.
+    no_proxy = os.environ.get("NO_PROXY") or config.get("NO_PROXY")
     if no_proxy is None:
         # Loopback only. The Oasis host is deliberately NOT excluded: a
         # container that needs a proxy at all usually has no direct route to

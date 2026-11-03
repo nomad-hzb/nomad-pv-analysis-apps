@@ -114,35 +114,55 @@ class PlotManager:
         for col in numeric_columns:
             splom_data[col] = pd.to_numeric(splom_data[col], errors="coerce")
 
-        # Create SPLOM
-        fig = go.Figure(
-            data=go.Splom(
-                dimensions=[
-                    {"label": var.name, "values": splom_data[var.name]} for var in numeric_vars
-                ],
-                text=data.index,
-                marker=dict(
-                    color=self.colors["primary"],  # Fixed color
-                    line=dict(color="white", width=0.8),
-                    size=5,
-                ),
-            )
+        # Built from ordinary 2D subplots, not go.Splom: Splom needs WebGL, which some browsers
+        # (hardware acceleration off, remote desktops) do not have. Diagonal: each variable's
+        # histogram; elsewhere: row variable against column variable.
+        n_vars = len(numeric_vars)
+        fig = make_subplots(
+            rows=n_vars, cols=n_vars, horizontal_spacing=0.03, vertical_spacing=0.03
         )
+        hover_text = [str(i) for i in data.index]
+        for row, y_var in enumerate(numeric_columns, start=1):
+            for col, x_var in enumerate(numeric_columns, start=1):
+                if row == col:
+                    trace = go.Histogram(
+                        x=splom_data[x_var], marker_color=self.colors["primary"], nbinsx=10
+                    )
+                else:
+                    trace = go.Scatter(
+                        x=splom_data[x_var],
+                        y=splom_data[y_var],
+                        mode="markers",
+                        text=hover_text,
+                        hovertemplate=f"{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>run %{{text}}"
+                        "<extra></extra>",
+                        marker=dict(
+                            color=self.colors["primary"],  # Fixed color
+                            line=dict(color="white", width=0.8),
+                            size=5,
+                        ),
+                    )
+                fig.add_trace(trace, row=row, col=col)
+                if row == n_vars:
+                    fig.update_xaxes(title_text=x_var, row=row, col=col)
+                if col == 1:
+                    fig.update_yaxes(title_text=y_var, row=row, col=col)
 
         # Medium sizing
-        n_vars = len(numeric_vars)
         plot_size = max(180, min(250, 900 // n_vars))
         total_size = plot_size * n_vars
 
         fig.update_layout(
             title={
-                "text": f"Scatter Plot Matrix (SPLOM) - {algorithm}",
+                "text": f"Scatter Plot Matrix - {algorithm}",
                 "x": 0.5,
                 "font": {"size": 16},
             },
             height=min(800, total_size + 100),
             width=min(800, total_size + 100),
             plot_bgcolor="#fafafa",
+            showlegend=False,
+            bargap=0.05,
             **self.default_layout,
         )
 
