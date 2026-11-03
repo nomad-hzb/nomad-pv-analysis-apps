@@ -70,8 +70,9 @@ def initialize_ui(
     # below needs a search handler of its own. Two handlers made the app's unsorted one win.
     own_search = False
     try:
+        # One batch at a time: a single-choice list.
         batch_selection_container = create_batch_selection(
-            URL_API, TOKEN, lambda selector: on_load_button_clicked(None)
+            URL_API, TOKEN, lambda selector: on_load_button_clicked(None), multiple=False
         )
         # Remove the internal "Load Data" button from the container — we
         # display a separate load_button below to keep the layout consistent
@@ -88,8 +89,9 @@ def initialize_ui(
             layout=widgets.Layout(width="400px"),
         )
         own_search = True
-        _bids_fb = widgets.SelectMultiple(
+        _bids_fb = widgets.Select(
             options=sorted(batch_ids_list, key=natural_sort_key),
+            value=None,
             layout=widgets.Layout(width="400px", height="200px"),
         )
         batch_selection_container = widgets.VBox([_search_fb, _bids_fb])

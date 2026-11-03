@@ -29,10 +29,11 @@ def create_batch_selection(
     filter_label=None,
     filter_entry_type=None,
     filter_function=None,
+    multiple=True,
 ):
     """Batch search field, batch list and Load Data button, as one VBox.
 
-    children[0] is the search field and children[1] the SelectMultiple (apps rely on both).
+    children[0] is the search field and children[1] the batch list (apps rely on both).
 
     filter_label: the app's technique as users know it ("TRPL"). With it, a "Show TRPL only"
     button sits directly under the list, above Load Data, the same in every app. It narrows
@@ -40,6 +41,8 @@ def create_batch_selection(
     The search field always searches the list that is shown.
     filter_entry_type: the NOMAD entry type those batches must contain.
     filter_function: optional () -> batch ids, for an app that finds them another way.
+    multiple: False gives a single-choice list (widgets.Select, whose value is one batch id or
+    None) for an app that works on one batch at a time.
     """
     # Get batch IDs. Without network or a valid token the app must still start, so its
     # demo mode stays reachable: the panel shows the error and an empty list instead.
@@ -55,10 +58,12 @@ def create_batch_selection(
     shown = {"ids": batch_ids_list, "filtered": False}
 
     # Create widgets using WidgetFactory for consistency
-    batch_ids_selector = widgets.SelectMultiple(
+    selector_kwargs = {} if multiple else {"value": None}  # Select would preselect the first
+    batch_ids_selector = (widgets.SelectMultiple if multiple else widgets.Select)(
         options=batch_ids_list,
         description="Batches",
         layout=widgets.Layout(width=PANEL_WIDTH, height="300px"),
+        **selector_kwargs,
     )
 
     search_field = widgets.Text(description="Search Batch")
@@ -77,7 +82,7 @@ def create_batch_selection(
     search_field.observe(on_search_enter, names="value")
     load_batch_button.on_click(lambda b: load_data_function(batch_ids_selector))
 
-    # Return the widget container. children[1] stays the SelectMultiple (apps rely on it).
+    # Return the widget container. children[1] stays the batch list (apps rely on it).
     children = [search_field, batch_ids_selector]
     if filter_label:
         children.append(
