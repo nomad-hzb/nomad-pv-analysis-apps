@@ -18,8 +18,8 @@ Values the measurement did not record are left empty.
 ## Step by step
 
 1. **Select the batches.** Type in *Search Batch* to narrow the list, select one or more
-   batches and click *Load Data*. *Show EQE batches* keeps only the batches that have EQE
-   measurements. *Load demo data* loads a small bundled data set without NOMAD.
+   batches and click *Load Data*. *Show EQE only*, under the batch list, keeps only the batches with EQE
+   measurements (this can take a minute); *Show all batches* brings the rest back. *Load demo data* loads a small bundled data set without NOMAD.
    Samples with no valid EQE curve are left out.
 2. **Dataset Names** (tab). At the top two tables: a summary per sample (minimum, mean,
    standard deviation and maximum of band gap, Jsc, J0rad, Voc rad, Urbach energy and light

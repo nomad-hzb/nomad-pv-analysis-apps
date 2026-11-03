@@ -14,9 +14,7 @@ import plot_manager as pm
 from data_manager import MEASUREMENT_TYPE
 from IPython.display import display as ipydisplay
 
-from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
-from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
 
 logger = logging.getLogger(__name__)
@@ -26,65 +24,20 @@ logger = logging.getLogger(__name__)
 
 
 class BatchPanel:
-    """
-    Wraps create_batch_selection and adds an optional NMR-specific filter button.
-
-    app.py passes on_load (a callback) which receives the SelectMultiple widget.
-    """
+    """The shared batch panel with its "Show NMR only" filter. app.py passes on_load (a
+    callback) which receives the SelectMultiple widget."""
 
     def __init__(self, url: str, token: str, on_load) -> None:
-        self._url = url
-        self._token = token
-
-        self._batch_widget = create_batch_selection(url, token, on_load)
-        # children[1] is the SelectMultiple per batch_selection.py contract
-        self._selector: widgets.SelectMultiple = self._batch_widget.children[1]
-
-        total = len(self._selector.options)
-
-        self._filter_btn = WidgetFactory.create_button(
-            description="Shown NMR batches",
-            button_style="info",
-            tooltip="Queries the API to find which batches have NMR measurements. May take a moment.",  # noqa: E501
-        )
+        # status_out carries the app's load messages, below the shared panel.
         self.status_out = WidgetFactory.create_output(min_height="standard")
-        self._total_batches = total
-
-        self._filter_btn.on_click(self._on_filter_clicked)
-
         self.widget = widgets.VBox(
             [
-                widgets.HTML(
-                    f"<p>Select from all {total} available batches, "
-                    "or filter to batches with confirmed NMR data:</p>"
+                create_batch_selection(
+                    url, token, on_load, filter_label="NMR", filter_entry_type=MEASUREMENT_TYPE
                 ),
-                self._filter_btn,
-                self._batch_widget,
                 self.status_out,
             ]
         )
-
-    def _on_filter_clicked(self, _b) -> None:
-        self._filter_btn.disabled = True
-        self._filter_btn.description = "Filtering in progress..."
-
-        with self.status_out:
-            self.status_out.clear_output(wait=True)
-            ErrorHandler.log_info("Querying API for batches with NMR data...", self.status_out)
-            try:
-                valid = get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
-                self._selector.options = valid
-                self._filter_btn.description = (
-                    f"Done: {len(valid)} of {self._total_batches} batches have NMR data"
-                )
-                ErrorHandler.log_success(
-                    f"Found {len(valid)} batches with NMR data.",
-                    self.status_out,
-                )
-            except Exception as exc:  # noqa: BLE001
-                ErrorHandler.log_error("Filter failed", exc, self.status_out, show_traceback=True)
-                self._filter_btn.disabled = False
-                self._filter_btn.description = "Retry filter"
 
 
 # ---------------------------------------------------------------------------

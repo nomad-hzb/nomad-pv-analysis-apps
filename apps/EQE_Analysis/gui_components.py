@@ -12,9 +12,7 @@ import plot_manager
 from data_manager import MEASUREMENT_TYPE  # noqa: F401
 from IPython.display import HTML
 from IPython.display import display as ipydisplay
-from natsort import natsorted
 
-from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
@@ -35,26 +33,12 @@ _NAME_FUNCTIONS: dict[str, object] = {
 
 
 class BatchPanel:
+    """The shared batch panel with its "Show EQE only" filter."""
+
     def __init__(self, url: str, token: str, on_load, measurement_type: str):
-        self._url = url
-        self._token = token
-        self._measurement_type = measurement_type
-
-        self._batch_widget = create_batch_selection(url, token, on_load)
-
-        # The SelectMultiple is the second child of the VBox returned by create_batch_selection
-        self._selector = self._batch_widget.children[1]
-
-        filter_btn = WidgetFactory.create_button("Show EQE batches", button_style="warning")
-        filter_btn.on_click(self._apply_filter)
-
-        self.widget = widgets.VBox([self._batch_widget, filter_btn])
-
-    def _apply_filter(self, _):
-        filtered = natsorted(
-            get_all_batches_wth_data(self._url, self._token, self._measurement_type)
+        self.widget = create_batch_selection(
+            url, token, on_load, filter_label="EQE", filter_entry_type=measurement_type
         )
-        self._selector.options = filtered
 
 
 # ---------------------------------------------------------------------------
