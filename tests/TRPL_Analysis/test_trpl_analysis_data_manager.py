@@ -403,3 +403,16 @@ def test_upload_fallback_reads_every_page(monkeypatch):
 
     assert "U149" in seen_uploads  # an upload from the second page of batch entries
     assert sorted(res) == [f"S{i}" for i in range(5)]  # TRPL entries from all three pages
+
+
+def test_a_fit_that_underflows_to_zero_gives_nan_without_warnings():
+    """A fast decay on a long time axis: the fitted curve reaches exactly 0, where tau_diff is
+    undefined. That stays NaN, and numpy's divide-by-zero warnings no longer reach the app."""
+    import warnings
+
+    time, counts = _single_exponential(tau_pl=1e-9, n=4000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        _t, tau_diff, _density = trpl.differential_lifetime(time, counts, 1.0, 1e17, 1)
+    assert np.isnan(tau_diff[-1])
+    assert np.nanmedian(tau_diff[:20]) == pytest.approx(2e-9, rel=0.05)
