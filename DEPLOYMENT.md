@@ -148,7 +148,7 @@ both places.
 ## 3. Create `oasis_local_config.py`
 
 Create it at the repo root of the upload, next to `bootstrap.py`. It is
-gitignored (same pattern as `secrets.py`) because it describes one deployment,
+gitignored (same pattern as `nomad_secrets.py`) because it describes one deployment,
 not the repo - it travels with the upload, and is not committed upstream.
 
 Every uppercase string assignment in it is exported as an environment variable
@@ -342,7 +342,7 @@ exclude the Oasis host from it; a container or shell `NO_PROXY` is kept:
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9
 export NO_PROXY=nomad-hzb-se.helmholtz-berlin.de,localhost,127.0.0.1
-export NOMAD_CLIENT_ACCESS_TOKEN=<a current token>   # or a NOMAD_TOKEN in secrets.py
+export NOMAD_CLIENT_ACCESS_TOKEN=<a current token>   # or a NOMAD_TOKEN in nomad_secrets.py
 cd apps/<App> && voila <notebook>.ipynb
 ```
 
@@ -406,7 +406,7 @@ the other branch, possibly as a conflict.
 
 ### What never needs protecting
 
-`oasis_local_config.py` and `secrets.py` are gitignored. They survive
+`oasis_local_config.py` and `nomad_secrets.py` (old name `secrets.py`) are gitignored. They survive
 `checkout`, `pull`, `restore` and `stash` untouched - create them once on the
 Oasis and they stay put across every branch switch.
 
