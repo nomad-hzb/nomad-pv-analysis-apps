@@ -33,6 +33,7 @@ from utils import (
 
 from hysprint_utils.auth_manager import AuthenticationManager
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.manual import manual_panel
 
@@ -236,7 +237,11 @@ class JVAnalysisApp:
                 url = self.auth_manager.url
                 token = self.auth_manager.current_token
                 batch_selection_widget = create_batch_selection(
-                    url, token, self._load_data_from_selection
+                    url,
+                    token,
+                    self._load_data_from_selection,
+                    filter_label="JV",
+                    filter_entry_type=ENTRY_TYPES["jv"],
                 )
                 display(batch_selection_widget)
             except Exception as e:

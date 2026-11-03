@@ -39,8 +39,9 @@ separately.
 ## Step by step
 
 1. **Get images.** Choose one of:
-   - *From NOMAD*: select batches and click *Load Data*. *Show only batches with SEM images*
-     shortens the list.
+   - *From NOMAD*: select batches and click *Load Data*. *Show SEM only*, under the batch
+     list, keeps only the batches with SEM images (this can take a minute); *Show all
+     batches* brings the rest back.
    - *Upload TIFFs*: choose the files, then *Add and analyse*.
    - *Load demo data*: three synthetic images, no NOMAD needed.
 

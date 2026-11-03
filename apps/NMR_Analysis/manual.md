@@ -17,8 +17,8 @@ the sample has several.
 
 ## Step by step
 
-1. **Select the batches.** *Shown NMR batches* narrows the list to batches that have NMR
-   measurements (this can take a moment). Select one or more and click *Load Data*. *Load demo
+1. **Select the batches.** *Show NMR only*, under the batch list, keeps only the batches with NMR
+   measurements (this can take a minute); *Show all batches* brings the rest back. Select one or more and click *Load Data*. *Load demo
    data* uses a small bundled data set without NOMAD. The message says how many spectra were
    loaded.
 2. **Overlay – All NMR Spectra.** All loaded spectra in one plot (chemical shift in ppm, high

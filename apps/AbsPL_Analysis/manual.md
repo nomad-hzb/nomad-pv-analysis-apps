@@ -28,8 +28,8 @@ Spectra: `wavelength` (nm), `luminescence_flux_density` and `raw_spectrum_counts
 ## Step by step
 
 1. **Choose batches.** Pick one or more batches in the list (type in *Search Batch* to narrow it).
-   *Show only batches with EQE data* keeps only the batches that have AbsPL entries (the button
-   label says EQE, it filters for AbsPL). Click *Load Data*.
+   *Show AbsPL only*, under the batch list, keeps only the batches with AbsPL
+   measurements (this can take a minute); *Show all batches* brings the rest back. Click *Load Data*.
 2. **Check the load message.** It tells how many rows were loaded, or that no AbsPL measurement
    was found in the batches. *Load demo data* loads a small bundled data set without NOMAD.
 3. **Data Summary** shows count, mean, spread and quartiles of every numeric column.

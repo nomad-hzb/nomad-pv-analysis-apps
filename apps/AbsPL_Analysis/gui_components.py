@@ -10,12 +10,9 @@ import logging
 
 import ipywidgets as widgets
 import pandas as pd
-from data_manager import MEASUREMENT_TYPE
 from IPython.display import HTML
 from IPython.display import display as ipydisplay
-from natsort import natsorted
 
-from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
@@ -29,87 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 class BatchPanel:
-    """
-    Batch selection UI that wraps the existing create_batch_selection utility
-    and adds an optional AbsPL-specific filter button on top.
-    """
+    """The shared batch panel with its "Show AbsPL only" filter."""
 
     def __init__(self, url: str, token: str, on_load, measurement_type: str):
-        self._url = url
-        self._token = token
-        self._measurement_type = measurement_type
-
-        self._batch_widget = create_batch_selection(url, token, on_load)
-
-        # The SelectMultiple is the second child of the VBox returned by create_batch_selection
-        self._selector = self._batch_widget.children[1]
-
-        filter_btn = WidgetFactory.create_button(
-            "Show only batches with EQE data", button_style="warning"
+        self.widget = create_batch_selection(
+            url, token, on_load, filter_label="AbsPL", filter_entry_type=measurement_type
         )
-        filter_btn.on_click(self._apply_filter)
-
-        self._container = widgets.VBox([self._batch_widget, filter_btn])
-
-    def _apply_filter(self, _):
-        filtered = natsorted(
-            get_all_batches_wth_data(self._url, self._token, self._measurement_type)
-        )
-        self._selector.options = filtered
-
-    def _build(self):
-        base = create_batch_selection(self._url, self._token, self._on_load)
-
-        # grab the SelectMultiple so we can update its options after filtering
-        self._batch_selector = next(
-            (c for c in base.children if isinstance(c, widgets.SelectMultiple)), None
-        )
-        total = len(self._batch_selector.options) if self._batch_selector else 0
-
-        self._filter_btn = WidgetFactory.create_button(
-            description=f"Filter: show only batches with AbsPL data ({total} total)",
-            button_style="info",
-            min_width=False,
-        )
-        self._filter_btn.layout.width = "450px"
-        self._filter_status = WidgetFactory.create_output(border=False)
-        self._filter_btn.on_click(self._run_filter)
-        self._total = total
-
-        self._container = widgets.VBox(
-            [
-                widgets.HTML(
-                    f"<p>Select from all {total} available batches, "
-                    "or use the filter button to narrow to batches with AbsPL data:</p>"
-                ),
-                self._filter_btn,
-                self._filter_status,
-                base,
-            ]
-        )
-
-    def _run_filter(self, b):
-        self._filter_btn.disabled = True
-        self._filter_btn.description = "Filtering in progress..."
-
-        logger.info("Finding batches with AbsPL data...")
-
-        try:
-            valid = get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
-            if self._batch_selector:
-                self._batch_selector.options = natsorted(valid)
-
-            logger.info("Done: %d of %d batches have AbsPL data.", len(valid), self._total)
-            self._filter_btn.description = "Done: %d batches with AbsPL data" % len(valid)
-
-        except Exception as e:
-            logger.error("Error during filtering: %s", e)
-            self._filter_btn.disabled = False
-            self._filter_btn.description = "Filter: show only batches with AbsPL data (retry)"
-
-    @property
-    def widget(self):
-        return self._container
 
 
 # ---------------------------------------------------------------------------

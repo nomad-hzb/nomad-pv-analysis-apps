@@ -20,7 +20,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 
 
 def _html_float_format(value):
@@ -65,13 +65,6 @@ class GUIComponents:
         filter_status = widgets.Output(layout={"border": "1px solid #ccc", "padding": "10px"})
         load_status = widgets.Output(layout={"border": "1px solid #ccc", "padding": "10px"})
 
-        filter_button = widgets.Button(
-            description="Show MPPT Batches",
-            button_style="info",
-            tooltip="Narrow the list to only batches that contain MPPT measurements",
-            layout=widgets.Layout(width="200px"),
-        )
-
         def on_load(selector):
             if not selector.value:
                 with load_status:
@@ -95,14 +88,17 @@ class GUIComponents:
                     self.app_controller.enable_sample_tab()
 
         try:
+            # get_mppt_batch_ids, not the shared query: archive queries fail for MPPT entries.
             batch_widget = create_batch_selection(
-                self.data_manager.url, self.data_manager.token, on_load
+                self.data_manager.url,
+                self.data_manager.token,
+                on_load,
+                filter_label="MPPT",
+                filter_function=self.data_manager.get_mppt_batch_ids,
             )
-            selector = batch_widget.children[1]  # SelectMultiple is children[1]
         except Exception as exc:
             msg = str(exc)
             batch_widget = widgets.VBox([widgets.HTML("<p>Batch list unavailable.</p>")])
-            selector = widgets.SelectMultiple()
             with filter_status:
                 if "401" in msg or "Unauthorized" in msg:
                     print("❌ Authentication failed (401) — token invalid or expired.")
@@ -110,33 +106,9 @@ class GUIComponents:
                 else:
                     print(f"❌ Could not load batch list: {exc}")
 
-        def apply_mppt_filter(b):
-            filter_button.disabled = True
-            filter_button.description = "🔄 Filtering..."
-            with filter_status:
-                filter_status.clear_output(wait=True)
-                try:
-                    mppt_batches = self.data_manager.get_mppt_batch_ids()
-                    selector.options = mppt_batches
-                    if mppt_batches:
-                        print(f"✅ Showing {len(mppt_batches)} batches with MPPT data")
-                    else:
-                        print("⚠️ No MPPT batches found on this server.")
-                except Exception as exc:
-                    msg = str(exc)
-                    if "401" in msg or "Unauthorized" in msg:
-                        print("❌ Authentication failed (401) — token invalid or expired.")
-                    else:
-                        print(f"❌ Could not filter batches: {exc}")
-            filter_button.description = "Show MPPT Batches"
-            filter_button.disabled = False
-
-        filter_button.on_click(apply_mppt_filter)
-
         return widgets.VBox(
             [
                 widgets.HTML("<h3>Batch Selection</h3>"),
-                filter_button,
                 batch_widget,
                 filter_status,
                 load_status,

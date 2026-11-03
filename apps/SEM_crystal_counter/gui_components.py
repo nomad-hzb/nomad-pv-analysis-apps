@@ -20,7 +20,6 @@ from data_manager import CROSS, HOLE, MEASUREMENT_TYPE, SHEETS, TOP, SemDataMana
 from IPython.display import HTML
 from IPython.display import display as ipydisplay
 
-from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
@@ -40,47 +39,20 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Sources
 # ---------------------------------------------------------------------------
 class BatchFilterPanel:
-    """Wraps create_batch_selection with a button that keeps only batches with SEM images."""
+    """The shared batch panel with its "Show SEM only" filter."""
 
     def __init__(self, url: str, token: str, on_load) -> None:
-        self._url = url
-        self._token = token
-        self._status_out = widgets.Output()
-        self._filter_btn = WidgetFactory.create_button(
-            "Show only batches with SEM images", button_style="info"
-        )
-        self._filter_btn.on_click(self._do_filter)
-        self._batch_widget = create_batch_selection(url, token, on_load)
-        self._batch_selector = next(
-            (c for c in self._batch_widget.children if isinstance(c, widgets.SelectMultiple)),
-            None,
-        )
-        total = len(self._batch_selector.options) if self._batch_selector else "?"
         self.widget = widgets.VBox(
             [
                 widgets.HTML(
-                    f"<p>Select batches (of {total}); every SEM image of their samples is "
-                    "downloaded and analysed.</p>"
+                    "<p>Every SEM image of the selected batches' samples is downloaded and "
+                    "analysed.</p>"
                 ),
-                self._filter_btn,
-                self._status_out,
-                self._batch_widget,
+                create_batch_selection(
+                    url, token, on_load, filter_label="SEM", filter_entry_type=MEASUREMENT_TYPE
+                ),
             ]
         )
-
-    def _do_filter(self, _b) -> None:
-        self._filter_btn.disabled = True
-        self._filter_btn.description = "Filtering..."
-        try:
-            valid = sorted(get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE))
-        except Exception as exc:
-            ErrorHandler.log_error("Could not query batches", exc, output_widget=self._status_out)
-            self._filter_btn.description = "Show only batches with SEM images"
-            self._filter_btn.disabled = False
-            return
-        if self._batch_selector is not None:
-            self._batch_selector.options = valid
-        self._filter_btn.description = f"{len(valid)} batches with SEM images"
 
 
 class UploadPanel:
