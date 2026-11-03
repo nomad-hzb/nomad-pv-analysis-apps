@@ -2,6 +2,7 @@
 Random Forest, Bayesian optimization and the experimental tools. A mixin: it relies on the
 attributes SampleDataExplorer sets up (gui, data_manager, analysis dataframes)."""
 
+import html
 import logging
 
 import experimental_analysis as experimental
@@ -30,6 +31,25 @@ def _format_cell(value) -> str:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return f"{value:.3g}"
     return str(value)
+
+
+def _scrollable_table_html(header: list[str], rows: list[list[str]]) -> str:
+    """An HTML table in a box that scrolls sideways: a Markdown table wider than the output
+    area was cut off on the right. Cells stay on one line, so columns keep their width."""
+    cell = "padding:4px 10px;border-bottom:1px solid #ddd;white-space:nowrap;text-align:right"
+    head = "".join(
+        f"<th style='{cell};border-bottom:2px solid #999'>{html.escape(str(h))}</th>"
+        for h in header
+    )
+    body = "".join(
+        "<tr>" + "".join(f"<td style='{cell}'>{html.escape(str(v))}</td>" for v in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        "<div style='overflow-x:auto;max-width:100%;margin:6px 0 12px'>"
+        f"<table style='border-collapse:collapse'><thead><tr>{head}</tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
 
 
 def _missing_note(result: dict) -> str:
@@ -539,21 +559,21 @@ class AnalysisHandlersMixin:
             ("EI x P(feasible)" if has_constraints else "Expected improvement") + log_units,
             *(["P(feasible)"] if has_constraints else []),
         ]
-        table_lines = [
-            "| " + " | ".join(header_cols) + " |",
-            "|" + "---|" * len(header_cols),
-        ]
+        table_rows = []
         integer_set = set(result["integer_cols"])
         for _, row in suggestions.iterrows():
             values = [
                 f"{int(row[c])}" if c in integer_set else _format_cell(row[c])
                 for c in display_feature_cols
             ]
-            table_lines.append(
-                "| " + " | ".join(values) + f" | {row[pred_col]:.4g} "
-                f"| {row['predicted_low']:.3g} to {row['predicted_high']:.3g} "
-                f"| {row['expected_improvement']:.3g} |"
-                + (f" {row['probability_feasible']:.2f} |" if has_constraints else "")
+            table_rows.append(
+                values
+                + [
+                    f"{row[pred_col]:.4g}",
+                    f"{row['predicted_low']:.3g} to {row['predicted_high']:.3g}",
+                    f"{row['expected_improvement']:.3g}",
+                ]
+                + ([f"{row['probability_feasible']:.2f}"] if has_constraints else [])
             )
 
         steps_estimate = ml.estimate_max_bo_steps(result["n_features"])
@@ -630,13 +650,14 @@ class AnalysisHandlersMixin:
             f"- {steps_estimate['rationale']}\n"
             + low_ei_note
             + "- Listed in the order they were picked as one batch (see 'How are the "
-            "suggestions calculated?' above).\n\n" + "\n".join(table_lines)
+            "suggestions calculated?' above).\n"
         )
         self.plot_manager.create_bo_suggestions_plot(suggestions, target)
         self.plot_manager.create_bo_loo_plot(result["loo_df"], target, result["loo_r2"], log_target)
         # Swap the Processing banner for the results in one step.
         clear_output(wait=True)
         ipy_display(Markdown(summary))
+        ipy_display(HTML(_scrollable_table_html(header_cols, table_rows)))
 
     def _refresh_experimental_options(self):
         """Keep the Experimental tab's dropdowns in sync with the checked columns

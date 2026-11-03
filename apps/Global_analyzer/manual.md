@@ -126,7 +126,7 @@ Choose a *Target* and *Goal* (maximize or minimize), the number of *Suggestions*
 scale target* and *Correct for batch offsets*, and click *Suggest Next Experiments*. A Gaussian
 process is fitted to your samples; 8192 candidates inside the search space are scored by expected
 improvement and a batch of suggestions is picked (Kriging Believer method), with the predicted
-value and its range. A model check plot (leave-one-sample-out) tells how far the model can be
+value and its range. With many parameters the table of suggestions scrolls sideways. A model check plot (leave-one-sample-out) tells how far the model can be
 trusted. Optional parts: *Search space* (range, integer or fixed value per parameter),
 *Constraints* (up to two other results that must stay within a limit) and *Second objective*
 (trade off against another result). It is a single-shot suggester: it does not remember earlier
