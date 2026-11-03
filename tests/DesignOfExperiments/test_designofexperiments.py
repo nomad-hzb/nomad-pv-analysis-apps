@@ -272,6 +272,16 @@ def test_splom_returns_figure(two_var_data, two_vars):
     assert isinstance(fig, go.Figure)
 
 
+def test_splom_needs_no_webgl(two_var_data, two_vars):
+    """The scatter matrix is drawn from 2D subplots (histograms on the diagonal), so it shows
+    in browsers without WebGL, where go.Splom only showed "WebGL is not supported"."""
+    fig = PlotManager().create_plot("splom", two_var_data, two_vars)
+    assert [t.type for t in fig.data] == ["histogram", "scatter", "scatter", "histogram"]
+    x_vs_y = fig.data[2]  # row 2 (y) against column 1 (x)
+    assert list(x_vs_y.x) == list(two_var_data["x"]) and list(x_vs_y.y) == list(two_var_data["y"])
+    assert fig.layout.xaxis3.title.text == "x" and fig.layout.yaxis3.title.text == "y"
+
+
 def test_parallel_returns_figure(two_var_data, two_vars):
     pm = PlotManager()
     fig = pm.create_plot("parallel", two_var_data, two_vars)
