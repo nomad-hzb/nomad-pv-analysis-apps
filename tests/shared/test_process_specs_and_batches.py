@@ -64,3 +64,23 @@ def test_batch_selection_hides_parent_batches_and_scales(monkeypatch):
     assert "HZB_A_1" not in options and "HZB_A_2" not in options
     assert {"HZB_A", "HZB_B_1"} <= set(options)
     assert len(options) == 5000 + 2
+
+
+def test_batch_selection_survives_an_unreachable_nomad():
+    """No network or no valid token: the app still starts (demo mode stays reachable), the
+    selector stays children[1] and the panel says why the list is empty."""
+    import requests
+
+    from hysprint_utils import batch_selection
+
+    def fail(url, token):
+        raise requests.ConnectionError("proxy unreachable")
+
+    original = batch_selection.get_batch_ids
+    batch_selection.get_batch_ids = fail
+    try:
+        box = batch_selection.create_batch_selection("u", "t", lambda w: None)
+    finally:
+        batch_selection.get_batch_ids = original
+    assert list(box.children[1].options) == []
+    assert "Could not load the batch list" in box.children[-1].value
