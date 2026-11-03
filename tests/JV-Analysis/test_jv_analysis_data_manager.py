@@ -122,6 +122,19 @@ def test_load_offline_returns_true(mock_auth_manager):
     assert len(dm.data["jvc"]) == 2
 
 
+def test_load_offline_forgets_the_previous_load(mock_auth_manager):
+    """Demo data after a real load: the earlier batch's filtered data and curves (which the
+    plots and the filtered downloads read) must not survive next to the demo data."""
+    dm = DataManager(mock_auth_manager)
+    dm.data = {"jvc": "old", "filtered": "old", "filtered_curves": "old", "junk": "old"}
+    dm.filtered_data = dm.omitted_data = "old"
+    dm.filter_parameters = ["old"]
+    assert dm.load_offline(FIXTURE_PATH) is True
+    assert set(dm.data) == {"jvc", "curves"}
+    assert dm.filtered_data is None and dm.omitted_data is None
+    assert dm.filter_parameters == []
+
+
 def test_load_offline_returns_false_for_empty_fixture(tmp_path, mock_auth_manager):
     fx = tmp_path / "empty.json"
     fx.write_text(json.dumps({"sample_ids": [], "measurements": {}, "descriptions": {}}))

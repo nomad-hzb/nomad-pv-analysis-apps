@@ -439,3 +439,21 @@ def test_an_opened_sample_button_is_darker_than_a_closed_one():
     closed = gc.create_sample_button("S1", "d")
     assert closed.style.button_color is None
     assert gc.OPEN_SAMPLE_BUTTON_COLOR != "#eeeeee"
+
+
+def test_fallback_batch_search_keeps_natural_order():
+    """The fallback search (used only when the shared panel cannot be built) sorts its matches
+    like the shared one: HZB_2 before HZB_10, not the order NOMAD returned them in."""
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    path = Path(__file__).parents[2] / "apps" / "File_Uploader" / "gui_components.py"
+    spec = importlib.util.spec_from_file_location("file_uploader_gui_components", path)
+    gui = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gui)
+
+    selector = SimpleNamespace(options=[])
+    batches = ["HZB_10", "Other_1", "HZB_2", "HZB_1"]
+    gui.on_search_field_change({"type": "change", "name": "value", "new": "hzb"}, batches, selector)
+    assert list(selector.options) == ["HZB_1", "HZB_2", "HZB_10"]

@@ -8,6 +8,7 @@ __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
 import base64
+import html
 import io
 import logging
 import os
@@ -28,6 +29,7 @@ from utils import (
     dated_filename,
     flip_current_density_curve_rows,
     flip_current_density_sign,
+    measurement_link_html,
     save_combined_excel_data,
 )
 
@@ -262,6 +264,8 @@ class JVAnalysisApp:
                 print("Demo data loaded: %d JV records." % n)
             else:
                 print("Demo fixture contained no valid JV measurements.")
+        if success:
+            self._after_data_loaded()
 
     def _load_data_from_selection(self, batch_selector):
         """Load data from batch selection with user feedback"""
@@ -270,24 +274,39 @@ class JVAnalysisApp:
         success = self.data_manager.load_batch_data(batch_ids, self.load_status_output)
 
         if success:
-            # Set data for sample selection in filter UI
-            data = self.data_manager.get_data()
-            self.filter_ui.set_sample_data(data)
+            self._after_data_loaded()
 
-            # Show initial data summary
-            with self.load_status_output:
-                logger.info("\nData Loading Summary:")
-                logger.info("   Total records loaded: %s", len(data["jvc"]))
-                logger.info("   Unique samples: %s", data["jvc"]["sample"].nunique())
-                logger.info(
-                    "   Unique cells: %s", data["jvc"].groupby("sample")["cell"].nunique().sum()
-                )
-                logger.info("   Batches: %s", data["jvc"]["batch"].nunique())
-                logger.info("\nData ready for variable assignment and filtering!")
+    def _after_data_loaded(self):
+        """Steps after any successful load (batch or demo): sample selection, summary,
+        variables menu, next tab."""
+        # A new load replaces the previous one: clear what was shown for it further on
+        # (other measurements, variables status, filter results, plots).
+        for output in (
+            self.show_other_measurements,
+            self.read_output,
+            self.filter_ui.main_output,
+            self.plot_ui.plotted_content,
+        ):
+            output.clear_output()
 
-            self._enable_tab(1)
-            self.tabs.selected_index = 1
-            self._make_variables_menu()
+        # Set data for sample selection in filter UI
+        data = self.data_manager.get_data()
+        self.filter_ui.set_sample_data(data)
+
+        # Show initial data summary
+        with self.load_status_output:
+            logger.info("\nData Loading Summary:")
+            logger.info("   Total records loaded: %s", len(data["jvc"]))
+            logger.info("   Unique samples: %s", data["jvc"]["sample"].nunique())
+            logger.info(
+                "   Unique cells: %s", data["jvc"].groupby("sample")["cell"].nunique().sum()
+            )
+            logger.info("   Batches: %s", data["jvc"]["batch"].nunique())
+            logger.info("\nData ready for variable assignment and filtering!")
+
+        self._enable_tab(1)
+        self.tabs.selected_index = 1
+        self._make_variables_menu()
 
     def _make_variables_menu(self):
         """Create variables menu using DataManager's summary"""
@@ -486,14 +505,11 @@ If you tested specific variables or conditions for each sample, please write the
                     df = pd.DataFrame()
 
                     def make_clickable(r):
-                        base_url = self.auth_manager.url_base
-                        if "SEM" in r[1]["entry_type"]:
-                            return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data/images:0/image_preview/preview" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
-                        return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
+                        return measurement_link_html(url, r[1]["entry_id"], r[1]["entry_type"])
 
                     for key, value in measurements_data.items():
                         if value:
-                            df[key] = pd.Series([make_clickable(r) for r in value])
+                            df[html.escape(key)] = pd.Series([make_clickable(r) for r in value])
 
                     if df.empty:
                         logger.warning("No additional measurements found.")
@@ -812,7 +828,7 @@ If you tested specific variables or conditions for each sample, please write the
                     background-color: #f8d7da; border-radius: 8px;">
                     <div style="font-size: 24px; margin-bottom: 15px;">❌</div>
                     <h3 style="color: #dc3545;">Plot Creation Failed</h3>
-                    <p>Error: {str(e)}</p>
+                    <p>Error: {html.escape(str(e))}</p>
                 </div>
                 """)
                 )
