@@ -183,6 +183,46 @@ def test_get_all_batches_wth_data_raises_on_http_error(monkeypatch):
         api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T")
 
 
+def test_get_all_batches_wth_data_reads_uploads_from_the_metadata_endpoint(monkeypatch):
+    """The archive endpoint failed (HTTPError) for JV entries; step 1 now uses entries/query,
+    and both steps read every page."""
+    from hysprint_utils import api_calls
+
+    measurements = [{"upload_id": f"U{n % 3}"} for n in range(7)] + [{"entry_id": "no upload"}]
+    batches = [{"archive": {"data": {"lab_id": f"B{n}"}}} for n in range(3)]
+    responses = {
+        "entries/query": _PagedServer(measurements),
+        "entries/archive/query": _PagedServer(batches),
+    }
+    endpoints = []
+
+    def post(url, **kwargs):
+        endpoint = "entries/archive/query" if url.endswith("archive/query") else "entries/query"
+        endpoints.append((endpoint, kwargs["json"]["query"]))
+        return responses[endpoint].post(url, **kwargs)
+
+    monkeypatch.setattr(api_calls.requests, "post", post)
+    res = api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "HySprint_JVmeasurement")
+    assert sorted(res) == ["B0", "B1", "B2"]
+    assert endpoints[0] == ("entries/query", {"entry_type": "HySprint_JVmeasurement"})
+    batch_query = next(q for e, q in endpoints if e == "entries/archive/query")
+    assert sorted(batch_query["upload_id:any"]) == ["U0", "U1", "U2"]
+
+
+def test_get_all_batches_wth_data_without_uploads_asks_nothing_more(monkeypatch):
+    from hysprint_utils import api_calls
+
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(url)
+        return _PagedServer([]).post(url, **kwargs)
+
+    monkeypatch.setattr(api_calls.requests, "post", post)
+    assert api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T") == []
+    assert len(calls) == 1
+
+
 def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
     from hysprint_utils import api_calls
 

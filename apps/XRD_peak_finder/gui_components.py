@@ -9,12 +9,10 @@ import logging
 
 import ipywidgets as widgets
 import plotly.graph_objects as go
-from data_manager import MEASUREMENT_TYPE, XRDDataManager
+from data_manager import XRDDataManager
 from IPython.display import display as ipydisplay
-from natsort import natsorted
 from plot_manager import XRDPlotManager
 
-from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
 
 logger = logging.getLogger(__name__)
@@ -26,67 +24,18 @@ logger = logging.getLogger(__name__)
 
 
 class BatchFilterPanel:
-    """Wraps batch selection with an optional 'filter to XRD only' button."""
+    """The shared batch panel with its "Show XRD only" filter."""
 
     def __init__(self, data_manager: XRDDataManager, on_load_callback) -> None:
-        self._dm = data_manager
-        self._on_load_callback = on_load_callback
-        self._build()
-
-    def _build(self) -> None:
         from hysprint_utils.batch_selection import create_batch_selection
 
-        self._batch_widget = create_batch_selection(
-            self._dm._url, self._dm._token, self._on_load_callback
+        self.widget = create_batch_selection(
+            data_manager._url,
+            data_manager._token,
+            on_load_callback,
+            filter_label="XRD",
+            filter_function=data_manager.get_batches_with_data,
         )
-
-        # Locate the SelectMultiple inside the batch widget
-        self._batch_selector = None
-        for child in self._batch_widget.children:
-            if isinstance(child, widgets.SelectMultiple):
-                self._batch_selector = child
-                break
-
-        total = len(self._batch_selector.options) if self._batch_selector else 0
-
-        self._filter_btn = WidgetFactory.create_button(
-            "Show XRD batches",
-            button_style="info",
-            tooltip="May take a few minutes",
-        )
-        self._filter_status = WidgetFactory.create_output(min_height="standard")
-        self._filter_btn.on_click(self._start_filtering)
-
-        self.widget = widgets.VBox(
-            [
-                widgets.HTML(
-                    f"<p>Select from all <b>{total}</b> available batches, or filter first:</p>"
-                ),
-                self._filter_btn,
-                self._batch_widget,
-                self._filter_status,
-            ]
-        )
-
-    def _start_filtering(self, _btn) -> None:
-        self._filter_btn.disabled = True
-        self._filter_btn.description = "Filtering…"
-
-        with self._filter_status:
-            self._filter_status.clear_output(wait=True)
-            try:
-                valid = natsorted(self._dm.get_batches_with_data())
-                if self._batch_selector:
-                    self._batch_selector.options = valid
-                ErrorHandler.log_success(
-                    f"Done — {len(valid)} batches with {MEASUREMENT_TYPE} data found",
-                    self._filter_status,
-                )
-                self._filter_btn.description = f"Filter complete — {len(valid)} batches found"
-            except Exception as exc:
-                ErrorHandler.log_error("Filtering failed", exc, self._filter_status)
-                self._filter_btn.disabled = False
-                self._filter_btn.description = "Retry filter"
 
 
 # ---------------------------------------------------------------------------

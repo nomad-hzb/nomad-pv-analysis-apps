@@ -21,8 +21,9 @@ One of two sources, which can be mixed:
 ## Step by step
 
 1. **Load data.**
-   - *Option 1*: select batches (*Show XRD batches* keeps only batches that have XRD data; it can
-     take a few minutes) and click *Load Data*.
+   - *Option 1*: select batches and click *Load Data*. *Show XRD only*, under the batch list,
+     keeps only the batches with XRD data (this can take a few minutes); *Show all batches*
+     brings the rest back.
    - *Option 2*: *Upload .xy files* (one or several).
    - *Load demo data* loads a small bundled data set without NOMAD.
 2. **Look at each pattern.** Every loaded sample gets its own plot (intensity against 2θ in
