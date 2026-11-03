@@ -21,7 +21,7 @@ from hysprint_utils.table_utils import keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 
 def _html_float_format(value):
