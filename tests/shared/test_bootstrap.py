@@ -17,16 +17,14 @@ BOOTSTRAP = Path(__file__).resolve().parents[2] / "bootstrap.py"
 
 
 class _Namespace:
-    """Attribute access that reads and writes the module's globals, so monkeypatch reaches them."""
+    """The module's globals as plain attributes, so monkeypatch reaches them.
+
+    The globals dict itself is the instance __dict__: get, set and delete all act on it, and
+    monkeypatch sees and restores the original values (pytest 9.2 no longer goes through a
+    custom __getattr__ to find them, and then deleted the attribute on undo)."""
 
     def __init__(self, namespace):
-        object.__setattr__(self, "_ns", namespace)
-
-    def __getattr__(self, name):
-        return self._ns[name]
-
-    def __setattr__(self, name, value):
-        self._ns[name] = value
+        self.__dict__ = namespace
 
 
 @pytest.fixture
