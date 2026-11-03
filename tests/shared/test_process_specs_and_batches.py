@@ -148,3 +148,13 @@ def test_show_only_filter_queries_the_entry_type_by_default(monkeypatch):
     box.children[2].children[0].click()
     assert calls == [("u", "t", "HySprint_EQEmeasurement")]
     assert list(box.children[1].options) == ["HZB_2"]
+
+
+def test_single_choice_batch_list_starts_empty(monkeypatch):
+    """multiple=False (File_Uploader: one batch at a time) gives a widgets.Select with nothing
+    preselected; the default stays a SelectMultiple."""
+    import ipywidgets as widgets
+
+    single = _panel(monkeypatch, multiple=False).children[1]
+    assert type(single) is widgets.Select and single.value is None
+    assert type(_panel(monkeypatch).children[1]) is widgets.SelectMultiple
