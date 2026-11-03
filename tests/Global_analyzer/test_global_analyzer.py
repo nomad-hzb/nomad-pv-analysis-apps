@@ -2543,3 +2543,39 @@ def test_batch_column_is_the_selected_batch_not_the_sample_name_prefix():
     assert manager.batch_for_sample("HZB_ThNa_1_4_C-15") == "HZB_ThNa_1_1"
     # a sample the selection does not know falls back to the sub-batch in its id
     assert manager.batch_for_sample("HZB_ThNa_1_4_C-16") == "HZB_ThNa_1_4"
+
+
+def test_bo_suggestions_table_scrolls_sideways(monkeypatch):
+    """The suggestions table is its own HTML block in a box that scrolls horizontally (as a
+    Markdown table it was cut off on the right), with every column and suggestion in it."""
+    from types import SimpleNamespace
+
+    import analysis_handlers
+    from IPython.display import HTML, Markdown
+
+    shown = []
+    monkeypatch.setattr(analysis_handlers, "ipy_display", shown.append)
+    monkeypatch.setattr(analysis_handlers, "clear_output", lambda **k: None)
+    result = suggest_next_experiments(_bo_dataset(), "y", feature_cols=["x1", "x2"])
+    handler = SimpleNamespace(
+        plot_manager=SimpleNamespace(
+            create_bo_suggestions_plot=lambda *a: None, create_bo_loo_plot=lambda *a: None
+        )
+    )
+
+    analysis_handlers.AnalysisHandlersMixin._show_bo_suggestions(handler, result)
+
+    summary, table = shown
+    assert isinstance(summary, Markdown) and "| " not in summary.data
+    assert isinstance(table, HTML)
+    assert "overflow-x:auto" in table.data and "white-space:nowrap" in table.data
+    for column in ("x1", "x2", "y (predicted)", "range (±1 SD)", "Expected improvement"):
+        assert f">{column}</th>" in table.data
+    assert table.data.count("<tr>") == len(result["suggestions"]) + 1
+
+
+def test_scrollable_table_escapes_cells():
+    import analysis_handlers
+
+    out = analysis_handlers._scrollable_table_html(["a<b"], [["x & y"]])
+    assert "a&lt;b" in out and "x &amp; y" in out
