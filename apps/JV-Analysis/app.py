@@ -38,6 +38,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.manual import manual_panel
+from hysprint_utils.table_utils import csv_safe, keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +434,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "jvc" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_sign(data["jvc"]).to_csv(index=False),
+                + csv_safe(flip_current_density_sign(data["jvc"])).to_csv(index=False),
                 dated_filename("jv_full.csv"),
                 "text/plain",
             )
@@ -446,7 +447,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "filtered" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_sign(data["filtered"]).to_csv(index=False),
+                + csv_safe(flip_current_density_sign(data["filtered"])).to_csv(index=False),
                 dated_filename("jv_filtered.csv"),
                 "text/plain",
             )
@@ -459,7 +460,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "curves" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_curve_rows(data["curves"]).to_csv(index=False),
+                + csv_safe(flip_current_density_curve_rows(data["curves"])).to_csv(index=False),
                 dated_filename("curves_full.csv"),
                 "text/plain",
             )
@@ -472,7 +473,9 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "filtered_curves" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_curve_rows(data["filtered_curves"]).to_csv(index=False),
+                + csv_safe(flip_current_density_curve_rows(data["filtered_curves"])).to_csv(
+                    index=False
+                ),
                 dated_filename("curves_filtered.csv"),
                 "text/plain",
             )
@@ -808,7 +811,7 @@ If you tested specific variables or conditions for each sample, please write the
             # Store plot data
             self.global_plot_data["figs"] = figs
             self.global_plot_data["names"] = names
-            self.global_plot_data["workbook"] = wb
+            self.global_plot_data["workbook"] = keep_text_as_text(wb)
 
             # Display plots using resizable plot utility
             with self.plot_ui.plotted_content:

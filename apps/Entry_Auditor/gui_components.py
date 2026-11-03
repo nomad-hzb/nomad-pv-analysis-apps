@@ -23,6 +23,7 @@ from data_manager import (
 from natsort import natsort_keygen
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.table_utils import csv_safe
 
 logger = logging.getLogger(__name__)
 
@@ -637,7 +638,7 @@ def create_corrections_tab() -> widgets.VBox:
         if df.empty:
             download_out.value = "Nothing to export."
             return
-        b64_data = base64.b64encode(df.to_csv(index=False).encode()).decode()
+        b64_data = base64.b64encode(csv_safe(df).to_csv(index=False).encode()).decode()
         download_out.value = (
             f"<a href='data:text/csv;base64,{b64_data}' download='corrections.csv'>"
             "Download corrections.csv</a>"
