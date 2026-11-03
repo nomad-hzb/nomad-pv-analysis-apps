@@ -373,3 +373,46 @@ def test_a_fit_that_underflows_to_zero_gives_nan_without_warnings():
         _t, tau_diff, _density = trpl.differential_lifetime(time, counts, 1.0, 1e17, 1)
     assert np.isnan(tau_diff[-1])
     assert np.nanmedian(tau_diff[:20]) == pytest.approx(2e-9, rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# Upload fallback: every page of both queries is read (#171)
+# ---------------------------------------------------------------------------
+
+
+def test_upload_fallback_reads_every_page(monkeypatch):
+    """150 batch entries (more than the 100 per page asked for) and TRPL entries spread over
+    several pages: nothing past the first page may be dropped."""
+    batches = [{"upload_id": f"U{i}"} for i in range(150)]
+    trpl = [
+        {"archive": {"data": {"samples": [{"lab_id": f"S{i}"}]}, "metadata": {"upload_id": "U149"}}}
+        for i in range(5)
+    ]
+    seen_uploads = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        rows = trpl if json["query"]["entry_type"] == MEASUREMENT_TYPE else batches
+        if rows is trpl:
+            seen_uploads.extend(json["query"]["upload_id:any"])
+        page = 2 if rows is trpl else json["pagination"]["page_size"]
+        start = int(json["pagination"].get("page_after_value") or 0)
+        payload = {"data": rows[start : start + page], "pagination": {}}
+        if start + page < len(rows):
+            payload["pagination"]["next_page_after_value"] = str(start + page)
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return payload
+
+        return _Resp()
+
+    monkeypatch.setattr("hysprint_utils.api_calls.requests.post", fake_post)
+    dm = TRPLDataManager(url="http://mock", token="mock-token")
+
+    res = dm._fetch_trpl_by_upload(["B1"])
+
+    assert "U149" in seen_uploads  # an upload from the second page of batch entries
+    assert sorted(res) == [f"S{i}" for i in range(5)]  # TRPL entries from all three pages
