@@ -1,7 +1,8 @@
 """Monorepo-wide pytest configuration.
 
-The repo root has its own ``secrets.py`` (used by
-``hysprint_utils.access_token.get_token()`` for the local-login fallback).
+The repo root may still have a token file under its old name ``secrets.py``
+(now ``nomad_secrets.py``; ``hysprint_utils.access_token`` reads both and asks
+to rename the old one).
 When pytest is invoked from the repo root, Python's default sys.path[0]
 (the empty string, meaning "current directory") lets that file shadow the
 stdlib ``secrets`` module for every test. Recent numpy/plotly versions
@@ -11,8 +12,9 @@ guard almost any test that touches pandas, numpy, or plotly fails with
 
 Strip the repo-root entry before any test module (and therefore any
 app's data_manager/plot_manager) gets imported, so the real stdlib
-``secrets`` resolves normally. This never touches secrets.py itself or its
+``secrets`` resolves normally. This never touches the token file itself or its
 walk-up discovery in get_token(), which is Path-based, not sys.path-based.
+Can go once no checkout has an old ``secrets.py`` left.
 """
 
 import os
