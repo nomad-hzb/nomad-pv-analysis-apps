@@ -112,7 +112,7 @@ def test_query_all_follows_every_page(monkeypatch):
     server = _PagedServer([{"i": n} for n in range(5)])
     monkeypatch.setattr(api_calls.requests, "post", server.post)
     query = {"query": {"x": 1}}
-    data = api_calls._query_all("https://e.test/api", "tok", "entries/query", query)
+    data = api_calls.query_all("https://e.test/api", "tok", "entries/query", query)
     assert [d["i"] for d in data] == [0, 1, 2, 3, 4]
     assert len(server.requests) == 3
     assert query == {"query": {"x": 1}}  # caller's query untouched
@@ -123,7 +123,7 @@ def test_query_all_sets_default_page_size_and_timeout(monkeypatch):
 
     server = _PagedServer([{"i": 1}], page_size=10)
     monkeypatch.setattr(api_calls.requests, "post", server.post)
-    api_calls._query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
+    api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     sent = server.requests[0]
     assert sent["json"]["pagination"]["page_size"] == api_calls.DEFAULT_PAGE_SIZE
     assert sent["timeout"] == api_calls.REQUEST_TIMEOUT
@@ -140,7 +140,7 @@ def test_query_all_stops_on_repeated_cursor(monkeypatch):
             return {"data": [{"i": 1}], "pagination": {"next_page_after_value": "same"}}
 
     monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Loop())
-    data = api_calls._query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
+    data = api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     assert len(data) == 2  # first page, then the repeated cursor is served once and stopped
 
 
@@ -245,7 +245,7 @@ def _ref(entry_id, upload_id="u1"):
 
 
 def _fake_query_all(responses, queries):
-    """_query_all stand-in answering each call with the next response list."""
+    """query_all stand-in answering each call with the next response list."""
     answers = iter(responses)
 
     def fake(url, token, endpoint, query):
@@ -279,7 +279,7 @@ def test_get_samples_with_substrates_pairs_each_sample_with_its_substrate(monkey
         {"entry_id": "sub2", "archive": {"data": {"substrate": "FTO"}}},
     ]
     queries = []
-    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([samples, substrates], queries))
+    monkeypatch.setattr(api_calls, "query_all", _fake_query_all([samples, substrates], queries))
     result = api_calls.get_samples_with_substrates("https://e.test/api", "tok", "up1")
 
     assert [(r["sample"]["lab_id"], r["substrate"]) for r in result] == [
@@ -301,7 +301,7 @@ def test_get_samples_with_substrates_skips_the_second_query_without_references(m
 
     queries = []
     samples = [{"archive": {"data": {"lab_id": "S1"}}}, {"archive": None}]
-    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([samples], queries))
+    monkeypatch.setattr(api_calls, "query_all", _fake_query_all([samples], queries))
     result = api_calls.get_samples_with_substrates("https://e.test/api", "tok", "up1")
     assert result == [
         {"sample": {"lab_id": "S1"}, "substrate": {}},
@@ -314,7 +314,7 @@ def test_get_samples_with_substrates_follows_entry_types(monkeypatch):
     from hysprint_utils import api_calls
 
     queries = []
-    monkeypatch.setattr(api_calls, "_query_all", _fake_query_all([[]], queries))
+    monkeypatch.setattr(api_calls, "query_all", _fake_query_all([[]], queries))
     api_calls.get_samples_with_substrates("u", "t", "up1", sample_type="Other_Sample")
     assert queries[0][1]["query"]["entry_type"] == "Other_Sample"
 
@@ -364,3 +364,9 @@ def test_entry_types_include_sem():
     from hysprint_utils.config import ENTRY_TYPES
 
     assert ENTRY_TYPES["sem"] == "HySprint_SEM"
+
+
+def test_old_private_name_still_points_to_query_all():
+    from hysprint_utils import api_calls
+
+    assert api_calls._query_all is api_calls.query_all
