@@ -18,14 +18,12 @@ import scipy.signal
 from pydantic import ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
-    _query_all as query_all,  # the shared paginated POST; public name pending (audit B1)
-)
-from hysprint_utils.api_calls import (
     get_all_eqe as _get_all_trpl,
 )
 from hysprint_utils.api_calls import (
     get_ids_in_batch,
     get_sample_description,
+    query_all,
 )
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
