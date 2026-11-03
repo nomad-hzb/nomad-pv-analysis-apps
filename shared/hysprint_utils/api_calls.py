@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 # slow, so the read timeout is generous; it only exists so a dead server cannot hang an app.
 REQUEST_TIMEOUT = (10, 300)
 DEFAULT_PAGE_SIZE = 10000
+
+
+class EntryLookupError(LookupError, AssertionError):
+    """NOMAD did not return the entry (or entries) a lookup needs: none, or several where
+    exactly one is expected. These lookups used assert before, which python -O skips; the
+    AssertionError base keeps every existing `except AssertionError` handler working."""
+
+
+def _exactly_one(data, what):
+    """The only item of data, or EntryLookupError naming what was looked up."""
+    if len(data) != 1:
+        found = "no entry" if not data else f"{len(data)} entries"
+        raise EntryLookupError(f"NOMAD returned {found} for {what}, expected exactly one")
+    return data[0]
+
+
 # Safety stop for the page loop (a server that keeps returning a next page forever).
 MAX_PAGES = 1000
 
@@ -319,8 +335,7 @@ def get_entry_data(url, token, entry_id):
         "pagination": {"page_size": 10000},
     }
     data = query_all(url, token, "entries/archive/query", query)
-    assert len(data) == 1, "Entry not found"
-    return data[0]["archive"]["data"]
+    return _exactly_one(data, f"entry_id {entry_id!r}")["archive"]["data"]
 
 
 def get_sample_description(url, token, sample_ids):
@@ -348,8 +363,7 @@ def get_entryid(url, token, sample_id):  # give it a batch id
         "pagination": {"page_size": 100},
     }
     data = query_all(url, token, "entries/query", query)
-    assert len(data) == 1
-    return data[0]["entry_id"]
+    return _exactly_one(data, f"lab_id {sample_id!r}")["entry_id"]
 
 
 def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
@@ -360,9 +374,8 @@ def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
         "query": {"results.eln.lab_ids": sample_id},
         "pagination": {"page_size": 100},
     }
-    data = query_all(url, token, "entries/query", query)
-    assert len(data) == 1
-    return data[0]["entry_id"], data[0]["upload_id"]
+    entry = _exactly_one(query_all(url, token, "entries/query", query), f"lab_id {sample_id!r}")
+    return entry["entry_id"], entry["upload_id"]
 
 
 def get_upload_ids_for_samples(url, token, sample_ids):
@@ -498,8 +511,7 @@ def get_entry_meta_data(url, token, entry_id):
         "pagination": {"page_size": 100},
     }
     data = query_all(url, token, "entries/query", query)
-    assert len(data) == 1, "Entry not found"
-    return data[0]
+    return _exactly_one(data, f"entry_id {entry_id!r}")
 
 
 def get_information(url, token, entry_id, path):
@@ -515,19 +527,18 @@ def get_information(url, token, entry_id, path):
 
 def get_setup(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.setup")
-    assert data and len(data) == 1, "No Setup found"
-    return data[0]
+    return _exactly_one(data, f"the setup of entry {entry_id!r}")
 
 
 def get_environment(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.environment")
-    assert data and len(data) == 1, "No Environment found"
-    return data[0]
+    return _exactly_one(data, f"the environment of entry {entry_id!r}")
 
 
 def get_samples(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.samples.reference")
-    assert data and len(data) > 0, "No Samples found"
+    if not data:
+        raise EntryLookupError(f"NOMAD returned no samples for entry {entry_id!r}")
     return data
 
 
