@@ -22,7 +22,6 @@ from data_manager import (
 from IPython.display import HTML, Javascript
 from IPython.display import display as ipydisplay
 
-from hysprint_utils.api_calls import get_all_batches_wth_data
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
@@ -315,54 +314,12 @@ class AnalysisPanel:
 # BatchFilterPanel
 # ---------------------------------------------------------------------------
 class BatchFilterPanel:
-    """Wraps create_batch_selection with an optional TRPL-filter button."""
+    """The shared batch panel with its "Show TRPL only" filter."""
 
     def __init__(self, url: str, token: str, on_load) -> None:
-        self._url = url
-        self._token = token
-        self._on_load = on_load
-
-        self._status_out = widgets.Output()
-        self._filter_btn = WidgetFactory.create_button(
-            "Show TRPL batches",
-            button_style="info",
+        self.widget = create_batch_selection(
+            url, token, on_load, filter_label="TRPL", filter_entry_type=MEASUREMENT_TYPE
         )
-        self._filter_btn.on_click(self._do_filter)
-
-        self._batch_widget = create_batch_selection(url, token, on_load)
-        self._batch_selector = self._find_selector()
-
-        total = len(self._batch_selector.options) if self._batch_selector else "?"
-        self.widget = widgets.VBox(
-            [
-                widgets.HTML(
-                    f"<p>Select from all {total} available batches, "
-                    f"or filter to those with TRPL data:</p>"
-                ),
-                self._filter_btn,
-                self._status_out,
-                self._batch_widget,
-            ]
-        )
-
-    def _find_selector(self):
-        for child in self._batch_widget.children:
-            if isinstance(child, widgets.SelectMultiple):
-                return child
-        return None
-
-    def _do_filter(self, _b):
-        self._filter_btn.disabled = True
-        self._filter_btn.description = "Filtering..."
-        logger.info("Querying NOMAD for batches with TRPL data...")
-        with self._status_out:
-            self._status_out.clear_output(wait=True)
-            valid = get_all_batches_wth_data(self._url, self._token, MEASUREMENT_TYPE)
-            if self._batch_selector:
-                self._batch_selector.options = valid
-            self._status_out.clear_output(wait=True)
-        logger.info("Found %d batches with TRPL data.", len(valid))
-        self._filter_btn.description = "Done – %d batches found" % len(valid)
 
 
 # ---------------------------------------------------------------------------

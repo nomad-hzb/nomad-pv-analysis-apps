@@ -3,6 +3,14 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote
 
+# The user and upload this dashboard runs in (re-exported: app.py and the tests use dm.<name>).
+from hysprint_utils.north import (  # noqa: F401
+    UPLOADS_DIR_NAME,
+    get_current_user,
+    get_upload_id,
+    get_uploads_path,
+)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -529,11 +537,6 @@ LEARNING_FOLDER = LearningEntry(
 )
 
 
-def get_current_user() -> str:
-    """Return the NOMAD username of the person running this notebook, or '' if unknown."""
-    return os.environ.get("NOMAD_CLIENT_USER", "")
-
-
 def log_navigation(action: str) -> None:
     """Log an in-dashboard navigation click (project drill-in, back button, ...).
 
@@ -542,68 +545,6 @@ def log_navigation(action: str) -> None:
     reach the kernel, so they can't be logged this way.
     """
     log_button_usage(action, user=get_current_user())
-
-
-UPLOADS_DIR_NAME = "uploads"
-
-
-def _cwd_parts() -> list[str]:
-    """The current working directory as path segments, separator-agnostic."""
-    return [part for part in os.getcwd().replace("\\", "/").split("/") if part]
-
-
-def _uploads_index(parts: list[str]) -> int | None:
-    """Index of the NOMAD 'uploads' mount in parts, or None if cwd is not under one.
-
-    The leftmost match wins: the mount lives at a fixed prefix (/home/jovyan/uploads),
-    so a later segment of the same name is an upload or folder that happens to be
-    called "uploads", not the mount point.
-    """
-    for index, part in enumerate(parts):
-        # Needs at least <upload_id>/<AppFolder> after it to be usable.
-        if part == UPLOADS_DIR_NAME and index + 2 < len(parts):
-            return index
-    return None
-
-
-def get_upload_id() -> str:
-    """Derive this dashboard's own NOMAD upload ID from the current working directory.
-
-    Under a NOMAD north tool the cwd is .../uploads/<upload_id>/.../<AppFolder>, so the
-    upload ID is the segment right after 'uploads'. Read from cwd rather than hardcoded
-    so this keeps working if the upload is ever re-uploaded under a different ID.
-
-    Anchored on the 'uploads' segment rather than counting directories up from the cwd,
-    because how deep the repo sits inside the upload varies with how it was deployed:
-    unpacking the repo at the top of an upload gives <upload_id>/apps/<AppFolder>, while
-    `git clone` inside the upload adds the repo directory, giving
-    <upload_id>/nomad-pv-analysis-apps/apps/<AppFolder>. Fixed-depth walking silently
-    returned the repo folder as the upload ID in the latter case, producing links with
-    the upload name missing entirely.
-    """
-    parts = _cwd_parts()
-    index = _uploads_index(parts)
-    if index is None:
-        # Not under an uploads mount (local dev, tests): best-effort, previous behaviour.
-        return os.path.basename(os.path.dirname(os.path.dirname(os.getcwd())))
-    return parts[index + 1]
-
-
-def get_uploads_path() -> str:
-    """Derive 'uploads/<upload_id>/.../<container>' from the current working directory.
-
-    <container> is the folder holding all app folders ("apps" for this repo). Everything
-    between the upload ID and the app folder is preserved, so a repo cloned into a
-    subdirectory of the upload keeps that subdirectory in the path. See get_upload_id
-    for why this is not a fixed number of levels.
-    """
-    parts = _cwd_parts()
-    index = _uploads_index(parts)
-    if index is None:
-        container = os.path.basename(os.path.dirname(os.getcwd()))
-        return f"{UPLOADS_DIR_NAME}/{get_upload_id()}/{container}"
-    # From 'uploads' up to, but not including, this app's own folder.
-    return "/".join(parts[index:-1])
 
 
 def build_voila_url(entry: AppEntry, user: str, uploads_path: str) -> str:

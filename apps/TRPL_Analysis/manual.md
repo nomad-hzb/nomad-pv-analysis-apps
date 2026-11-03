@@ -19,7 +19,8 @@ enter them in the app.
 
 ## Step by step
 
-1. **Select the batches.** *Show TRPL batches* keeps only batches with TRPL data. Select one or
+1. **Select the batches.** *Show TRPL only*, under the batch list, keeps only the batches with TRPL
+   measurements (this can take a minute); *Show all batches* brings the rest back. Select one or
    more and click *Load Data*. *Load demo data* loads a small bundled data set without NOMAD.
    The message says how many measurements were loaded.
 2. **Physical Parameters** (the same for all traces):

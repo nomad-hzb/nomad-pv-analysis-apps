@@ -8,6 +8,7 @@ __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
 import base64
+import html
 import io
 import json
 import logging
@@ -433,7 +434,7 @@ class FilterUI:
                 )
 
                 # Create batch header
-                batch_header = widgets.HTML(f"<h5>📁 Batch: {batch}</h5>")
+                batch_header = widgets.HTML(f"<h5>📁 Batch: {html.escape(str(batch))}</h5>")
 
                 # Create sample checkboxes for this batch
                 sample_widgets = []
@@ -1187,25 +1188,21 @@ class ColorSchemeSelector:
     def _add_optional_color_schemes(self):
         """Add color schemes that might not exist in all Plotly versions"""
         optional_schemes = {
-            "Cividis": "px.colors.sequential.Cividis",
-            "RdBu": "px.colors.sequential.RdBu",
-            "Spectral": "px.colors.sequential.Spectral",
-            "Rainbow": "px.colors.sequential.Rainbow",
-            "Turbo": "px.colors.sequential.Turbo",
-            "Alphabet": "px.colors.qualitative.Alphabet",
-            "Sunsetdark": "px.colors.sequential.Sunsetdark",
-            "Peach": "px.colors.sequential.Peach",
-            "Mint": "px.colors.sequential.Mint",
+            "Cividis": (px.colors.sequential, "Cividis"),
+            "RdBu": (px.colors.sequential, "RdBu"),
+            "Spectral": (px.colors.sequential, "Spectral"),
+            "Rainbow": (px.colors.sequential, "Rainbow"),
+            "Turbo": (px.colors.sequential, "Turbo"),
+            "Alphabet": (px.colors.qualitative, "Alphabet"),
+            "Sunsetdark": (px.colors.sequential, "Sunsetdark"),
+            "Peach": (px.colors.sequential, "Peach"),
+            "Mint": (px.colors.sequential, "Mint"),
         }
 
-        for name, attr_path in optional_schemes.items():
-            try:
-                # Try to access the color scheme
-                color_scheme = eval(attr_path)
+        for name, (module, attr) in optional_schemes.items():
+            color_scheme = getattr(module, attr, None)
+            if color_scheme is not None:
                 self.color_schemes[name] = color_scheme
-            except (AttributeError, NameError):
-                # Skip if the color scheme doesn't exist
-                continue
 
     def _create_widgets(self):
         """Create color scheme selector widgets"""
