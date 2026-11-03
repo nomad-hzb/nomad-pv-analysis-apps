@@ -21,7 +21,11 @@ import requests
 import yaml
 from pydantic import BaseModel
 
+from hysprint_utils.api_calls import (
+    _query_all as query_all,  # the shared paginated POST; public name pending (audit B1)
+)
 from hysprint_utils.api_calls import get_sample_entry_links
+from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.consistency import (
     DEFAULT_EXCLUDE_COLUMNS,
     get_string_columns,
@@ -111,32 +115,18 @@ _NOISE_COLUMN_PATTERNS = (
 
 
 def get_ids_in_batch_tolerant(url: str, token: str, batch_ids: list[str]) -> list[str]:
-    """Paginated drop-in for hysprint_utils.api_calls.get_ids_in_batch that tolerates
-    duplicate batch lab_ids - that function hard-asserts len(data) == len(batch_ids),
-    which breaks on duplicate/legacy batch names. An audit tool needs to handle that
-    case, not fail on it, so this is kept app-local rather than changing the shared
-    function. Logs duplicates instead of raising."""
+    """Like hysprint_utils.api_calls.get_ids_in_batch, but an audit tool also reports
+    duplicate batch lab_ids (duplicate/legacy batch names) by name and returns each
+    sample once. Logs duplicates instead of raising."""
     if not batch_ids:
         return []
-    headers = {"Authorization": f"Bearer {token}"}
     query: dict[str, Any] = {
         "required": {"data": "*"},
         "owner": "visible",
-        "query": {"results.eln.lab_ids:any": batch_ids, "entry_type": "HySprint_Batch"},
+        "query": {"results.eln.lab_ids:any": batch_ids, "entry_type": ENTRY_TYPES["batch"]},
         "pagination": {"page_size": 100},
     }
-    all_data: list[dict] = []
-    while True:
-        response = requests.post(
-            f"{url}/entries/archive/query", headers=headers, json=query, timeout=30
-        )
-        response.raise_for_status()
-        payload = response.json()
-        all_data.extend(payload.get("data", []))
-        next_value = payload["pagination"].get("next_page_after_value")
-        if not next_value:
-            break
-        query["pagination"]["page_after_value"] = next_value
+    all_data = query_all(url, token, "entries/archive/query", query)
 
     found_ids: list[str] = []
     for entry in all_data:
@@ -235,23 +225,21 @@ def _resolve_sample_entry_ids(
     by load_generic_data's reference-based fallback strategy. Identical for every
     entry_type audited in one session, so callers should compute it once and pass it
     back in via load_generic_data's cache= param rather than recomputing per schema."""
-    headers = {"Authorization": f"Bearer {token}"}
     chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
     all_sample_entry_ids: list[str] = []
     for chunk in chunks:
-        response = requests.post(
-            f"{url}/entries/query",
-            headers=headers,
-            json={
+        data = query_all(
+            url,
+            token,
+            "entries/query",
+            {
                 "required": {"include": ["entry_id"]},
                 "owner": "visible",
                 "query": {"results.eln.lab_ids:any": chunk},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        all_sample_entry_ids.extend(entry["entry_id"] for entry in response.json()["data"])
+        all_sample_entry_ids.extend(entry["entry_id"] for entry in data)
     return all_sample_entry_ids
 
 
@@ -264,23 +252,21 @@ def _resolve_reference_ids(
     expensive lookup, since it downloads full archive data for every sample), so
     callers should compute it once and pass it back in via load_generic_data's cache=
     param rather than recomputing per schema."""
-    headers = {"Authorization": f"Bearer {token}"}
     chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
     ref_ids: set[str] = set()
     for chunk in chunks:
-        response = requests.post(
-            f"{url}/entries/archive/query",
-            headers=headers,
-            json={
+        data = query_all(
+            url,
+            token,
+            "entries/archive/query",
+            {
                 "required": {"data": "*"},
                 "owner": "visible",
                 "query": {"results.eln.lab_ids:any": chunk},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        for entry in response.json().get("data", []):
+        for entry in data:
             _extract_ref_ids(entry.get("archive", {}).get("data", {}), ref_ids)
     return ref_ids
 
@@ -302,25 +288,23 @@ def discover_present_entry_types(
 
     Returns (sample_entry_ids, ref_ids, entry_types_present) so callers can seed
     load_generic_data's cache with the first two and avoid recomputing them."""
-    headers = {"Authorization": f"Bearer {token}"}
     chunks = [sample_ids[i : i + chunk_size] for i in range(0, len(sample_ids), chunk_size)]
     sample_entry_ids: list[str] = []
     entry_types: set[str] = set()
 
     for chunk in chunks:
-        response = requests.post(
-            f"{url}/entries/query",
-            headers=headers,
-            json={
+        data = query_all(
+            url,
+            token,
+            "entries/query",
+            {
                 "required": {"include": ["entry_id", "entry_type"]},
                 "owner": "visible",
                 "query": {"results.eln.lab_ids:any": chunk},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        for entry in response.json()["data"]:
+        for entry in data:
             sample_entry_ids.append(entry["entry_id"])
             if entry.get("entry_type"):
                 entry_types.add(entry["entry_type"])
@@ -329,40 +313,34 @@ def discover_present_entry_types(
         sample_entry_ids[i : i + chunk_size] for i in range(0, len(sample_entry_ids), chunk_size)
     ]
     for id_chunk in id_chunks:
-        response = requests.post(
-            f"{url}/entries/query",
-            headers=headers,
-            json={
+        data = query_all(
+            url,
+            token,
+            "entries/query",
+            {
                 "required": {"include": ["entry_type"]},
                 "owner": "visible",
                 "query": {"entry_references.target_entry_id:any": id_chunk},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        entry_types.update(
-            entry["entry_type"] for entry in response.json()["data"] if entry.get("entry_type")
-        )
+        entry_types.update(entry["entry_type"] for entry in data if entry.get("entry_type"))
 
     ref_ids = _resolve_reference_ids(url, token, sample_ids, chunk_size)
     ref_id_chunks = [list(ref_ids)[i : i + chunk_size] for i in range(0, len(ref_ids), chunk_size)]
     for ref_chunk in ref_id_chunks:
-        response = requests.post(
-            f"{url}/entries/query",
-            headers=headers,
-            json={
+        data = query_all(
+            url,
+            token,
+            "entries/query",
+            {
                 "required": {"include": ["entry_type"]},
                 "owner": "visible",
                 "query": {"entry_id:any": ref_chunk},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        entry_types.update(
-            entry["entry_type"] for entry in response.json()["data"] if entry.get("entry_type")
-        )
+        entry_types.update(entry["entry_type"] for entry in data if entry.get("entry_type"))
 
     return sample_entry_ids, ref_ids, entry_types
 
@@ -390,7 +368,6 @@ def load_generic_data(
         return None
     if cache is None:
         cache = {}
-    headers = {"Authorization": f"Bearer {token}"}
     base_url = url.split("/api/")[0]
     seen: set[str] = set()
     rows: list[dict] = []
@@ -431,19 +408,17 @@ def load_generic_data(
             rows.append(row)
 
     def archive_query(query_filter: dict) -> list[dict]:
-        response = requests.post(
-            f"{url}/entries/archive/query",
-            headers=headers,
-            json={
+        return query_all(
+            url,
+            token,
+            "entries/archive/query",
+            {
                 "required": {"data": "*", "metadata": "*"},
                 "owner": "visible",
                 "query": {**query_filter, "entry_type": entry_type},
                 "pagination": {"page_size": 10000},
             },
-            timeout=30,
         )
-        response.raise_for_status()
-        return response.json().get("data", [])
 
     for chunk in chunks:
         process(archive_query({"results.eln.lab_ids:any": chunk}))
@@ -466,19 +441,18 @@ def load_generic_data(
 
         ref_chunks = [list(ref_ids)[i : i + chunk_size] for i in range(0, len(ref_ids), chunk_size)]
         for ref_chunk in ref_chunks:
-            response = requests.post(
-                f"{url}/entries/archive/query",
-                headers=headers,
-                json={
+            data = query_all(
+                url,
+                token,
+                "entries/archive/query",
+                {
                     "required": {"data": "*", "metadata": "*"},
                     "owner": "visible",
                     "query": {"entry_id:any": ref_chunk, "entry_type": entry_type},
                     "pagination": {"page_size": 10000},
                 },
-                timeout=30,
             )
-            response.raise_for_status()
-            process(response.json().get("data", []))
+            process(data)
 
     return pd.DataFrame(rows) if rows else None
 
@@ -606,28 +580,27 @@ def fetch_entry_files(
     _entry_id/_upload_id/_mainfile columns."""
     if not sample_ids:
         return []
-    headers = {"Authorization": f"Bearer {token}"}
 
-    response = requests.post(
-        f"{url}/entries/query",
-        headers=headers,
-        json={
+    data = query_all(
+        url,
+        token,
+        "entries/query",
+        {
             "required": {"include": ["entry_id"]},
             "owner": "visible",
             "query": {"results.eln.lab_ids:any": sample_ids},
             "pagination": {"page_size": 10000},
         },
-        timeout=30,
     )
-    response.raise_for_status()
-    sample_entry_ids = [entry["entry_id"] for entry in response.json()["data"]]
+    sample_entry_ids = [entry["entry_id"] for entry in data]
     if not sample_entry_ids:
         return []
 
-    response = requests.post(
-        f"{url}/entries/query",
-        headers=headers,
-        json={
+    data = query_all(
+        url,
+        token,
+        "entries/query",
+        {
             "required": {"include": ["entry_id", "upload_id", "mainfile"]},
             "owner": "visible",
             "query": {
@@ -636,12 +609,10 @@ def fetch_entry_files(
             },
             "pagination": {"page_size": 10000},
         },
-        timeout=30,
     )
-    response.raise_for_status()
 
     result: list[tuple[str, str, str]] = []
-    for entry in response.json()["data"]:
+    for entry in data:
         entry_id = entry.get("entry_id")
         upload_id = entry.get("upload_id")
         mainfile = entry.get("mainfile")
