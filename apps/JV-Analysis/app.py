@@ -8,6 +8,7 @@ __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
 import base64
+import html
 import io
 import logging
 import os
@@ -28,6 +29,7 @@ from utils import (
     dated_filename,
     flip_current_density_curve_rows,
     flip_current_density_sign,
+    measurement_link_html,
     save_combined_excel_data,
 )
 
@@ -481,14 +483,11 @@ If you tested specific variables or conditions for each sample, please write the
                     df = pd.DataFrame()
 
                     def make_clickable(r):
-                        base_url = self.auth_manager.url_base
-                        if "SEM" in r[1]["entry_type"]:
-                            return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data/images:0/image_preview/preview" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
-                        return f'<a href="{base_url}/nomad-oasis/gui/entry/id/{r[1]["entry_id"]}/data/data" rel="noopener noreferrer" target="_blank">{r[1]["entry_type"].split("_")[-1]}</a>'  # noqa: E501
+                        return measurement_link_html(url, r[1]["entry_id"], r[1]["entry_type"])
 
                     for key, value in measurements_data.items():
                         if value:
-                            df[key] = pd.Series([make_clickable(r) for r in value])
+                            df[html.escape(key)] = pd.Series([make_clickable(r) for r in value])
 
                     if df.empty:
                         logger.warning("No additional measurements found.")
@@ -807,7 +806,7 @@ If you tested specific variables or conditions for each sample, please write the
                     background-color: #f8d7da; border-radius: 8px;">
                     <div style="font-size: 24px; margin-bottom: 15px;">❌</div>
                     <h3 style="color: #dc3545;">Plot Creation Failed</h3>
-                    <p>Error: {str(e)}</p>
+                    <p>Error: {html.escape(str(e))}</p>
                 </div>
                 """)
                 )
