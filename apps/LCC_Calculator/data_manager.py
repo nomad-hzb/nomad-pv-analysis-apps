@@ -20,6 +20,8 @@ import openpyxl
 import requests
 from pydantic import BaseModel, Field
 
+from hysprint_utils.api_calls import query_all
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -427,9 +429,7 @@ def _chunked(items: list[str], size: int = _QUERY_CHUNK_SIZE) -> list[list[str]]
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-def _fetch_entry_ids_for_samples(
-    url: str, token: str, headers: dict, sample_ids: list[str]
-) -> list[str]:
+def _fetch_entry_ids_for_samples(url: str, token: str, sample_ids: list[str]) -> list[str]:
     entry_ids: list[str] = []
     for chunk in _chunked(sample_ids):
         query = {
@@ -438,11 +438,8 @@ def _fetch_entry_ids_for_samples(
             "query": {"results.eln.lab_ids:any": chunk},
             "pagination": {"page_size": 10000},
         }
-        response = requests.post(
-            f"{url}/entries/query", headers=headers, json=query, timeout=_REQUEST_TIMEOUT
-        )
-        response.raise_for_status()
-        entry_ids.extend(entry["entry_id"] for entry in response.json()["data"])
+        data = query_all(url, token, "entries/query", query, timeout=_REQUEST_TIMEOUT)
+        entry_ids.extend(entry["entry_id"] for entry in data)
     return entry_ids
 
 
@@ -460,8 +457,7 @@ def fetch_process_entries(
     positon_in_experimental_plan (NOMAD's field name, not a typo introduced
     here).
     """
-    headers = {"Authorization": f"Bearer {token}"}
-    entry_ids = _fetch_entry_ids_for_samples(url, token, headers, sample_ids)
+    entry_ids = _fetch_entry_ids_for_samples(url, token, sample_ids)
 
     entries = []
     seen_entry_ids: set[str] = set()
@@ -475,15 +471,10 @@ def fetch_process_entries(
             },
             "pagination": {"page_size": 10000},
         }
-        response = requests.post(
-            f"{url}/entries/archive/query",
-            headers=headers,
-            json=process_query,
-            timeout=_REQUEST_TIMEOUT,
+        data = query_all(
+            url, token, "entries/archive/query", process_query, timeout=_REQUEST_TIMEOUT
         )
-        response.raise_for_status()
-
-        for entry in response.json()["data"]:
+        for entry in data:
             # A process that references several samples comes back from every chunk that
             # holds one of them; count it once (its steps and materials were doubled before).
             entry_id = (entry.get("archive", {}).get("metadata") or {}).get(
@@ -521,11 +512,12 @@ def discover_entry_types(url: str, token: str, sample_ids: list[str]) -> list[st
     zero measurements), so this uses a plain entry_type aggregation instead,
     which works for anything.
     """
-    headers = {"Authorization": f"Bearer {token}"}
-    entry_ids = _fetch_entry_ids_for_samples(url, token, headers, sample_ids)
+    entry_ids = _fetch_entry_ids_for_samples(url, token, sample_ids)
     if not entry_ids:
         return []
 
+    # An aggregation, not a list of entries (page_size 0), so one plain POST per chunk.
+    headers = {"Authorization": f"Bearer {token}"}
     found_types: set[str] = set()
     for chunk in _chunked(entry_ids):
         aggregation_query = {
