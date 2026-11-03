@@ -142,6 +142,8 @@ trend over time) and ANOVA (does a result differ between groups of a categorical
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
 - Every statistic is computed per sample where it matters, but with *All Points* the rows are
   pixels: look at the sample counts the tabs report.
 - Random Forest, Bayesian optimization and the experimental tools need enough samples; they say
