@@ -177,6 +177,44 @@ def test_get_ids_in_batch_tolerant_dedupes_and_warns_on_duplicates(monkeypatch, 
     assert any("duplicate" in message.lower() for message in caplog.messages)
 
 
+def test_get_ids_in_batch_tolerant_uses_the_configured_batch_type(monkeypatch):
+    from hysprint_utils.config import ENTRY_TYPES
+
+    sent = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        sent.append(json["query"]["entry_type"])
+        return _FakeResponse({"data": [], "pagination": {}})
+
+    monkeypatch.setattr(dm.requests, "post", fake_post)
+    monkeypatch.setitem(ENTRY_TYPES, "batch", "Other_Batch")
+
+    dm.get_ids_in_batch_tolerant("https://example.test/api/v1", "tok", ["B1"])
+
+    assert sent == ["Other_Batch"]
+
+
+def test_fetch_entry_files_reads_every_page(monkeypatch):
+    """Both queries return two pages; entries on the second page used to be dropped (#172)."""
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        after = json["pagination"].get("page_after_value")
+        if "results.eln.lab_ids:any" in json["query"]:
+            rows = [{"entry_id": "s2"}] if after else [{"entry_id": "s1"}]
+        else:
+            assert json["query"]["entry_references.target_entry_id:any"] == ["s1", "s2"]
+            n = 2 if after else 1
+            rows = [{"entry_id": f"e{n}", "upload_id": "U", "mainfile": f"m{n}.json"}]
+        pagination = {} if after else {"next_page_after_value": "p2"}
+        return _FakeResponse({"data": rows, "pagination": pagination})
+
+    monkeypatch.setattr(dm.requests, "post", fake_post)
+
+    files = dm.fetch_entry_files("https://example.test/api/v1", "tok", ["S1"], "HySprint_JV")
+
+    assert files == [("e1", "U", "m1.json"), ("e2", "U", "m2.json")]
+
+
 def test_get_ids_in_batch_tolerant_returns_empty_for_no_batch_ids():
     assert dm.get_ids_in_batch_tolerant("https://example.test/api/v1", "tok", []) == []
 
