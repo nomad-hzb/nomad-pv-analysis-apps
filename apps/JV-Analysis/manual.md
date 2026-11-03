@@ -24,7 +24,7 @@ The tabs are used from left to right.
    without you doing anything.
 2. **Select Upload.** Select one or several batches and click *Load Data*. *Load demo data*
    loads a small bundled data set without NOMAD. Problems with single entries are listed after
-   loading.
+   loading. Each load replaces the previous one, including its variables, filters and plots.
 3. **Add Variable Names.** The table lists every sample (shown as `batch&variation`). Type the
    condition each one stands for (for example "1000 rpm"); samples with the same text are
    grouped together in the plots. The *Defaults* list chooses what the boxes start with: the batch name,

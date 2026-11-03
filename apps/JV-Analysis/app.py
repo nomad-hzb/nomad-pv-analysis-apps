@@ -272,6 +272,16 @@ class JVAnalysisApp:
     def _after_data_loaded(self):
         """Steps after any successful load (batch or demo): sample selection, summary,
         variables menu, next tab."""
+        # A new load replaces the previous one: clear what was shown for it further on
+        # (other measurements, variables status, filter results, plots).
+        for output in (
+            self.show_other_measurements,
+            self.read_output,
+            self.filter_ui.main_output,
+            self.plot_ui.plotted_content,
+        ):
+            output.clear_output()
+
         # Set data for sample selection in filter UI
         data = self.data_manager.get_data()
         self.filter_ui.set_sample_data(data)

@@ -113,12 +113,22 @@ class DataManager:
         self.export_curves_data = None
         self.load_problems = []
 
+    def _clear_loaded_data(self):
+        """Forget the previous load, filters included, so a new load (batch or demo) never
+        mixes with it: the plots and the filtered downloads read self.data."""
+        self.data = {}
+        self.unique_vals = []
+        self.filtered_data = None
+        self.omitted_data = None
+        self.filter_parameters = []
+
     def load_offline(self, fixture_path) -> bool:
         """Load from a local fixture JSON file (offline / demo mode)."""
         import json
 
         with open(fixture_path) as f:
             fx = json.load(f)
+        self._clear_loaded_data()
         sample_ids = fx.get("sample_ids", list(fx["measurements"].keys()))
         all_jvs = {
             sid: [(entry[0], entry[1]) for entry in entries]
@@ -135,7 +145,7 @@ class DataManager:
 
     def load_batch_data(self, batch_ids, output_widget=None):
         """Load data from selected batch IDs"""
-        self.data = {}
+        self._clear_loaded_data()
 
         if not self.auth_manager.is_authenticated():
             ErrorHandler.log_error("Authentication required", output_widget=output_widget)
