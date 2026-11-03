@@ -13,18 +13,19 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import requests
 import scipy.optimize
 import scipy.signal
 from pydantic import ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
-    REQUEST_TIMEOUT,
-    get_ids_in_batch,
-    get_sample_description,
+    _query_all as query_all,  # the shared paginated POST; public name pending (audit B1)
 )
 from hysprint_utils.api_calls import (
     get_all_eqe as _get_all_trpl,
+)
+from hysprint_utils.api_calls import (
+    get_ids_in_batch,
+    get_sample_description,
 )
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
@@ -139,12 +140,13 @@ class TRPLDataManager:
         Used when the batch entry has no registered entities so the normal
         sample-reference path returns nothing.
         """
-        headers = {"Authorization": f"Bearer {self._token}"}
-        resp = requests.post(
-            f"{self._url}/entries/archive/query",
-            timeout=REQUEST_TIMEOUT,
-            headers=headers,
-            json={
+        # Both queries follow every page: a single request used to drop whatever did not fit
+        # (more than 100 batch entries, or more than one page of TRPL entries).
+        batches = query_all(
+            self._url,
+            self._token,
+            "entries/archive/query",
+            {
                 "required": {"metadata": {"upload_id": "*"}},
                 "owner": "visible",
                 "query": {
@@ -154,26 +156,24 @@ class TRPLDataManager:
                 "pagination": {"page_size": 100},
             },
         )
-        resp.raise_for_status()
-        upload_ids = list({u["upload_id"] for u in resp.json()["data"]})
+        upload_ids = list({u["upload_id"] for u in batches})
         if not upload_ids:
             return {}
 
-        resp = requests.post(
-            f"{self._url}/entries/archive/query",
-            timeout=REQUEST_TIMEOUT,
-            headers=headers,
-            json={
+        entries = query_all(
+            self._url,
+            self._token,
+            "entries/archive/query",
+            {
                 "required": {"data": "*", "metadata": "*"},
                 "owner": "visible",
                 "query": {"entry_type": MEASUREMENT_TYPE, "upload_id:any": upload_ids},
                 "pagination": {"page_size": 10000},
             },
         )
-        resp.raise_for_status()
 
         res: dict = {}
-        for ldata in resp.json()["data"]:
+        for ldata in entries:
             try:
                 lab_id = ldata["archive"]["data"]["samples"][0]["lab_id"]
             except (KeyError, IndexError):
