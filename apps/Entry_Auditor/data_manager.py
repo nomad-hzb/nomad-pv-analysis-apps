@@ -21,10 +21,7 @@ import requests
 import yaml
 from pydantic import BaseModel
 
-from hysprint_utils.api_calls import (
-    _query_all as query_all,  # the shared paginated POST; public name pending (audit B1)
-)
-from hysprint_utils.api_calls import get_sample_entry_links
+from hysprint_utils.api_calls import get_sample_entry_links, query_all
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.consistency import (
     DEFAULT_EXCLUDE_COLUMNS,
