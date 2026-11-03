@@ -382,7 +382,12 @@ def differential_lifetime(
         exponential_sum, x[mask], pl[mask], maxfev=100000, p0=p0, bounds=(lower, upper)
     )
     fit = exponential_sum(x, *params)
-    tau_diff = -2 * (np.diff(t) / np.diff(np.log(fit)))
+    # Far along a fast decay the fit underflows to 0: its log (and tau_diff there) is undefined,
+    # so it stays NaN instead of printing numpy's divide-by-zero warnings into the app.
+    log_fit = np.full_like(fit, np.nan)
+    np.log(fit, out=log_fit, where=fit > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        tau_diff = -2 * (np.diff(t) / np.diff(log_fit))
     density = np.sqrt(fit / np.max(fit)) * n0
     return t + time_s[peak], tau_diff, density
 
