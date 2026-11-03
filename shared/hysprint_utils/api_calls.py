@@ -131,15 +131,20 @@ def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["
 
 
 def get_all_batches_wth_data(url, token, entry_type):
+    """Lab ids of the batches in every upload that has an entry of entry_type.
+
+    Step 1 asks the metadata endpoint (entries/query): the archive endpoint answered with an
+    HTTP error for large entry types such as JV and MPPT."""
     query = {
-        "required": {"metadata": {"upload_id": "*"}},
         "owner": "visible",
         "query": {"entry_type": entry_type},
         "pagination": {"page_size": 10000},
     }
 
-    data = _query_all(url, token, "entries/archive/query", query)
-    upload_ids = list(set([u["upload_id"] for u in data]))
+    data = _query_all(url, token, "entries/query", query)
+    upload_ids = list({u["upload_id"] for u in data if "upload_id" in u})
+    if not upload_ids:
+        return []
     query = {
         "required": {"data": "*"},
         "owner": "visible",
