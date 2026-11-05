@@ -2,6 +2,7 @@
 # All ipywidgets code for the ISA Previewer. The four notebooks differ only in the Variant
 # they hand to build_ui, so everything below is variant driven rather than duplicated.
 
+import inspect
 import logging
 import os
 
@@ -292,13 +293,33 @@ def open_source(target: str, variant: config.Variant, screenwidth: int):
                         name=exc.name,
                     ) from exc
 
-                return VIDEOVISUALIZERGUI(search_dir=target)
+                return VIDEOVISUALIZERGUI(search_dir=target, **video_gui_camera_kwargs())
             return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
         return PERFECTPREVIEWER(
             target,
             screenwidth=screenwidth,
             initialize_overview=variant.initialize_overview,
         )
+
+
+def video_gui_camera_kwargs() -> dict:
+    """The camera_folders argument for VIDEOVISUALIZERGUI, or nothing to pass.
+
+    The camera folders depend on the Oasis, so they come from its config
+    (config.CAMERA_FOLDER_ENV). insitu_analyser takes them from v0.2.32 on; an older release
+    has no such argument and keeps its own defaults, so it is only passed when accepted.
+    """
+    folders = data_manager.camera_folders_from_env()
+    if not folders:
+        return {}
+    from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+
+    if "camera_folders" not in inspect.signature(VIDEOVISUALIZERGUI).parameters:
+        logger.warning(
+            "insitu_analyser before v0.2.32 ignores the configured camera folders %s", folders
+        )
+        return {}
+    return {"camera_folders": folders}
 
 
 def handover_row(

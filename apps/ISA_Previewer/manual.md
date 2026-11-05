@@ -93,7 +93,8 @@ appears below the list. It makes one video per run you pick, from top to bottom:
    default, at most 60). It does not change how fast the video plays; with cameras, camera fps
    × playback speed shows every camera frame.
 6. **Include cameras.** Adds the two camera recordings of the experiment; the fields hold the
-   full paths of the two camera folders.
+   full paths of the two camera folders. They start with the folders your Oasis is set up
+   with, or empty if it has none; type or correct the paths as needed.
 7. **Create videos** starts the rendering. The videos go into a new folder of the upload named
    `Videos_<date>_<time>`, one file per run. The progress bar shows the frames of the current
    video together with the memory and CPU use, and the log at the bottom shows what happens and

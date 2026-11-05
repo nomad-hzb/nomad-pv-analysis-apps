@@ -387,16 +387,80 @@ class _FakeVideoGui:
         self.stopped = True
 
 
+class _FakeVideoGuiWithCameras(_FakeVideoGui):
+    """VIDEOVISUALIZERGUI from insitu_analyser v0.2.32 on, which takes camera_folders."""
+
+    def __init__(self, search_dir, camera_folders=None):
+        super().__init__(search_dir=search_dir, camera_folders=camera_folders)
+
+
+class _FakeVideoGuiBeforeCameras(_FakeVideoGui):
+    """VIDEOVISUALIZERGUI before v0.2.32: search_dir only."""
+
+    def __init__(self, search_dir):
+        super().__init__(search_dir=search_dir)
+
+
+def _install_video_gui(monkeypatch, gui, cfg, gui_class, env=None):
+    """Make gui_class the video GUI and set exactly the camera variables in env."""
+    module = type(sys)(gui.VIDEO_GUI_MODULE)
+    module.VIDEOVISUALIZERGUI = gui_class
+    monkeypatch.setitem(sys.modules, gui.VIDEO_GUI_MODULE, module)
+    for env_name in cfg.CAMERA_FOLDER_ENV.values():
+        monkeypatch.delenv(env_name, raising=False)
+    for env_name, value in (env or {}).items():
+        monkeypatch.setenv(env_name, value)
+
+
 def test_open_source_opens_the_video_gui_for_the_video_variant(gui, cfg, monkeypatch):
     """The video variant hands the upload folder to the video GUI, not to TIMELYTELLER."""
-    module = type(sys)("insitu_analyser.video_visualizer_gui")
-    module.VIDEOVISUALIZERGUI = _FakeVideoGui
-    monkeypatch.setitem(sys.modules, "insitu_analyser.video_visualizer_gui", module)
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGui)
     monkeypatch.setattr(gui, "TIMELYTELLER", lambda **kwargs: pytest.fail("opened the teller"))
 
     source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
 
     assert isinstance(source, _FakeVideoGui)
+    assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
+
+
+def test_camera_folders_from_env_keeps_only_the_set_ones(dm, cfg, monkeypatch):
+    monkeypatch.setenv(cfg.CAMERA_FOLDER_ENV["mp4"], " /uploads/videos/Windows_Kamera ")
+    monkeypatch.setenv(cfg.CAMERA_FOLDER_ENV["avi"], "")
+
+    assert dm.camera_folders_from_env() == {"mp4": "/uploads/videos/Windows_Kamera"}
+
+
+def test_open_source_passes_the_configured_camera_folders(gui, cfg, monkeypatch):
+    """The camera folders of this Oasis reach the video GUI's fields."""
+    env = {
+        cfg.CAMERA_FOLDER_ENV["mp4"]: "/uploads/videos/Windows_Kamera",
+        cfg.CAMERA_FOLDER_ENV["avi"]: "/uploads/videos/ThorCam",
+    }
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiWithCameras, env)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert source.kwargs["camera_folders"] == {
+        "mp4": "/uploads/videos/Windows_Kamera",
+        "avi": "/uploads/videos/ThorCam",
+    }
+
+
+def test_open_source_passes_no_camera_folders_when_none_are_configured(gui, cfg, monkeypatch):
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiWithCameras)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert source.kwargs["camera_folders"] is None
+
+
+def test_open_source_leaves_camera_folders_out_for_an_older_video_gui(gui, cfg, monkeypatch):
+    """An insitu_analyser before v0.2.32 has no camera_folders argument and still opens."""
+    env = {cfg.CAMERA_FOLDER_ENV["mp4"]: "/uploads/videos/Windows_Kamera"}
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiBeforeCameras, env)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
     assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
 
 

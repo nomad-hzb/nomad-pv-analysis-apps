@@ -179,6 +179,15 @@ UPLOAD_SOURCE_VIDEO = "video_visualizer"
 """...or the Video Visualizer, insitu_analyser's video GUI, which renders combined videos of
 the upload's runs into a new subfolder of it."""
 
+CAMERA_FOLDER_ENV = {
+    "mp4": "HYSPRINT_ISA_CAMERA_FOLDER_MP4",
+    "avi": "HYSPRINT_ISA_CAMERA_FOLDER_AVI",
+}
+"""Environment variables (set in oasis_local_config.py, see DEPLOYMENT.md) holding the full
+paths of the two camera folders the Video Visualizer's fields start with. Where the camera
+recordings live depends on the Oasis, so insitu_analyser holds no paths; unset or empty leaves
+that field empty."""
+
 
 @dataclass(frozen=True)
 class Variant:
