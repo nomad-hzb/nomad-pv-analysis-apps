@@ -2,6 +2,7 @@
 # All ipywidgets code for the ISA Previewer. The four notebooks differ only in the Variant
 # they hand to build_ui, so everything below is variant driven rather than duplicated.
 
+import inspect
 import logging
 import os
 
@@ -42,8 +43,8 @@ outside a cell execution is silently dropped under Voila."""
 class Session:
     """One opened selection: the object the sections were built from, and those widgets.
 
-    The source is a PERFECTPREVIEWER for a measurement variant and a TIMELYTELLER for an
-    upload variant; this class only has to hold it alive and let go of it again.
+    The source is a PERFECTPREVIEWER for a measurement variant and a TIMELYTELLER or the video
+    GUI for an upload variant; this class only has to hold it alive and let go of it again.
 
     Exists so a new selection can tear the previous one down completely. clear_output only
     hides widgets, it neither closes them nor frees the figures behind them, and an ISA h5
@@ -56,6 +57,11 @@ class Session:
 
     def dispose(self) -> None:
         """Close every figure and widget this session owns."""
+        # The video GUI may still be rendering in a background thread; let it finish its
+        # current frame before its figures are closed under it.
+        stop = getattr(self.source, "stop", None)
+        if callable(stop):
+            stop()
         # plt.close("all") rather than staticfunctions.close_figs: the previewer does not
         # hand out its figure objects, and by this point every figure alive belongs to the
         # session being dropped.
@@ -254,22 +260,66 @@ def preselect_from_store(
         measurements.value = h5_path
 
 
+VIDEO_GUI_MODULE = "insitu_analyser.video_visualizer_gui"
+VIDEO_GUI_MIN_VERSION = "v0.2.27"
+"""The first insitu_analyser release whose video GUI this app's manual describes."""
+
+
 def open_source(target: str, variant: config.Variant, screenwidth: int):
     """Open what the variant selects and return the object its sections are built from.
 
-    A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant a
-    TIMELYTELLER on the selected upload folder, which scans that folder for h5 files itself.
+    A measurement variant gets a PERFECTPREVIEWER on the selected h5, an upload variant the
+    tool its upload_source names on the selected upload folder (TIMELYTELLER or the video
+    GUI), which scans that folder for h5 files itself.
     """
     # Both constructors report their progress on stdout ("Optical 2 h5 path: ..."), which
     # under Voila renders above the app rather than inside it.
     with data_manager.quiet_stdout():
         if variant.selection == config.SELECTION_UPLOAD:
+            if variant.upload_source == config.UPLOAD_SOURCE_VIDEO:
+                # Imported here, not at the top: the video GUI arrived in a later
+                # insitu_analyser release than the rest, and an older install must not take
+                # the other variants down with it.
+                try:
+                    from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+                except ModuleNotFoundError as exc:
+                    # Only the module itself missing means an old insitu_analyser; a missing
+                    # dependency of it (cv2, pymediainfo) keeps its own, more precise message.
+                    if exc.name != VIDEO_GUI_MODULE:
+                        raise
+                    raise ModuleNotFoundError(
+                        f"the Video Visualizer needs insitu_analyser {VIDEO_GUI_MIN_VERSION} "
+                        "or newer",
+                        name=exc.name,
+                    ) from exc
+
+                return VIDEOVISUALIZERGUI(search_dir=target, **video_gui_camera_kwargs())
             return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)
         return PERFECTPREVIEWER(
             target,
             screenwidth=screenwidth,
             initialize_overview=variant.initialize_overview,
         )
+
+
+def video_gui_camera_kwargs() -> dict:
+    """The camera_folders argument for VIDEOVISUALIZERGUI, or nothing to pass.
+
+    The camera folders depend on the Oasis, so they come from its config
+    (config.CAMERA_FOLDER_ENV). insitu_analyser takes them from v0.2.32 on; an older release
+    has no such argument and keeps its own defaults, so it is only passed when accepted.
+    """
+    folders = data_manager.camera_folders_from_env()
+    if not folders:
+        return {}
+    from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+
+    if "camera_folders" not in inspect.signature(VIDEOVISUALIZERGUI).parameters:
+        logger.warning(
+            "insitu_analyser before v0.2.32 ignores the configured camera folders %s", folders
+        )
+        return {}
+    return {"camera_folders": folders}
 
 
 def handover_row(
@@ -305,6 +355,7 @@ def section_builders(source, variant: config.Variant) -> dict:
         "comparison": lambda: source.display_comparison(),
         "export": lambda: source.display_export(),
         "timely_teller": lambda: source.display(),
+        "video_visualizer": lambda: source.display(),
     }
 
 
