@@ -400,6 +400,31 @@ def test_open_source_opens_the_video_gui_for_the_video_variant(gui, cfg, monkeyp
     assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
 
 
+def test_open_source_names_the_needed_release_when_the_video_gui_is_missing(gui, cfg, monkeypatch):
+    """An insitu_analyser older than the video GUI says which release is needed."""
+    monkeypatch.setitem(sys.modules, gui.VIDEO_GUI_MODULE, None)
+
+    with pytest.raises(ModuleNotFoundError, match=gui.VIDEO_GUI_MIN_VERSION):
+        gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+
+def test_open_source_keeps_the_message_of_a_missing_video_dependency(gui, cfg, monkeypatch):
+    """A dependency of the video GUI that is missing (cv2) is not blamed on insitu_analyser."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == gui.VIDEO_GUI_MODULE:
+            raise ModuleNotFoundError("No module named 'cv2'", name="cv2")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ModuleNotFoundError, match="cv2"):
+        gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+
 def test_build_sections_of_the_video_variant_shows_the_video_gui(gui, cfg):
     assert gui.build_sections(_FakeVideoGui(), cfg.VARIANTS["video"]) == ["video_visualizer"]
 

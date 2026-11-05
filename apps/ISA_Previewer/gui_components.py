@@ -259,6 +259,11 @@ def preselect_from_store(
         measurements.value = h5_path
 
 
+VIDEO_GUI_MODULE = "insitu_analyser.video_visualizer_gui"
+VIDEO_GUI_MIN_VERSION = "v0.2.27"
+"""The first insitu_analyser release whose video GUI this app's manual describes."""
+
+
 def open_source(target: str, variant: config.Variant, screenwidth: int):
     """Open what the variant selects and return the object its sections are built from.
 
@@ -274,7 +279,18 @@ def open_source(target: str, variant: config.Variant, screenwidth: int):
                 # Imported here, not at the top: the video GUI arrived in a later
                 # insitu_analyser release than the rest, and an older install must not take
                 # the other variants down with it.
-                from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+                try:
+                    from insitu_analyser.video_visualizer_gui import VIDEOVISUALIZERGUI
+                except ModuleNotFoundError as exc:
+                    # Only the module itself missing means an old insitu_analyser; a missing
+                    # dependency of it (cv2, pymediainfo) keeps its own, more precise message.
+                    if exc.name != VIDEO_GUI_MODULE:
+                        raise
+                    raise ModuleNotFoundError(
+                        f"the Video Visualizer needs insitu_analyser {VIDEO_GUI_MIN_VERSION} "
+                        "or newer",
+                        name=exc.name,
+                    ) from exc
 
                 return VIDEOVISUALIZERGUI(search_dir=target)
             return TIMELYTELLER(search_dir=target, screenwidth=screenwidth)

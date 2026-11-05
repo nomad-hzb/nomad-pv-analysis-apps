@@ -112,6 +112,10 @@ automatically: the more you tick, the smaller each panel gets.
 - Video Visualizer: runs with optical data only (no GIWAXS, XRF, ... mode) cannot be rendered
   yet, since a video needs a measurement mode to set its pace. Many ticked modes make the
   panels small.
+- Video Visualizer: a published upload is read-only, so no videos can be created in it. Videos
+  can be large and count toward the size of the upload they are saved in.
+- Video Visualizer: it needs insitu_analyser v0.2.27 or newer; with an older one the message under
+  the list says so.
 
 ## Contact
 

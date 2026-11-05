@@ -13,7 +13,7 @@ dependencies = [
     "matplotlib>=3.0",
     # The video notebook: insitu_analyser keeps these in its optional [video] extra (the h5
     # creation does not need them), and bootstrap installs tracked tags without extras.
-    "opencv-python-headless",
+    "opencv-python-headless>=4.8",
     "pymediainfo",
 ]
 
