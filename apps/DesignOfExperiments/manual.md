@@ -71,10 +71,13 @@ the number of runs after a design exists) and **Export**.
   new seed and regenerates.
 - *Generated Samples* shows up to the first 50 rows (the index starts at 1). The full table is in
   the export. Whole-number columns are shown without decimals.
-- *Plot Type*: Scatter Plot Matrix, Parallel Coordinates, Distribution Plots, 3D Scatter Plot
+- *Plot Type*: Scatter Plot Matrix (every pair of numeric variables, with each variable's
+  histogram on the diagonal), Parallel Coordinates, Distribution Plots, 3D Scatter Plot
   (needs 3 numeric variables), Correlation Heatmap (needs 2 numeric variables) and
   Space-Filling Quality (distance histogram, coverage, uniformity and a 2D scatter). Plots that
-  need numeric variables ignore categorical ones. *Export Plot* gives a download link below the
+  need numeric variables ignore categorical ones. Parallel Coordinates and the 3D Scatter Plot
+  need WebGL in the browser; if they say "WebGL is not supported", turn on hardware
+  acceleration (in Chrome: *Use graphics acceleration when available*) or use another browser. *Export Plot* gives a download link below the
   plot (a self-contained HTML file).
 - *Summary statistics*: per variable its type, minimum, maximum and number of different values.
 

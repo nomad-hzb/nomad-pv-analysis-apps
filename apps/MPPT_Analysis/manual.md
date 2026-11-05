@@ -19,8 +19,8 @@ entry and flips it, so power density is positive for a working cell.
 
 The tabs open one after the other, each after the previous step is done.
 
-1. **Batch Selection.** *Show MPPT Batches* narrows the list to batches that contain MPPT
-   measurements. Select one or more batches and click *Load Data*. *Load demo data* (at the top)
+1. **Batch Selection.** *Show MPPT only*, under the batch list, keeps only the batches with MPPT
+   measurements (this can take a minute); *Show all batches* brings the rest back. Select one or more batches and click *Load Data*. *Load demo data* (at the top)
    uses a small bundled data set without NOMAD.
 2. **Sample Selection.** Every sample lists its measurements (pixels); tick the ones to analyse.
    The sample's own box ticks or unticks all of its measurements. *Name preset* decides how the

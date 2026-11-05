@@ -4,7 +4,7 @@ import logging
 import time
 
 import ipywidgets as widgets
-from data_manager import TOKEN, URL_API, state
+from data_manager import TOKEN, URL_API, natural_sort_key, state
 from gui_components import (
     create_auto_match_button,
     create_file_count_display,
@@ -66,9 +66,13 @@ def initialize_ui(
     out, out2 = create_output_widgets()
     upload_button_container = create_upload_button_container()
 
+    # The shared panel filters (and sorts) the batch list as you type; only the fallback
+    # below needs a search handler of its own. Two handlers made the app's unsorted one win.
+    own_search = False
     try:
+        # One batch at a time: a single-choice list.
         batch_selection_container = create_batch_selection(
-            URL_API, TOKEN, lambda selector: on_load_button_clicked(None)
+            URL_API, TOKEN, lambda selector: on_load_button_clicked(None), multiple=False
         )
         # Remove the internal "Load Data" button from the container — we
         # display a separate load_button below to keep the layout consistent
@@ -84,8 +88,10 @@ def initialize_ui(
             placeholder="Search batch IDs",
             layout=widgets.Layout(width="400px"),
         )
-        _bids_fb = widgets.SelectMultiple(
-            options=batch_ids_list,
+        own_search = True
+        _bids_fb = widgets.Select(
+            options=sorted(batch_ids_list, key=natural_sort_key),
+            value=None,
             layout=widgets.Layout(width="400px", height="200px"),
         )
         batch_selection_container = widgets.VBox([_search_fb, _bids_fb])
@@ -144,7 +150,8 @@ def initialize_ui(
     reset_assignments_button.on_click(on_reset_assignments_click(file_selector, out2))
     file_input.observe(on_file_change, names="file_info")
     file_selector.observe(on_selection_change_wrapper, names="value")
-    search_field.observe(on_search_change, names="value")
+    if own_search:
+        search_field.observe(on_search_change, names="value")
 
     display(
         widgets.VBox(
