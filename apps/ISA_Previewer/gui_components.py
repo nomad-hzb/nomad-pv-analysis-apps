@@ -2,6 +2,7 @@
 # All ipywidgets code for the ISA Previewer. The four notebooks differ only in the Variant
 # they hand to build_ui, so everything below is variant driven rather than duplicated.
 
+import gc
 import logging
 import os
 
@@ -48,25 +49,44 @@ class Session:
     Exists so a new selection can tear the previous one down completely. clear_output only
     hides widgets, it neither closes them nor frees the figures behind them, and an ISA h5
     is large enough that leaking one per selection is felt within a session.
+
+    Create it before opening the source: it notes which widgets exist at that moment, and
+    dispose closes every widget created after that, not only the top-level contents.
+    ipywidgets keeps each widget in a global registry until that widget itself is closed;
+    closing a box leaves its children registered, and their callbacks (the frame slider's
+    update_image, the heatmap checkboxes) kept the whole previewer and its arrays alive. That
+    leaked about 1.5 GiB per selection on a 500 MiB h5 until the kernel took a whole Oasis down
+    (insitu_analyser Documentation/nomad-oasis-incident-2026-11-06.md). Counting from the
+    snapshot also catches widgets a section adds later from a callback (a CIF row, a rebuilt
+    comparison), which a list taken right after the build would miss.
     """
 
-    def __init__(self, source, contents: list[widgets.Widget]):
-        self.source = source
-        self.contents = contents
+    def __init__(self):
+        self._widgets_before = set(widgets.Widget.widgets)
+        self.source = None
+        self.contents: list[widgets.Widget] = []
 
     def dispose(self) -> None:
-        """Close every figure and widget this session owns."""
+        """Close every figure and widget this session created and free their memory."""
         # plt.close("all") rather than staticfunctions.close_figs: the previewer does not
         # hand out its figure objects, and by this point every figure alive belongs to the
         # session being dropped.
         plt.close("all")
-        for widget in self.contents:
+        for widget_id in set(widgets.Widget.widgets) - self._widgets_before:
+            widget = widgets.Widget.widgets.get(widget_id)
+            if widget is None:
+                # already closed as a side effect of closing another one
+                continue
             try:
                 widget.close()
             except Exception:
                 logger.exception("Failed to close a previewer widget")
         self.contents = []
         self.source = None
+        # The previewer, its heaters and their figures reference each other in cycles, so
+        # nothing is freed by reference counting alone; collect now rather than at some later
+        # allocation, while the next file is about to be loaded.
+        gc.collect()
 
 
 def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
@@ -149,12 +169,15 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
             session["current"].dispose()
             session["current"] = None
 
+        # Before open_source, so every widget the source builds counts as this session's.
+        current = Session()
         try:
             source = open_source(target, variant, pixel_width.value)
             contents = build_sections(source, variant)
         except Exception as exc:  # noqa: BLE001 - a bad h5 must not leave a spinner behind
             logger.exception("Opening %s failed", target)
-            session["current"] = None
+            # A source that failed halfway may already hold widgets and figures.
+            current.dispose()
             out.clear_output()
             with out:
                 print(f"Could not open {os.path.basename(target)}: {exc}")
@@ -164,7 +187,9 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
         if handover is not None:
             contents.append(handover)
 
-        session["current"] = Session(source, contents)
+        current.source = source
+        current.contents = contents
+        session["current"] = current
 
         out.clear_output()
         with out:
