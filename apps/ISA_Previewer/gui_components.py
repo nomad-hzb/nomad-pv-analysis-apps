@@ -56,7 +56,7 @@ class Session:
     closing a box leaves its children registered, and their callbacks (the frame slider's
     update_image, the heatmap checkboxes) kept the whole previewer and its arrays alive. That
     leaked about 1.5 GiB per selection on a 500 MiB h5 until the kernel took a whole Oasis down
-    (insitu_analyser Documentation/nomad-oasis-incident-2026-11-06.md). Counting from the
+    on 2026-11-06 (issue #220). Counting from the
     snapshot also catches widgets a section adds later from a callback (a CIF row, a rebuilt
     comparison), which a list taken right after the build would miss.
     """
