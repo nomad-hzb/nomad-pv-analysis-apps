@@ -62,8 +62,27 @@ def _build_ui(url: str, token: str) -> widgets.VBox:
     # Varying Fields table (and everything downstream) stayed empty until a user noticed
     # and clicked "Apply Sample Setup" themselves.
     sample_setup.apply_sample_setup()
+    # While Replicate Experiment fetches, fills in and rebuilds the whole sequence, these
+    # sections are hidden behind one loading line and come back together, instead of
+    # Experiment Info showing at once and the process rows trickling in afterwards.
+    loading_note = widgets.HTML(
+        value=(
+            "<p style='color:#2c3e50; font-size:14px;'>&#8987; <b>Loading the template "
+            "batch...</b> The process sequence and the varying fields appear here once "
+            "everything is filled in.</p>"
+        ),
+        layout=widgets.Layout(display="none"),
+    )
+    # One wrapper is hidden, not the sections themselves: VariationTemplatePanel sets its
+    # own layout.display, which must survive the loading phase.
+    loaded_sections = widgets.VBox([])
+
+    def show_loading(busy):
+        loading_note.layout.display = None if busy else "none"
+        loaded_sections.layout.display = "none" if busy else None
+
     template_picker = create_whole_experiment_template_picker(
-        state, url, token, cache, on_change=refresh_all
+        state, url, token, cache, on_change=refresh_all, on_busy=show_loading
     )
     quick_fill_all_button = create_quick_fill_all_button(state, on_change=refresh_all)
 
@@ -106,20 +125,8 @@ def _build_ui(url: str, token: str) -> widgets.VBox:
             # batch's processes/values is the natural next step once samples exist.
             template_picker,
             quick_fill_all_button,
-            widgets.HTML(value="<h4>Process Sequence</h4>"),
-            sequence_builder,
-            widgets.HTML(value="<h4>Varying Fields</h4>"),
-            widgets.HTML(
-                value=(
-                    "<i style='color:#7f8c8d; font-size:11px;'>For large datasets, this "
-                    "table can occasionally fail to display - click Refresh if it looks "
-                    "empty or stale.</i>"
-                )
-            ),
-            refresh_matrix_button,
-            refresh_matrix_status,
-            matrix,
-            variation_template_panel,
+            loading_note,
+            loaded_sections,
             widgets.HTML(value="<h4>Nudge Review</h4>"),
             nudge_button,
             nudge_container,
@@ -133,5 +140,23 @@ def _build_ui(url: str, token: str) -> widgets.VBox:
         # (VaryingFieldsMatrix._columns_box) ever needs to kick in.
         layout=widgets.Layout(padding="15px", max_width="98vw"),
     )
+
+    # Filled here because show_loading (defined above, before these widgets exist) hides it.
+    loaded_sections.children = [
+        widgets.HTML(value="<h4>Process Sequence</h4>"),
+        sequence_builder,
+        widgets.HTML(value="<h4>Varying Fields</h4>"),
+        widgets.HTML(
+            value=(
+                "<i style='color:#7f8c8d; font-size:11px;'>For large datasets, this "
+                "table can occasionally fail to display - click Refresh if it looks "
+                "empty or stale.</i>"
+            )
+        ),
+        refresh_matrix_button,
+        refresh_matrix_status,
+        matrix,
+        variation_template_panel,
+    ]
 
     return main_interface

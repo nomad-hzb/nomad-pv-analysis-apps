@@ -17,11 +17,27 @@ logger = logging.getLogger(__name__)
 # slow, so the read timeout is generous; it only exists so a dead server cannot hang an app.
 REQUEST_TIMEOUT = (10, 300)
 DEFAULT_PAGE_SIZE = 10000
+
+
+class EntryLookupError(LookupError, AssertionError):
+    """NOMAD did not return the entry (or entries) a lookup needs: none, or several where
+    exactly one is expected. These lookups used assert before, which python -O skips; the
+    AssertionError base keeps every existing `except AssertionError` handler working."""
+
+
+def _exactly_one(data, what):
+    """The only item of data, or EntryLookupError naming what was looked up."""
+    if len(data) != 1:
+        found = "no entry" if not data else f"{len(data)} entries"
+        raise EntryLookupError(f"NOMAD returned {found} for {what}, expected exactly one")
+    return data[0]
+
+
 # Safety stop for the page loop (a server that keeps returning a next page forever).
 MAX_PAGES = 1000
 
 
-def _query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
+def query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
     """POST a NOMAD query and return the "data" of every page, in order.
 
     Follows pagination.next_page_after_value, so a result larger than the page size is
@@ -47,6 +63,10 @@ def _query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
         "query to %s stopped after %d pages; the result may be incomplete", endpoint, MAX_PAGES
     )
     return data
+
+
+# Old private name, kept so code written against it keeps working.
+_query_all = query_all
 
 
 def edit_entry(url, token, entry_id, changes):
@@ -111,7 +131,7 @@ def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["
     }
     samples = [
         (entry.get("archive") or {}).get("data") or {}
-        for entry in _query_all(url, token, "entries/archive/query", query)
+        for entry in query_all(url, token, "entries/archive/query", query)
     ]
     substrate_ids = {entry_id_from_reference(s.get("substrate")) for s in samples} - {None}
     substrates = {}
@@ -122,7 +142,7 @@ def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["
             "query": {"entry_id:any": sorted(substrate_ids)},
             "pagination": {"page_size": 1000},
         }
-        for entry in _query_all(url, token, "entries/archive/query", query):
+        for entry in query_all(url, token, "entries/archive/query", query):
             substrates[entry.get("entry_id")] = (entry.get("archive") or {}).get("data") or {}
     return [
         {"sample": s, "substrate": substrates.get(entry_id_from_reference(s.get("substrate")), {})}
@@ -130,30 +150,42 @@ def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["
     ]
 
 
+# Uploads per batch query in get_all_batches_wth_data: one upload_id:any list with every
+# upload of a large technique (JV) makes a single very large request.
+BATCH_LOOKUP_UPLOAD_CHUNK = 200
+
+
 def get_all_batches_wth_data(url, token, entry_type):
     """Lab ids of the batches in every upload that has an entry of entry_type.
 
-    Step 1 asks the metadata endpoint (entries/query): the archive endpoint answered with an
-    HTTP error for large entry types such as JV and MPPT."""
+    Asks only for what it needs, so the answers stay small even for JV, the technique with
+    the most entries: the upload_id of each measurement (metadata endpoint; the archive
+    endpoint answered with an HTTP error for JV and MPPT), then the lab_id of the batches in
+    those uploads, a chunk of uploads at a time. A batch entry without lab_id is skipped."""
     query = {
         "owner": "visible",
         "query": {"entry_type": entry_type},
+        "required": {"include": ["upload_id"]},
         "pagination": {"page_size": 10000},
     }
-
-    data = _query_all(url, token, "entries/query", query)
-    upload_ids = list({u["upload_id"] for u in data if "upload_id" in u})
-    if not upload_ids:
-        return []
-    query = {
-        "required": {"data": "*"},
-        "owner": "visible",
-        "query": {"entry_type": ENTRY_TYPES["batch"], "upload_id:any": upload_ids},
-        "pagination": {"page_size": 10000},
-    }
-    data = _query_all(url, token, "entries/archive/query", query)
-
-    return list(set([b["archive"]["data"]["lab_id"] for b in data]))
+    entries = query_all(url, token, "entries/query", query)
+    upload_ids = sorted({e["upload_id"] for e in entries if "upload_id" in e})
+    batch_ids = set()
+    for start in range(0, len(upload_ids), BATCH_LOOKUP_UPLOAD_CHUNK):
+        query = {
+            "required": {"data": {"lab_id": "*"}},
+            "owner": "visible",
+            "query": {
+                "entry_type": ENTRY_TYPES["batch"],
+                "upload_id:any": upload_ids[start : start + BATCH_LOOKUP_UPLOAD_CHUNK],
+            },
+            "pagination": {"page_size": 1000},
+        }
+        for batch in query_all(url, token, "entries/archive/query", query):
+            lab_id = ((batch.get("archive") or {}).get("data") or {}).get("lab_id")
+            if lab_id:
+                batch_ids.add(lab_id)
+    return list(batch_ids)
 
 
 def get_template(url, token, upload_name, method):
@@ -165,7 +197,7 @@ def get_template(url, token, upload_name, method):
         "query": {"upload_name": upload_name, "entry_type": method},
         "pagination": {"page_size": 100},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
     return data
 
 
@@ -189,7 +221,7 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
         "query": {"entry_type": batch_type},
         "pagination": {"page_size": 10000},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
 
 
@@ -238,7 +270,7 @@ def get_batch_ids_with_authors(url, token, batch_type=ENTRY_TYPES["batch"]):
         "query": {"entry_type": batch_type},
         "pagination": {"page_size": 10000},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
 
     records = []
     unresolved_user_ids = set()
@@ -291,7 +323,7 @@ def get_ids_in_batch(url, token, batch_ids, batch_type=ENTRY_TYPES["batch"]):
         "query": {"results.eln.lab_ids:any": batch_ids, "entry_type": batch_type},
         "pagination": {"page_size": 100},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
     if len(data) != len(batch_ids):
         logger.warning("asked for %d batches, NOMAD returned %d", len(batch_ids), len(data))
     sample_ids = []
@@ -314,9 +346,8 @@ def get_entry_data(url, token, entry_id):
         "query": row,
         "pagination": {"page_size": 10000},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
-    assert len(data) == 1, "Entry not found"
-    return data[0]["archive"]["data"]
+    data = query_all(url, token, "entries/archive/query", query)
+    return _exactly_one(data, f"entry_id {entry_id!r}")["archive"]["data"]
 
 
 def get_sample_description(url, token, sample_ids):
@@ -326,7 +357,7 @@ def get_sample_description(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     res = {}
     for entry in entries:
         data = entry["data"]
@@ -343,9 +374,8 @@ def get_entryid(url, token, sample_id):  # give it a batch id
         "query": {"results.eln.lab_ids": sample_id},
         "pagination": {"page_size": 100},
     }
-    data = _query_all(url, token, "entries/query", query)
-    assert len(data) == 1
-    return data[0]["entry_id"]
+    data = query_all(url, token, "entries/query", query)
+    return _exactly_one(data, f"lab_id {sample_id!r}")["entry_id"]
 
 
 def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
@@ -356,9 +386,8 @@ def get_nomad_ids_of_entry(url, token, sample_id):  # give it a batch id
         "query": {"results.eln.lab_ids": sample_id},
         "pagination": {"page_size": 100},
     }
-    data = _query_all(url, token, "entries/query", query)
-    assert len(data) == 1
-    return data[0]["entry_id"], data[0]["upload_id"]
+    entry = _exactly_one(query_all(url, token, "entries/query", query), f"lab_id {sample_id!r}")
+    return entry["entry_id"], entry["upload_id"]
 
 
 def get_upload_ids_for_samples(url, token, sample_ids):
@@ -377,7 +406,7 @@ def get_upload_ids_for_samples(url, token, sample_ids):
     }
     wanted = set(sample_ids)
     found = {}
-    for entry in _query_all(url, token, "entries/query", query):
+    for entry in query_all(url, token, "entries/query", query):
         upload_id = entry.get("upload_id")
         lab_ids = ((entry.get("results") or {}).get("eln") or {}).get("lab_ids") or []
         for lab_id in lab_ids:
@@ -462,7 +491,7 @@ def get_sample_entry_links(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    data = _query_all(url, token, "entries/query", query)
+    data = query_all(url, token, "entries/query", query)
 
     result = {}
     for entry in data:
@@ -493,9 +522,8 @@ def get_entry_meta_data(url, token, entry_id):
         "query": row,
         "pagination": {"page_size": 100},
     }
-    data = _query_all(url, token, "entries/query", query)
-    assert len(data) == 1, "Entry not found"
-    return data[0]
+    data = query_all(url, token, "entries/query", query)
+    return _exactly_one(data, f"entry_id {entry_id!r}")
 
 
 def get_information(url, token, entry_id, path):
@@ -511,19 +539,18 @@ def get_information(url, token, entry_id, path):
 
 def get_setup(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.setup")
-    assert data and len(data) == 1, "No Setup found"
-    return data[0]
+    return _exactly_one(data, f"the setup of entry {entry_id!r}")
 
 
 def get_environment(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.environment")
-    assert data and len(data) == 1, "No Environment found"
-    return data[0]
+    return _exactly_one(data, f"the environment of entry {entry_id!r}")
 
 
 def get_samples(url, token, entry_id):
     data = get_information(url, token, entry_id, "data.samples.reference")
-    assert data and len(data) > 0, "No Samples found"
+    if not data:
+        raise EntryLookupError(f"NOMAD returned no samples for entry {entry_id!r}")
     return data
 
 
@@ -540,7 +567,7 @@ def get_specific_data_of_sample(url, token, sample_id, entry_type, with_meta=Fal
         "query": {"entry_references.target_entry_id": entry_id},
         "pagination": {"page_size": 100},
     }
-    linked_data = _query_all(url, token, "entries/archive/query", query)
+    linked_data = query_all(url, token, "entries/archive/query", query)
     res = []
     for ldata in linked_data:
         if (
@@ -585,7 +612,7 @@ def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
@@ -597,7 +624,7 @@ def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": jv_type},
         "pagination": {"page_size": 10000},
     }
-    linked_data = _query_all(url, token, "entries/archive/query", query)
+    linked_data = query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -609,7 +636,7 @@ def get_all_measurements_except_JV(url, token, sample_ids):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
@@ -624,7 +651,7 @@ def get_all_measurements_except_JV(url, token, sample_ids):
         },
         "pagination": {"page_size": 10000},
     }
-    linked_data = _query_all(url, token, "entries/archive/query", query)
+    linked_data = query_all(url, token, "entries/archive/query", query)
     non_jv = [
         ldata
         for ldata in linked_data
@@ -642,7 +669,7 @@ def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
@@ -654,7 +681,7 @@ def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": eqe_type},
         "pagination": {"page_size": 10000},
     }
-    linked_data = _query_all(url, token, "entries/archive/query", query)
+    linked_data = query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -666,7 +693,7 @@ def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 100},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
@@ -678,7 +705,7 @@ def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
         "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": mppt_type},
         "pagination": {"page_size": 100},
     }
-    linked_data = _query_all(url, token, "entries/archive/query", query)
+    linked_data = query_all(url, token, "entries/archive/query", query)
     return _index_linked_data_by_sample(linked_data)
 
 
@@ -690,7 +717,7 @@ def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_
         "query": {"results.eln.lab_ids:any": sample_ids},
         "pagination": {"page_size": 10000},
     }
-    entries = _query_all(url, token, "entries/query", query)
+    entries = query_all(url, token, "entries/query", query)
     entry_ids = [entry["entry_id"] for entry in entries]
 
     query = {
@@ -704,7 +731,7 @@ def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_
         },
         "pagination": {"page_size": 10000},
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
     data = list(map(lambda process: process["archive"]["data"], data))
     # delete entries for which "position_in_experimental_plan" is not defined, these are likely not proper processing steps
     data = [step for step in data if "positon_in_experimental_plan" in step]
@@ -726,7 +753,7 @@ def get_efficiencies(url, token, sample_ids):
         },
         "owner": "visible",
     }
-    data = _query_all(url, token, "entries/archive/query", query)
+    data = query_all(url, token, "entries/archive/query", query)
     # return dict with entries lab_id:efficiency
     return dict(
         map(

@@ -196,6 +196,8 @@ image matters, check it in the review tab and correct it, or use click mode.
 
 ## Known limits
 
+- In the Excel file, text from NOMAD that starts with `=` is stored as text, so Excel shows it
+  instead of running it as a formula.
 - The pixel size must be in the TIFF metadata (Zeiss SmartSEM format).
 - Loading many images keeps them all in memory (about 10 MB per image). Remove images you no
   longer need with *Remove all images*.

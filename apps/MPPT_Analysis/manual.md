@@ -60,7 +60,7 @@ The tabs open one after the other, each after the previous step is done.
 5. **Download Results.** *Generate Download Package* builds a zip with
    `MPPT_Analysis_Results.xlsx` (sheets Raw_Curve_Data, Fitted_Curve_Data, Fit_Results,
    Statistical_Summary, Sample_Information; the raw and fitted data can be left out), the plots as
-   HTML, PNG or both, and a README.
+   HTML, PNG or both, and a README, and downloads it straight away.
 
 ## What the figures of merit mean
 
@@ -79,6 +79,8 @@ The tabs open one after the other, each after the previous step is done.
 
 ## Known limits
 
+- In the Excel file, text from NOMAD that starts with `=` is stored as text, so Excel shows it
+  instead of running it as a formula.
 - The fits and cleaning live in the browser session only until you write them to NOMAD or
   download them.
 - Writing to NOMAD overwrites the earlier fit results of the entry.

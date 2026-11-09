@@ -17,6 +17,7 @@ from IPython.display import display as ipydisplay
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
+from hysprint_utils.table_utils import csv_safe
 
 logger = logging.getLogger(__name__)
 
@@ -404,7 +405,7 @@ class DataTablePanel:
         try:
             pivot = self.dm.get_pivot_table(value_col, group_col)
             buf = io.StringIO()
-            pivot.to_csv(buf)
+            csv_safe(pivot).to_csv(buf)
             ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
             filename = f"abspl_pivot_{value_col}_by_{group_col}_{ts}.csv"
             self._trigger_download(buf.getvalue(), filename)
