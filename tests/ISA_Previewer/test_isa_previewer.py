@@ -552,7 +552,9 @@ def test_dispose_stops_a_running_render_before_closing(gui, monkeypatch):
     source.stop = lambda: order.append("stop")
     monkeypatch.setattr(gui.plt, "close", lambda which: order.append("close"))
 
-    gui.Session(source, []).dispose()
+    session = gui.Session()
+    session.source = source
+    session.dispose()
 
     assert order == ["stop", "close"]
 
@@ -561,7 +563,9 @@ def test_dispose_of_a_source_without_stop_just_closes(gui, monkeypatch):
     closed = []
     monkeypatch.setattr(gui.plt, "close", lambda which: closed.append(which))
 
-    gui.Session(_FakeTeller(), []).dispose()
+    session = gui.Session()
+    session.source = _FakeTeller()
+    session.dispose()
 
     assert closed == ["all"]
 
