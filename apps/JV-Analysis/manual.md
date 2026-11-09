@@ -85,6 +85,10 @@ The tabs are used from left to right.
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
+- In the Excel summary, text from NOMAD that starts with `=` is stored as text, so Excel shows it
+  instead of running it as a formula.
 - Plots, the Excel summary and the zip are built when you press *Plot Selection*; after
   changing filters, plot again.
 - PNG images are skipped when the image export is not available on the server; the HTML plots
