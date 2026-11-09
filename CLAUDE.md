@@ -92,9 +92,12 @@ nomad-baseclasses; never guess, and leave `unit_verified: False` until checked.
 
 ## Gotchas
 
-**Repo-root `secrets.py` shadows the stdlib `secrets`.** numpy and plotly then fail with
-`cannot import name 'randbits'/'token_hex'`. `tests/conftest.py` strips the repo root from
-`sys.path`; never delete it. Run `voila` and `python -c` from the app directory, not the root.
+**The local token file is `nomad_secrets.py`** (`NOMAD_TOKEN = "..."`, read as data by
+`hysprint_utils.access_token`). Its old name `secrets.py` is still read, with a warning: at the
+repo root it shadows the stdlib `secrets`, and numpy and plotly then fail with
+`cannot import name 'randbits'/'token_hex'`. Until every old file is renamed, `tests/conftest.py`
+keeps stripping the repo root from `sys.path` (never delete it), and `voila` and `python -c` run
+from the app directory, not the root.
 
 **One test process, many apps.** Every app reuses the same module names, so
 `tests/conftest.py` records which module objects belong to which app and binds that app's bare

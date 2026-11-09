@@ -86,8 +86,8 @@ python evaluate.py "D:/Seafile/JointLab-TEAM-Inkjet/SEM images" "D:/Seafile/Join
 ```
 
 `--legacy` also scores the old notebook pipeline for comparison. Run this from
-`apps/SEM_crystal_counter`, not the repo root, because the root `secrets.py` breaks numpy
-there.
+`apps/SEM_crystal_counter`, not the repo root, because a root token file still named
+`secrets.py` (now `nomad_secrets.py`) breaks numpy there.
 
 ## Other dev tools in this folder
 
