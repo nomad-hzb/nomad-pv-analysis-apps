@@ -21,7 +21,7 @@ from hysprint_utils.table_utils import keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 
 
 def _html_float_format(value):
@@ -89,7 +89,7 @@ class GUIComponents:
                     self.app_controller.enable_sample_tab()
 
         try:
-            # get_mppt_batch_ids, not the shared query: archive queries fail for MPPT entries.
+            # get_mppt_batch_ids: the shared batch lookup, with a slower fallback for MPPT.
             batch_widget = create_batch_selection(
                 self.data_manager.url,
                 self.data_manager.token,
