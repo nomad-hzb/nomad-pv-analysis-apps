@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 
 import grain_core as gc
@@ -23,6 +24,7 @@ from IPython.display import display as ipydisplay
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.plotting_utils import WidgetFactory
+from hysprint_utils.widget_cleanup import close_widgets, live_widgets
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ class AnalysisPanel:
         self._status = widgets.Output()
         self._tables = widgets.Output()
         self._plots = widgets.Output()
+        self._shown: dict = {}  # see _replace_contents
         self._downloads = widgets.Output()
         self._download_btn = WidgetFactory.create_button(
             "Download results (Excel)", icon="download", min_width=False
@@ -159,8 +162,7 @@ class AnalysisPanel:
     def refresh(self) -> None:
         images = self.dm.image_table()
         samples = self.dm.sample_table()
-        with self._tables:
-            self._tables.clear_output(wait=True)
+        with _replace_contents(self._tables, self._shown):
             if images.empty:
                 ipydisplay(widgets.HTML("<i>No images loaded yet.</i>"))
                 return
@@ -178,8 +180,7 @@ class AnalysisPanel:
             if not samples.empty:
                 ipydisplay(widgets.HTML("<h4>Samples</h4>"))
                 ipydisplay(_readable(samples, SAMPLE_COLUMNS))
-        with self._plots:
-            self._plots.clear_output(wait=True)
+        with _replace_contents(self._plots, self._shown):
             if not samples.empty:
                 ipydisplay(go.FigureWidget(pm.size_histogram(self.dm.grains_table(TOP))))
                 ipydisplay(go.FigureWidget(pm.sample_bars(samples)))
@@ -223,6 +224,7 @@ class CrossSectionPanel:
         )
         self._by.observe(lambda _c: self._plot_distribution(), names="value")
         self._tables = widgets.Output()
+        self._shown: dict = {}  # see _replace_contents
         self._distribution = widgets.Output()
         self._profiles = widgets.Output()
         self.widget = widgets.VBox(
@@ -237,8 +239,7 @@ class CrossSectionPanel:
 
     def refresh(self) -> None:
         images = self.dm.cross_section_table()
-        with self._tables:
-            self._tables.clear_output(wait=True)
+        with _replace_contents(self._tables, self._shown):
             if images.empty:
                 ipydisplay(
                     widgets.HTML(
@@ -254,15 +255,13 @@ class CrossSectionPanel:
                 ipydisplay(_readable(self.dm.cross_sample_table(), CROSS_SAMPLE_COLUMNS))
         self._by.layout.display = "none" if images.empty else ""
         self._plot_distribution()
-        with self._profiles:
-            self._profiles.clear_output(wait=True)
+        with _replace_contents(self._profiles, self._shown):
             if not images.empty:
                 ipydisplay(go.FigureWidget(pm.thickness_profile(self.dm.thickness_profiles())))
 
     def _plot_distribution(self) -> None:
         profiles = self.dm.thickness_profiles()
-        with self._distribution:
-            self._distribution.clear_output(wait=True)
+        with _replace_contents(self._distribution, self._shown):
             if not profiles.empty:
                 ipydisplay(go.FigureWidget(pm.thickness_histogram(profiles, by=self._by.value)))
 
@@ -849,6 +848,24 @@ def _ruler_html(points, nm_per_px: float) -> str:
         f"<b style='color:#8a7a00'>Ruler: {np.hypot(dx, dy):.0f} nm</b> "
         f"(horizontal {dx:.0f} nm, vertical {dy:.0f} nm)"
     )
+
+
+@contextmanager
+def _replace_contents(output, shown: dict):
+    """Display new contents in output, then close the widgets it showed before.
+
+    clear_output only hides widgets: without closing them, every refresh would leave its
+    tables and figures alive in the kernel. shown maps an output's model_id to the widgets
+    it currently shows; they are closed after the new ones are in, so nothing flickers."""
+    before = set(live_widgets())
+    try:
+        with output:
+            output.clear_output(wait=True)
+            yield
+    finally:
+        stale = shown.get(output.model_id, set())
+        shown[output.model_id] = set(live_widgets()) - before
+        close_widgets(stale)
 
 
 def _readable(table, columns: dict) -> HTML:
