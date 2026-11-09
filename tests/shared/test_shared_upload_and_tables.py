@@ -34,7 +34,7 @@ def test_one_query_finds_every_samples_upload(monkeypatch):
             {"upload_id": "u2", "results": {"eln": {"lab_ids": ["S2"]}}},
         ]
 
-    monkeypatch.setattr(api_calls, "_query_all", fake_query_all)
+    monkeypatch.setattr(api_calls, "query_all", fake_query_all)
     found = api_calls.get_upload_ids_for_samples("https://x/api/v1", "tok", ["S1", "S2", "S3"])
     assert found == {"S1": "u1", "S2": "u2"}
     assert len(calls) == 1

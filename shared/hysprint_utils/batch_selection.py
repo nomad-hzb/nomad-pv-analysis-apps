@@ -107,8 +107,18 @@ def create_batch_selection(
     return widgets.VBox(children)
 
 
+def _error_text(error):
+    """Short reason for the panel: the HTTP status when NOMAD answered with one."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return f"HTTP {status}" if status is not None else type(error).__name__
+
+
 def _filter_row(label, find_batches, all_batches, shown, show_search_matches):
-    """The "Show <label> only" toggle and its one-line status, as wide as the batch list."""
+    """The "Show <label> only" toggle and its one-line status, as wide as the batch list.
+
+    The batches found are remembered, so showing them again (after "Show all batches") is
+    immediate; a failed lookup is not remembered and is asked again on the next click."""
     only_text = f"Show {label} only"
     button = WidgetFactory.create_button(
         description=only_text,
@@ -117,6 +127,13 @@ def _filter_row(label, find_batches, all_batches, shown, show_search_matches):
     )
     button.layout = widgets.Layout(width=PANEL_WIDTH)
     status = widgets.HTML()
+    remembered = {}
+
+    def show_found(found):
+        shown.update(ids=found, filtered=True)
+        button.description = "Show all batches"
+        status.value = html.escape(f"{len(found)} of {len(all_batches)} batches have {label} data.")
+        show_search_matches()
 
     def on_click(_b):
         if shown["filtered"]:
@@ -125,25 +142,24 @@ def _filter_row(label, find_batches, all_batches, shown, show_search_matches):
             status.value = ""
             show_search_matches()
             return
+        if "found" in remembered:
+            show_found(remembered["found"])
+            return
         button.disabled = True
         button.description = f"Searching NOMAD for {label} batches..."
         status.value = ""
         try:
             found = _top_level_batches(find_batches())
         except Exception as error:  # noqa: BLE001 - shown in the panel; the full list stays
-            logger.warning("Could not filter the batches for %s: %s", label, error)
+            logger.warning("Could not filter the batches for %s: %r", label, error)
             status.value = (
                 "<span style='color:#b33'>Could not ask NOMAD which batches have "
-                f"{html.escape(label)} data ({html.escape(type(error).__name__)}).</span>"
+                f"{html.escape(label)} data ({html.escape(_error_text(error))}).</span>"
             )
             button.description = only_text
         else:
-            shown.update(ids=found, filtered=True)
-            button.description = "Show all batches"
-            status.value = html.escape(
-                f"{len(found)} of {len(all_batches)} batches have {label} data."
-            )
-            show_search_matches()
+            remembered["found"] = found
+            show_found(found)
         finally:
             button.disabled = False
 

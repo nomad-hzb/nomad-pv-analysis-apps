@@ -158,3 +158,42 @@ def test_single_choice_batch_list_starts_empty(monkeypatch):
     single = _panel(monkeypatch, multiple=False).children[1]
     assert type(single) is widgets.Select and single.value is None
     assert type(_panel(monkeypatch).children[1]) is widgets.SelectMultiple
+
+
+def test_show_only_filter_remembers_the_batches_it_found(monkeypatch):
+    calls = []
+
+    def find():
+        calls.append(1)
+        return ["HZB_10", "HZB_1"]
+
+    box = _panel(monkeypatch, filter_label="MPPT", filter_function=find)
+    selector = box.children[1]
+    button, status = box.children[2].children
+    button.click()  # asks NOMAD
+    button.click()  # all batches
+    button.click()  # the remembered result, no new question
+    assert calls == [1]
+    assert list(selector.options) == ["HZB_1", "HZB_10"]
+    assert button.description == "Show all batches" and "2 of 4" in status.value
+
+
+def test_a_failed_filter_is_asked_again_and_shows_the_http_status(monkeypatch):
+    import requests
+
+    answers = []
+
+    def find():
+        answers.append(1)
+        if len(answers) == 1:
+            response = requests.Response()
+            response.status_code = 502
+            raise requests.HTTPError("bad gateway", response=response)
+        return ["HZB_2"]
+
+    box = _panel(monkeypatch, filter_label="JV", filter_function=find)
+    button, status = box.children[2].children
+    button.click()
+    assert "(HTTP 502)" in status.value and button.description == "Show JV only"
+    button.click()
+    assert list(box.children[1].options) == ["HZB_2"] and len(answers) == 2

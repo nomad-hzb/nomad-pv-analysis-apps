@@ -17,16 +17,14 @@ BOOTSTRAP = Path(__file__).resolve().parents[2] / "bootstrap.py"
 
 
 class _Namespace:
-    """Attribute access that reads and writes the module's globals, so monkeypatch reaches them."""
+    """The module's globals as plain attributes, so monkeypatch reaches them.
+
+    The globals dict itself is the instance __dict__: get, set and delete all act on it, and
+    monkeypatch sees and restores the original values (pytest 9.2 no longer goes through a
+    custom __getattr__ to find them, and then deleted the attribute on undo)."""
 
     def __init__(self, namespace):
-        object.__setattr__(self, "_ns", namespace)
-
-    def __getattr__(self, name):
-        return self._ns[name]
-
-    def __setattr__(self, name, value):
-        self._ns[name] = value
+        self.__dict__ = namespace
 
 
 @pytest.fixture
@@ -333,3 +331,45 @@ def test_container_no_proxy_is_kept(bs, monkeypatch):
     bs._apply_proxy_env({})
     assert bs.os.environ["NO_PROXY"] == "oasis.example.org,localhost"
     assert bs.os.environ["HTTPS_PROXY"] == bs.HZB_SE_PROXY
+
+
+def test_pip_install_has_network_and_overall_timeouts(bs, monkeypatch):
+    """An unreachable index must not hold an app start for minutes (audit U2/N5)."""
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(bs.subprocess, "run", run)
+    assert bs._pip_install("somepkg") == (0, "")
+    (args, kwargs) = calls[0]
+    assert args[args.index("--timeout") + 1] == str(bs.PIP_NETWORK_TIMEOUT_S)
+    assert args[args.index("--retries") + 1] == str(bs.PIP_RETRIES)
+    assert kwargs["timeout"] == bs.PIP_INSTALL_TIMEOUT_S
+    assert args[-1] == "somepkg"
+
+
+def test_pip_install_timeout_is_a_failed_install(bs, monkeypatch):
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(bs.subprocess, "run", run)
+    code, output = bs._pip_install("somepkg")
+    assert code == 1 and "stopped after" in output and "somepkg" in output
+
+
+def test_shared_install_timeout_still_starts_the_app(bs, monkeypatch, caplog):
+    """A stalled reinstall of shared/ (e.g. after a branch switch, audit N5) ends in the
+    existing failure path: warned, shared/ on sys.path, no marker."""
+
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(bs.subprocess, "run", run)
+    monkeypatch.setattr(bs.importlib.util, "find_spec", lambda name: object())
+    with caplog.at_level("WARNING"):
+        bs._install_shared()
+    assert "stopped after" in caplog.text
+    assert str(bs.REPO_ROOT / "shared") in bs.sys.path
+    assert not bs._shared_install_marker(bs.REPO_ROOT / "shared").exists()

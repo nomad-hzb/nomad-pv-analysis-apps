@@ -80,7 +80,8 @@ The tabs are used from left to right.
      *All_data* and further analysis sheets.
    - *Everything together*: one zip with the plots and the workbook.
 
-   If a download does not start, click the button that appears and check the pop-up blocker.
+   Each download starts by itself. If one does not, check whether the browser blocks downloads
+   from the page.
 
 ## Known limits
 
