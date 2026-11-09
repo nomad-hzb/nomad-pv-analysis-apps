@@ -400,3 +400,53 @@ def test_get_all_batches_wth_data_asks_only_for_ids_in_upload_chunks(monkeypatch
         ["U4"],
     ]
     assert all(q["required"] == {"data": {"lab_id": "*"}} for q in batch_queries)
+
+
+def _recording_query_all(monkeypatch, answers):
+    """Replace api_calls.query_all; returns the (endpoint, query) list it was called with."""
+    from hysprint_utils import api_calls
+
+    calls = []
+
+    def fake(url, token, endpoint, query, timeout=None):
+        calls.append((endpoint, query))
+        return answers[len(calls) - 1]
+
+    monkeypatch.setattr(api_calls, "query_all", fake)
+    return calls
+
+
+def test_linked_entries_asks_only_for_entry_ids_then_the_linked_archives(monkeypatch):
+    from hysprint_utils import api_calls
+
+    archive = {"archive": {"data": {"samples": [{"lab_id": "S1"}]}, "metadata": {}}}
+    calls = _recording_query_all(monkeypatch, [[{"entry_id": "e1"}, {"entry_id": "e2"}], [archive]])
+    result = api_calls.get_linked_entries("u", "t", ["S1", "S2"], {"entry_type": "X"})
+    assert result == [archive]
+    (first_endpoint, first), (second_endpoint, second) = calls
+    assert first_endpoint == "entries/query"
+    assert first["required"] == {"include": ["entry_id"]}  # not the samples' full metadata
+    assert first["query"] == {"results.eln.lab_ids:any": ["S1", "S2"]}
+    assert second_endpoint == "entries/archive/query"
+    linked = {"entry_references.target_entry_id:any": ["e1", "e2"], "entry_type": "X"}
+    assert second["query"] == linked
+    assert second["required"] == {"data": "*", "metadata": "*"}
+
+
+def test_linked_entries_without_samples_sends_no_archive_query(monkeypatch):
+    from hysprint_utils import api_calls
+
+    calls = _recording_query_all(monkeypatch, [[]])
+    assert api_calls.get_linked_entries("u", "t", [], {}) == []
+    assert api_calls.get_linked_entries("u", "t", ["unknown"], {}) == []
+    assert [endpoint for endpoint, _ in calls] == ["entries/query"]
+
+
+def test_mppt_archives_keep_small_pages_and_processes_ask_only_for_data(monkeypatch):
+    from hysprint_utils import api_calls
+
+    calls = _recording_query_all(monkeypatch, [[{"entry_id": "e"}], [], [{"entry_id": "e"}], []])
+    api_calls.get_all_mppt("u", "t", ["S1"])
+    api_calls.get_processing_steps("u", "t", ["S1"])
+    assert calls[1][1]["pagination"]["page_size"] == api_calls.MPPT_ARCHIVE_PAGE_SIZE == 100
+    assert calls[3][1]["required"] == {"data": "*"}
