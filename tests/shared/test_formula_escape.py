@@ -3,7 +3,6 @@
 import io
 
 import numpy as np
-import openpyxl
 import pandas as pd
 import pytest
 
@@ -45,6 +44,9 @@ def test_csv_safe_handles_duplicate_column_labels():
 
 
 def test_keep_text_as_text_turns_formula_cells_into_unchanged_text():
+    # openpyxl belongs to the apps that write Excel files, not to shared; the CI job for
+    # shared does not install it (the SEM test covers this path in its own job).
+    openpyxl = pytest.importorskip("openpyxl")
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         pd.DataFrame({"name": ["=1+1", "plain"], "v": [1, 2]}).to_excel(writer, index=False)
