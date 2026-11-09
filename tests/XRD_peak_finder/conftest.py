@@ -27,6 +27,13 @@ sys.modules["pm_xrd"] = _pm
 sys.modules["plot_manager"] = _pm
 _pm_spec.loader.exec_module(_pm)
 
+sys.modules.pop("gui_components", None)
+_gui_spec = importlib.util.spec_from_file_location("gui_xrd", _APP_DIR / "gui_components.py")
+_gui = importlib.util.module_from_spec(_gui_spec)
+sys.modules["gui_xrd"] = _gui
+sys.modules["gui_components"] = _gui
+_gui_spec.loader.exec_module(_gui)
+
 from data_manager import XRDDataManager  # noqa: E402
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"

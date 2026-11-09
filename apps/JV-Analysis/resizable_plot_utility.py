@@ -57,11 +57,11 @@ class ResizablePlotManager:
 
         for i, (fig, name) in enumerate(zip(figs, names)):
             try:
-                display(
-                    widgets.HTML(
-                        f'<h4 style="margin:12px 0 2px 0;padding:0;">{html.escape(str(name))}</h4>'
-                    )
+                title = widgets.HTML(
+                    f'<h4 style="margin:12px 0 2px 0;padding:0;">{html.escape(str(name))}</h4>'
                 )
+                ResizablePlotManager._live_widgets.append(title)
+                display(title)
                 # Reduce the bottom margin so there is no large blank gap below each plot
                 try:
                     b = fig.layout.margin.b

@@ -19,6 +19,8 @@ import plot_manager as pm
 import plotly.graph_objects as go
 from IPython.display import display as ipydisplay
 
+from hysprint_utils.widget_cleanup import close_widgets, live_widgets
+
 logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Small HTML helpers
@@ -34,11 +36,11 @@ def _section_header(text: str) -> widgets.HTML:
     )
 
 
-def _status(message: str, ok: bool = True) -> widgets.HTML:
+def _status(message: str, ok: bool = True) -> str:
+    """A status line, set as the value of a panel's one status widget (a new widget per
+    message would stay alive in the kernel after the next one replaces it)."""
     colour = "#2d7a2d" if ok else "#b33"
-    return widgets.HTML(
-        value=f"<p style='color:{colour}; margin:2px 0; font-size:12px'>{message}</p>"
-    )
+    return f"<p style='color:{colour}; margin:2px 0; font-size:12px'>{message}</p>"
 
 
 def _subheader(text: str) -> widgets.HTML:
@@ -66,9 +68,21 @@ class DeletableList:
         self._on_delete = on_delete_fn  # (int) -> None
         self._empty_text = empty_text
         self._container = widgets.VBox(layout=widgets.Layout(gap="2px"))
+        self._row_widget_ids: set = set()  # every widget the shown rows are made of
         self.refresh()
 
     def refresh(self) -> None:
+        """Re-render the rows. The rows it replaces are closed afterwards: dropping them from
+        children only hides them, and each add or delete would leave them all alive."""
+        before = set(live_widgets())
+        try:
+            self._render_rows()
+        finally:
+            stale = self._row_widget_ids
+            self._row_widget_ids = set(live_widgets()) - before
+            close_widgets(stale)
+
+    def _render_rows(self) -> None:
         rows = self._get_rows()
         if not rows:
             self._container.children = [
@@ -170,7 +184,7 @@ class MaterialPanel:
         self._add_btn.on_click(self._on_add)
 
         # --- status ---------------------------------------------------------
-        self._status_out = widgets.Output()
+        self._status_line = widgets.HTML()
 
         # --- deletable list -------------------------------------------------
         self._list = DeletableList(
@@ -195,9 +209,7 @@ class MaterialPanel:
             dispersive=self._dispersive.value,
             theta=self._theta.value,
         )
-        with self._status_out:
-            self._status_out.clear_output(wait=True)
-            ipydisplay(_status(msg, ok))
+        self._status_line.value = _status(msg, ok)
         if ok:
             self._list.refresh()
             # Reset preset dropdown so user can pick another
@@ -232,7 +244,7 @@ class MaterialPanel:
                 widgets.HBox([self._polar, self._dispersive]),
                 self._theta,
                 self._add_btn,
-                self._status_out,
+                self._status_line,
                 _subheader("Active materials:"),
                 self._list.widget,
             ],
@@ -290,7 +302,7 @@ class SolventPanel:
         )
         self._add_btn.on_click(self._on_add)
 
-        self._status_out = widgets.Output()
+        self._status_line = widgets.HTML()
 
         self._list = DeletableList(
             get_rows_fn=lambda: [_sol_row_label(s) for s in self._dm.solvents],
@@ -326,9 +338,7 @@ class SolventPanel:
             polar=self._polar.value,
             dispersive=self._dispersive.value,
         )
-        with self._status_out:
-            self._status_out.clear_output(wait=True)
-            ipydisplay(_status(msg, ok))
+        self._status_line.value = _status(msg, ok)
         if ok:
             self._list.refresh()
             self._preset_dd.value = dm.PRESET_SOLVENT_OPTIONS[0]
@@ -352,7 +362,7 @@ class SolventPanel:
                 self._name,
                 widgets.HBox([self._polar, self._dispersive]),
                 self._add_btn,
-                self._status_out,
+                self._status_line,
                 _subheader("Active solvents:"),
                 self._list.widget,
             ],

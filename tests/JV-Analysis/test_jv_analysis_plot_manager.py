@@ -187,12 +187,13 @@ class TestCreateCorrelationPlot:
 
 
 def test_showing_plots_again_closes_the_previous_ones():
+    import ipywidgets as widgets
     import plotly.graph_objects as go
     from resizable_plot_utility import ResizablePlotManager
 
     ResizablePlotManager.display_plots_resizable([go.Figure()], ["first"])
     first = list(ResizablePlotManager._live_widgets)
-    assert first
+    assert any(isinstance(widget, widgets.HTML) for widget in first)  # the title too
     ResizablePlotManager.display_plots_resizable([go.Figure()], ["second"])
     assert all(widget.comm is None for widget in first)  # closed
     assert ResizablePlotManager._live_widgets and ResizablePlotManager._live_widgets[0] not in first
