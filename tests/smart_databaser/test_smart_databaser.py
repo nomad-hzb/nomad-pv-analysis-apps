@@ -2529,13 +2529,14 @@ def test_initialize_ui_closes_widgets_from_previous_call():
         initialize_ui("url", "token")
         import app as app_module
 
-        first_call_ids = set(app_module._ui_widget_ids)
+        first_call_ids = set(app_module._ui.widget_ids)
         initialize_ui("url", "token")
 
-    import ipywidgets as widgets
+    from hysprint_utils.widget_cleanup import live_widgets
 
+    assert first_call_ids
     for widget_id in first_call_ids:
-        assert widget_id not in widgets.Widget.widgets
+        assert widget_id not in live_widgets()
 
 
 def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
@@ -2554,7 +2555,7 @@ def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
         # template_picker, quick_fill_all_button, h4, sequence_builder, ... (progress_bar now
         # lives inside finish_section, not at the top level)
         template_picker = main_interface.children[4]
-        sequence_builder = main_interface.children[7]
+        sequence_builder = main_interface.children[7].children[1]  # inside loaded_sections
         assert len(sequence_builder.rows_box.children) == 0
 
         batch_picker = template_picker.children[2]
@@ -2575,8 +2576,8 @@ def test_initialize_ui_refresh_table_button_updates_stale_matrix():
     ):
         main_interface = initialize_ui("url", "token")
         # ... h4 Varying Fields, caption, refresh_matrix_button, refresh_matrix_status, matrix
-        refresh_matrix_button = main_interface.children[10]
-        matrix = main_interface.children[12]
+        refresh_matrix_button = main_interface.children[7].children[4]  # in loaded_sections
+        matrix = main_interface.children[7].children[6]
         assert refresh_matrix_button.description == "Refresh Table"
         assert len(matrix.children) == 1  # placeholder, nothing varies yet
 
@@ -4360,3 +4361,80 @@ def test_debug_report_html_escapes_archive_values():
     }
     html_text = _debug_report_to_html(report, "Spin Coating", "1")
     assert "<img" not in html_text and "<script>" not in html_text and "<b>p</b>" not in html_text
+
+
+def test_template_picker_reports_busy_around_fetch_and_rebuild(fresh_state):
+    cache = NomadSessionCache()
+    events = []
+
+    def steps(*args, **kwargs):
+        events.append("fetch")
+        return [SPIN_COATING_STEP]
+
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_ids_in_batch", return_value=["S1"]),
+        patch("data_manager.get_processing_steps", side_effect=steps),
+    ):
+        picker = create_whole_experiment_template_picker(
+            fresh_state,
+            "url",
+            "token",
+            cache,
+            on_change=lambda: events.append("rebuild"),
+            on_busy=lambda busy: events.append(("busy", busy)),
+        )
+        _search, selector, load_button, _status = picker.children[2].children
+        selector.value = ("B1",)
+        load_button.click()
+    assert events[0] == ("busy", True) and events[-1] == ("busy", False)
+    assert events.index("rebuild") > events.index("fetch")
+
+
+def test_template_picker_ends_busy_after_a_failure(fresh_state):
+    events = []
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_ids_in_batch", side_effect=RuntimeError("network down")),
+    ):
+        picker = create_whole_experiment_template_picker(
+            fresh_state, "url", "token", NomadSessionCache(), on_busy=events.append
+        )
+        _search, selector, load_button, status = picker.children[2].children
+        selector.value = ("B1",)
+        load_button.click()
+    assert events == [True, False] and "network down" in status.value
+
+
+def test_replicate_shows_loading_then_all_sections_together():
+    """Replicate Experiment hides the process sequence and varying fields behind one
+    loading line until everything is filled in and rebuilt."""
+    seen_while_loading = []
+
+    def steps(*args, **kwargs):
+        seen_while_loading.append((loading_note.layout.display, loaded_sections.layout.display))
+        return [SPIN_COATING_STEP]
+
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]),
+        patch("data_manager.get_ids_in_batch", return_value=["S1"]),
+        patch("data_manager.get_processing_steps", side_effect=steps),
+    ):
+        main_interface = initialize_ui("url", "token")
+        children = main_interface.children
+        loading_note, loaded_sections = children[6], children[7]
+        assert "Loading the template batch" in loading_note.value
+        assert loading_note.layout.display == "none" and not loaded_sections.layout.display
+        variation_panel = loaded_sections.children[-1]
+        panel_display = variation_panel.layout.display
+
+        _search, selector, load_button, status = children[4].children[2].children
+        selector.value = ("B1",)
+        load_button.click()
+
+    assert "Replicated" in status.value
+    assert seen_while_loading and set(seen_while_loading) == {(None, "none")}
+    assert loading_note.layout.display == "none" and not loaded_sections.layout.display
+    assert variation_panel.layout.display in (panel_display, "", "none")  # its own choice
+    assert "Process Sequence" in loaded_sections.children[0].value

@@ -14,10 +14,11 @@ import requests
 from pydantic import BaseModel, ValidationError, field_validator
 
 from hysprint_utils.api_calls import (
-    REQUEST_TIMEOUT,
+    get_all_batches_wth_data,
     get_all_mppt,
     get_ids_in_batch,
     get_sample_description,
+    query_all,
 )
 from hysprint_utils.config import ENTRY_TYPES
 
@@ -517,57 +518,17 @@ class DataManager:
     def get_mppt_batch_ids(self):
         """Return only batch IDs that contain MPPT data.
 
-        Fast path: direct /entries/archive/query filtered by entry_type — 1 API call.
-        Fallback: fetch all batch→sample maps, then query get_all_mppt in chunks of 50.
+        Fast path: the shared get_all_batches_wth_data (entries/query for the MPPT entries,
+        then the batches of their uploads), every result page included.
+        Fallback: fetch all batch->sample maps, then query get_all_mppt in chunks of 50.
         """
-        # --- Fast path: /entries/query → upload_ids → batch lab_ids (2 API calls) ---
-        # get_all_batches_wth_data does the same but its step-1 uses /entries/archive/query
-        # which returns empty or 500 for MPPT entries. /entries/query works correctly.
         try:
-            query = {
-                "owner": "visible",
-                "query": {"entry_type": ENTRY_TYPES["mppt"]},
-                "pagination": {"page_size": 10000},
-            }
-            resp = requests.post(
-                f"{self.url}/entries/query",
-                timeout=REQUEST_TIMEOUT,
-                headers={"Authorization": f"Bearer {self.token}"},
-                json=query,
-            )
-            resp.raise_for_status()
-            entries = resp.json().get("data", [])
-            logger.debug("get_mppt_batch_ids: %d MPPT entries found", len(entries))
-
-            upload_ids = list({e["upload_id"] for e in entries if "upload_id" in e})
-            logger.debug("get_mppt_batch_ids: %d unique uploads", len(upload_ids))
-
-            if upload_ids:
-                query2 = {
-                    "required": {"data": "*"},
-                    "owner": "visible",
-                    "query": {"entry_type": ENTRY_TYPES["batch"], "upload_id:any": upload_ids},
-                    "pagination": {"page_size": 10000},
-                }
-                resp2 = requests.post(
-                    f"{self.url}/entries/archive/query",
-                    timeout=REQUEST_TIMEOUT,
-                    headers={"Authorization": f"Bearer {self.token}"},
-                    json=query2,
-                )
-                resp2.raise_for_status()
-                batch_ids: set[str] = set()
-                for entry in resp2.json().get("data", []):
-                    lab_id = entry.get("archive", {}).get("data", {}).get("lab_id", "")
-                    if lab_id:
-                        batch_ids.add(lab_id)
-
-                if batch_ids:
-                    logger.debug("get_mppt_batch_ids: %d batches (fast path)", len(batch_ids))
-                    return sorted(batch_ids)
-                logger.debug("get_mppt_batch_ids: no batch entries in those uploads, falling back")
-            else:
-                logger.debug("get_mppt_batch_ids: no upload_ids, falling back")
+            found = get_all_batches_wth_data(self.url, self.token, ENTRY_TYPES["mppt"])
+            batch_ids = {b for b in found if b}
+            if batch_ids:
+                logger.debug("get_mppt_batch_ids: %d batches (fast path)", len(batch_ids))
+                return sorted(batch_ids)
+            logger.debug("get_mppt_batch_ids: fast path found no batches, falling back")
         except Exception as exc:
             logger.debug("get_mppt_batch_ids: fast path failed (%s), falling back", exc)
 
@@ -579,16 +540,10 @@ class DataManager:
             "query": {"entry_type": ENTRY_TYPES["batch"]},
             "pagination": {"page_size": 10000},
         }
-        resp = requests.post(
-            f"{self.url}/entries/archive/query",
-            timeout=REQUEST_TIMEOUT,
-            headers={"Authorization": f"Bearer {self.token}"},
-            json=query,
-        )
-        resp.raise_for_status()
+        batch_entries = query_all(self.url, self.token, "entries/archive/query", query)
 
         batch_to_samples: dict[str, list[str]] = {}
-        for entry in resp.json().get("data", []):
+        for entry in batch_entries:
             archive_data = entry.get("archive", {}).get("data", {})
             batch_id = archive_data.get("lab_id", "")
             entities = archive_data.get("entities", [])

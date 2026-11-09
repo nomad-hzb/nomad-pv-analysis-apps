@@ -1125,3 +1125,38 @@ def test_a_price_from_the_admin_reference_is_not_labelled_a_rough_estimate():
         "notes": "",
     }
     assert compute_material_cost_rows(materials, reference)[0].notes == ""
+
+
+def test_process_entries_beyond_the_first_result_page_are_read(mocker):
+    """The entry and process queries follow NOMAD's pagination (they read one page before)."""
+
+    def page(data, next_value=None):
+        response = mocker.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": data,
+            "pagination": {"next_page_after_value": next_value} if next_value else {},
+        }
+        return response
+
+    def process(entry_id, position):
+        return {
+            "archive": {
+                "data": {"positon_in_experimental_plan": position, "samples": []},
+                "metadata": {"entry_type": f"T{position}", "entry_id": entry_id},
+            }
+        }
+
+    post = mocker.patch(
+        "requests.post",
+        side_effect=[
+            page([{"entry_id": "e1"}], "next"),
+            page([{"entry_id": "e2"}]),
+            page([process("p1", 1)], "next"),
+            page([process("p2", 2)]),
+        ],
+    )
+    entries = fetch_process_entries("http://x", "tok", ["S1"])
+    assert [entry_type for _data, entry_type in entries] == ["T1", "T2"]
+    process_query = post.call_args_list[2].kwargs["json"]
+    assert process_query["query"]["entry_references.target_entry_id:any"] == ["e1", "e2"]

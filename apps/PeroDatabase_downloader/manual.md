@@ -63,6 +63,8 @@ entry, edit the file. More details for developers are in
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV file, so a spreadsheet shows it as text instead of running it as a formula.
 - Reading each entry's archive takes time for large populations.
 - The Oasis in the server list is always the HZB SE Oasis, whichever Oasis the app runs on.
 

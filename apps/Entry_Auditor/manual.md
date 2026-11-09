@@ -60,10 +60,13 @@ The table is updated with the new values of the entries that were confirmed.
 ## Tab *Corrections*
 
 Lists every correction made so far (the wrong value and the value it was corrected to), read from
-the correction log. *Refresh* reloads it and *Export CSV* gives a `corrections.csv`.
+the correction log. *Refresh* reloads it and *Export CSV* downloads `corrections.csv`
+straight away.
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
 - Text and number fields are audited, and a correction replaces whole values (it does not search
   inside longer texts). A number field only accepts a number as its corrected value and is
   written back as a number. A field with more than 50 different values is not listed. A field that only some entries

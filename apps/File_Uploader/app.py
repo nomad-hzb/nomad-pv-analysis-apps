@@ -31,36 +31,24 @@ from IPython.display import HTML, display
 
 from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.manual import manual_panel
+from hysprint_utils.widget_cleanup import UiRebuild
 
 logger = logging.getLogger(__name__)
 
-# Widget IDs created by the most recent initialize_ui call.  On the next call
-# we close only these — not framework-level singletons (ipyvuetify templates).
-_ui_widget_ids: set = set()
+# A re-run of the cell first closes the widgets of the previous run (see UiRebuild); widgets
+# that existed before, such as ipyvuetify templates, are left alone.
+_ui = UiRebuild()
 
 
 def initialize_ui(
     batch_ids_list, get_batch_ids, get_ids_in_batch, get_sample_description, get_nomad_ids_of_entry
 ):
     """Initialise and display the entire file-uploader user interface."""
-    global _ui_widget_ids
+    with _ui.build():
+        _build_ui(batch_ids_list, get_ids_in_batch, get_sample_description)
 
-    # Close widgets created by the previous call to initialize_ui.
-    # ipywidgets keeps every widget alive in Widget.widgets even after
-    # clear_output() removes it from the display; stale instances accumulate
-    # across cell re-runs and their on_click handlers all fire on one click.
-    for _wid in list(_ui_widget_ids):
-        _w = widgets.Widget.widgets.get(_wid)
-        if _w is not None:
-            try:
-                _w.close()
-            except Exception:
-                pass
-    _ui_widget_ids = set()
 
-    # Snapshot existing widget IDs so we can identify what we create below.
-    _ids_before = set(widgets.Widget.widgets.keys())
-
+def _build_ui(batch_ids_list, get_ids_in_batch, get_sample_description):
     load_button = create_load_button()
     upload_and_process = create_upload_button()
     out, out2 = create_output_widgets()
@@ -165,9 +153,6 @@ def initialize_ui(
             ]
         )
     )
-
-    # Record every widget created during this call so the next run can clean them up.
-    _ui_widget_ids = set(widgets.Widget.widgets.keys()) - _ids_before
 
 
 def _on_load_button_clicked(

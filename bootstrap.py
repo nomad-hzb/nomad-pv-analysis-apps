@@ -10,7 +10,7 @@ Overrides are opt-in. The one built-in default is the HZB outbound proxy for
 the HZB SE Oasis (see HZB_SE_PROXY); every other deployment gets nothing it
 did not ask for. A deployment that needs overrides creates
 oasis_local_config.py next to this file (gitignored, same pattern as
-secrets.py) assigning plain uppercase strings:
+nomad_secrets.py) assigning plain uppercase strings:
 
     HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
     HTTP_PROXY = "http://proxy.example.org:3128"
@@ -149,30 +149,47 @@ def _build_isolation_args() -> list[str]:
     return []
 
 
+# pip's own defaults (15 s per connection, 5 retries) let an unreachable proxy or index hold
+# an app start for minutes per package; PIP_INSTALL_TIMEOUT_S caps the whole install, which
+# can legitimately take a few minutes for a fresh container.
+PIP_NETWORK_TIMEOUT_S = 10
+PIP_RETRIES = 1
+PIP_INSTALL_TIMEOUT_S = 600
+
+
 def _pip_install(target: Path | str) -> tuple[int, str]:
     """Install target (a directory or a requirement string), returning pip's exit code and
-    its combined output.
+    its combined output. An install that runs past PIP_INSTALL_TIMEOUT_S is stopped and
+    reported as failed (exit code 1), which every caller already handles.
 
     Captured, not inherited: this runs as cell 0 of a Voila app, where anything
     pip writes to stdout/stderr is rendered into the app's own UI. Callers
     decide what to surface; a successful install has nothing an app user needs
     to see.
     """
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-q",
-            "--disable-pip-version-check",
-            *_build_isolation_args(),
-            str(target),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-q",
+                "--disable-pip-version-check",
+                "--timeout",
+                str(PIP_NETWORK_TIMEOUT_S),
+                "--retries",
+                str(PIP_RETRIES),
+                *_build_isolation_args(),
+                str(target),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PIP_INSTALL_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return 1, f"pip install of {target} stopped after {PIP_INSTALL_TIMEOUT_S} s"
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
     return result.returncode, output
 

@@ -304,6 +304,58 @@ def test_sample_id_from_option_strips_the_description(dm):
 
 
 # ---------------------------------------------------------------------------
+# session teardown
+# ---------------------------------------------------------------------------
+class _SourceWithWidgets:
+    """A source whose widget callback refers back to it, like the previewer's frame slider."""
+
+    def __init__(self):
+        import ipywidgets as widgets
+
+        self.slider = widgets.IntSlider()
+        self.slider.observe(self.on_change, names=["value"])
+        self.box = widgets.VBox([self.slider])
+
+    def on_change(self, _change):
+        pass
+
+
+def test_dispose_closes_nested_widgets_and_frees_the_source(gui):
+    import gc
+    import weakref
+
+    import ipywidgets as widgets
+
+    kept = widgets.Text()  # exists before the session, like the selector row
+    session = gui.Session()
+    source = _SourceWithWidgets()
+    session.source, session.contents = source, [source.box]
+    slider_id = source.slider.model_id
+    source_ref = weakref.ref(source)
+    del source
+
+    session.dispose()
+    gc.collect()
+
+    # the slider was only a child of the box, yet it is closed and the source is gone
+    assert slider_id not in widgets.Widget.widgets
+    assert source_ref() is None
+    assert kept.model_id in widgets.Widget.widgets
+    kept.close()
+
+
+def test_dispose_closes_widgets_created_after_the_build(gui):
+    import ipywidgets as widgets
+
+    session = gui.Session()
+    late_id = widgets.Button().model_id  # e.g. a CIF row a section adds from a callback
+
+    session.dispose()
+
+    assert late_id not in widgets.Widget.widgets
+
+
+# ---------------------------------------------------------------------------
 # section assembly
 # ---------------------------------------------------------------------------
 class _FakePreviewer:

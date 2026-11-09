@@ -25,6 +25,8 @@ from config import FieldSpec
 from nomad_client import NomadClient
 from schema import get_nested_field
 
+from hysprint_utils.table_utils import csv_safe
+
 logger = logging.getLogger(__name__)
 
 
@@ -338,4 +340,4 @@ class DataManager:
         return self.results_df
 
     def to_csv_bytes(self, complete_only=False):
-        return self.get_dataframe(complete_only).to_csv(index=False).encode("utf-8")
+        return csv_safe(self.get_dataframe(complete_only)).to_csv(index=False).encode("utf-8")
