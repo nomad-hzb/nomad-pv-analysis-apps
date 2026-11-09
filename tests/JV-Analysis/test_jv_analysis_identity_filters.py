@@ -16,6 +16,8 @@ from plot_manager import PlotManager, plotting_string_action
         ("C1Rev", ("C1", "Reverse", "Light")),
         ("C2For", ("C2", "Forward", "Light")),
         ("11_Reverse_Dark", ("11", "Reverse", "Dark")),
+        ("A FWD", ("A", "Forward", "Light")),
+        ("A REV", ("A", "Reverse", "Light")),
     ],
 )
 def test_cell_name_keeps_the_whole_pixel_name(name, expected):
@@ -197,3 +199,21 @@ def test_omitted_combination_plots_are_built_from_the_omitted_rows():
     )
     assert plotted.max() < 5  # the omitted PCE (2), not the kept one (18)
     assert all("omitted" in n for n in names)
+
+
+def test_big4_direction_split_puts_reverse_and_forward_side_by_side():
+    """An explicit box width turns off Plotly's group offset: the split must not set one."""
+    rows = [
+        {"sample": s, "direction": d, "Voc(V)": 1.1, "Jsc(mA/cm2)": 22.0, "FF(%)": 75, "PCE(%)": 18}
+        for s in ("S1", "S2")
+        for d in ("Reverse", "Forward")
+    ]
+    df = pd.DataFrame(rows)
+    pm = PlotManager()
+    info = [df.iloc[0:0], []]
+    split, _ = pm.create_voc_jsc_ff_pce_subplots(df, info, var_x="sample", direction_split=True)
+    assert split.layout.boxmode == "group"
+    assert {t.name for t in split.data} == {"Reverse", "Forward"}
+    assert all(t.width is None for t in split.data)
+    plain, _ = pm.create_voc_jsc_ff_pce_subplots(df, info, var_x="sample")
+    assert all(t.width == 0.8 for t in plain.data)

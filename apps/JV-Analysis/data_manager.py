@@ -48,18 +48,19 @@ class JVRow(BaseModel):
         return v
 
 
-_CELL_TOKENS = re.compile(r"(forward|reverse|light|dark|for|rev)", re.IGNORECASE)
+_CELL_TOKENS = re.compile(r"(forward|reverse|light|dark|for|fwd|rev)", re.IGNORECASE)
 
 
 def parse_cell_name(cell_name: str) -> tuple[str, str, str]:
     """(cell, direction, illumination) from a NOMAD jv_curve cell_name.
 
-    "a_Forward_Light" -> ("a", "Forward", "Light"), "C2For" -> ("C2", "Forward", "Light"). The cell
+    "a_Forward_Light" -> ("a", "Forward", "Light"), "C2For" -> ("C2", "Forward", "Light"),
+    "A FWD" -> ("A", "Forward", "Light"). The cell
     is the name without its direction and light/dark tokens, not its first character, so "C1" and
     "C2" (or "10" and "11") stay two pixels."""
     lower = cell_name.lower()
     illum = "Dark" if "dark" in lower else "Light"
-    direction = "Forward" if "for" in lower else "Reverse"
+    direction = "Forward" if ("for" in lower or "fwd" in lower) else "Reverse"
     cell = _CELL_TOKENS.sub("", cell_name).strip("_- ")
     return (cell or cell_name[:1] or "?"), direction, illum
 
