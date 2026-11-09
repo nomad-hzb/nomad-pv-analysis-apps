@@ -20,7 +20,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
-from hysprint_utils.table_utils import pivot_by_group
+from hysprint_utils.table_utils import csv_safe, pivot_by_group
 
 logger = logging.getLogger(__name__)
 MEASUREMENT_TYPE = ENTRY_TYPES["abspl"]
@@ -225,7 +225,7 @@ class AbsPlDataManager:
     def to_csv_string(self) -> str:
         """Return current data as a CSV string."""
         buf = io.StringIO()
-        self.data.to_csv(buf)
+        csv_safe(self.data).to_csv(buf)
         return buf.getvalue()
 
     def get_pivot_table(self, value_col: str, group_by_col: str) -> pd.DataFrame:

@@ -17,6 +17,7 @@ from IPython.display import HTML, display
 from plotly.subplots import make_subplots
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.table_utils import keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
@@ -1389,6 +1390,8 @@ class GUIComponents:
                     if self.app_state.has_selected_samples():
                         advance(5, self._DOWNLOAD_STAGES[4])
                         self._add_sample_info_sheet(writer)
+
+                    keep_text_as_text(writer.book)
 
                 # Add Excel file to zip
                 zip_file.writestr("MPPT_Analysis_Results.xlsx", excel_buffer.getvalue())

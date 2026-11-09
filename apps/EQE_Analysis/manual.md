@@ -48,6 +48,8 @@ Names and the included samples are applied when you open the *EQE Curves* or *Bo
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
 - The Jsc and J0rad axis labels say A/cm² as stored in NOMAD; the app does not convert units.
 - Only the curves of included samples are in the plots and in the boxplot; the CSV downloads
   contain everything that was loaded (`eqe_params.csv` has the include flag and the name per curve).

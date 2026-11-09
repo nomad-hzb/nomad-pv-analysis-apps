@@ -31,6 +31,7 @@ from hysprint_utils.api_calls import (
     get_sample_description,
 )
 from hysprint_utils.config import ENTRY_TYPES
+from hysprint_utils.table_utils import keep_text_as_text
 from hysprint_utils.usage_tracking import usage_log_dir
 
 logger = logging.getLogger(__name__)
@@ -707,6 +708,7 @@ class SemDataManager:
             for sheet in SHEETS:
                 if sheet in sheets:
                     tables[sheet]().to_excel(writer, sheet_name=sheet, index=False)
+            keep_text_as_text(writer.book)
         return buffer.getvalue()
 
 
