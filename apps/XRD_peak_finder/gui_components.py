@@ -14,6 +14,7 @@ from IPython.display import display as ipydisplay
 from plot_manager import XRDPlotManager
 
 from hysprint_utils.plotting_utils import WidgetFactory
+from hysprint_utils.widget_cleanup import close_widgets, live_widgets
 
 logger = logging.getLogger(__name__)
 
@@ -186,12 +187,25 @@ class SampleGridPanel:
 
         self._container = widgets.VBox([])
         self.widget = self._container
+        self._row_widget_ids: set = set()  # every widget the shown rows are made of
 
     def set_selection_callback(self, cb) -> None:
         self._on_selection_change = cb
 
     def refresh(self, data: dict) -> None:
-        """Re-render all samples from data_manager.data."""
+        """Re-render all samples from data_manager.data.
+
+        The rows it replaces are closed afterwards: dropping them from children only hides
+        them, and each refresh would leave every figure and peak control alive."""
+        before = set(live_widgets())
+        try:
+            self._render_rows(data)
+        finally:
+            stale = self._row_widget_ids
+            self._row_widget_ids = set(live_widgets()) - before
+            close_widgets(stale)
+
+    def _render_rows(self, data: dict) -> None:
         self._checkboxes = {}
         self._figure_widgets = {}
         self._peak_panels = {}

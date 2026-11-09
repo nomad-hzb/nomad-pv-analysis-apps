@@ -1,6 +1,6 @@
 [project]
 name = "sem-crystal-counter"
-version = "0.3.1"
+version = "0.3.2"
 description = "Grain size analysis of top-view SEM images of perovskite films"
 requires-python = ">=3.10"
 dependencies = [

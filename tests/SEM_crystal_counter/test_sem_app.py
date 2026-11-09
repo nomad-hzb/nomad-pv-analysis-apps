@@ -13,6 +13,8 @@ import plot_manager as pm
 import plotly.graph_objects as go
 import pytest
 
+from hysprint_utils.widget_cleanup import live_widgets
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -272,3 +274,15 @@ def test_thickness_profile_does_not_need_webgl():
 
 def test_detection_settings_start_open(demo):
     assert gui.ReviewPanel(demo, on_changed=lambda: None)._settings.selected_index == 0
+
+
+@pytest.mark.parametrize("panel_class", ["AnalysisPanel", "CrossSectionPanel"])
+def test_refresh_closes_the_tables_and_figures_it_replaces(demo, panel_class):
+    """clear_output only hides widgets; each refresh would keep every old figure alive."""
+    panel = getattr(gui, panel_class)(demo)
+    panel.refresh()
+    first = {model_id for ids in panel._shown.values() for model_id in ids}
+    assert first
+    panel.refresh()
+    assert not first & set(live_widgets())  # closed
+    assert all(set(ids) <= set(live_widgets()) for ids in panel._shown.values())

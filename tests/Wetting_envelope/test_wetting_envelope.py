@@ -152,3 +152,28 @@ def test_plotting_again_closes_the_previous_figure_widget():
     panel.show_figure(go.Figure())
     assert panel._figure is not first
     assert first.comm is None  # closed
+
+
+def test_list_refresh_closes_the_rows_it_replaces():
+    """Each add or delete re-renders the list; the replaced rows must not stay alive."""
+    from gui_components import DeletableList
+
+    rows = ["a", "b"]
+    listing = DeletableList(lambda: list(rows), rows.pop)
+    first = list(listing.widget.children)
+    assert len(first) == 2
+    listing._handle_delete(0)  # what the row's delete button does
+    assert rows == ["b"]
+    assert all(row.comm is None for row in first)  # closed
+    assert [row.comm is not None for row in listing.widget.children] == [True]
+
+
+def test_status_messages_reuse_one_widget():
+    from data_manager import WettingDataManager
+    from gui_components import MaterialPanel
+
+    panel = MaterialPanel(WettingDataManager())
+    line = panel._status_line
+    panel._on_add(None)
+    panel._on_add(None)
+    assert panel._status_line is line and line.value
