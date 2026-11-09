@@ -455,6 +455,13 @@ contents of its `pyproject.toml`. Later launches of the same app skip the
 install entirely; editing the dependency list changes the key, so the next
 launch reinstalls. Nothing needs clearing by hand.
 
+**Every pip run is time-limited.** pip waits at most 10 s per connection and
+retries once (its defaults, 15 s and 5 retries, let an unreachable proxy or
+index hold a start for minutes per package), and a whole install is stopped
+after 10 minutes. A stopped install counts as a failed one and takes the
+failure path described for its step. The same limits apply when `shared/`
+reinstalls because its sources changed, for example after a branch switch.
+
 **A failed app install is a warning, not an error.** Most apps need nothing
 beyond what the NORTH image already provides, and none of them were installed
 at all until now - so pip failing here (no network, an unreachable git host)
