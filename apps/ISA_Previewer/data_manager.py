@@ -376,6 +376,19 @@ def store_for_linked_notebooks(h5_path: str, screenwidth: int) -> None:
             ipython.run_line_magic("store", name)
 
 
+def camera_folders_from_env() -> dict[str, str]:
+    """The camera folders this Oasis configures for the Video Visualizer, {"mp4"/"avi": path}.
+
+    Only the ones set to a non-empty value: a camera left out starts with an empty field.
+    """
+    folders = {}
+    for key, env_name in config.CAMERA_FOLDER_ENV.items():
+        path = os.environ.get(env_name, "").strip()
+        if path:
+            folders[key] = path
+    return folders
+
+
 HANDOVER_H5_PARAM = "h5"
 HANDOVER_WIDTH_PARAM = "w"
 

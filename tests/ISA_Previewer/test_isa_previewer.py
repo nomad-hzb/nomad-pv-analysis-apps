@@ -3,6 +3,7 @@ measurement listing and section assembly. Nothing here talks to NOMAD or opens a
 
 import logging
 import os
+import sys
 
 import pytest
 
@@ -29,9 +30,10 @@ def test_analysis_variants_accept_a_file_from_the_main_previewer(cfg):
     assert cfg.VARIANTS["giwaxs"].select_from_store is True
     assert cfg.VARIANTS["optical"].select_from_store is True
     assert cfg.VARIANTS["timely"].select_from_store is True
+    assert cfg.VARIANTS["video"].select_from_store is True
 
 
-def test_only_the_timely_variant_selects_by_upload(cfg):
+def test_only_the_upload_tools_select_by_upload(cfg):
     """Selection depth decides what a variant opens, so an unknown value would open nothing."""
     known = {cfg.SELECTION_MEASUREMENT, cfg.SELECTION_UPLOAD}
     by_upload = set()
@@ -40,7 +42,19 @@ def test_only_the_timely_variant_selects_by_upload(cfg):
         if variant.selection == cfg.SELECTION_UPLOAD:
             by_upload.add(name)
 
-    assert by_upload == {"timely"}
+    assert by_upload == {"timely", "video"}
+
+
+def test_every_upload_variant_names_a_known_upload_source(cfg):
+    """open_source picks the tool by upload_source; an unknown value would open the wrong one."""
+    known = {cfg.UPLOAD_SOURCE_TIMELY, cfg.UPLOAD_SOURCE_VIDEO}
+    sources = {
+        name: variant.upload_source
+        for name, variant in cfg.VARIANTS.items()
+        if variant.selection == cfg.SELECTION_UPLOAD
+    }
+    assert set(sources.values()) <= known
+    assert sources == {"timely": cfg.UPLOAD_SOURCE_TIMELY, "video": cfg.UPLOAD_SOURCE_VIDEO}
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +222,7 @@ def test_available_links_drops_links_whose_dataset_is_missing(dm, cfg, monkeypat
         cfg.APP_LINKS["thickness"].label,
         cfg.APP_LINKS["peak_analyzer"].label,
         cfg.APP_LINKS["timely_teller"].label,
+        cfg.APP_LINKS["video_visualizer"].label,
     ]
 
 
@@ -408,6 +423,151 @@ def test_open_source_opens_the_upload_folder_for_an_upload_variant(gui, cfg, mon
     gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["timely"], 1200)
 
     assert seen == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv", "screenwidth": 1200}
+
+
+class _FakeVideoGui:
+    """Stands in for VIDEOVISUALIZERGUI: one widget from display(), stop() for a running render."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.stopped = False
+
+    def display(self):
+        return "video_visualizer"
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeVideoGuiWithCameras(_FakeVideoGui):
+    """VIDEOVISUALIZERGUI from insitu_analyser v0.2.32 on, which takes camera_folders."""
+
+    def __init__(self, search_dir, camera_folders=None):
+        super().__init__(search_dir=search_dir, camera_folders=camera_folders)
+
+
+class _FakeVideoGuiBeforeCameras(_FakeVideoGui):
+    """VIDEOVISUALIZERGUI before v0.2.32: search_dir only."""
+
+    def __init__(self, search_dir):
+        super().__init__(search_dir=search_dir)
+
+
+def _install_video_gui(monkeypatch, gui, cfg, gui_class, env=None):
+    """Make gui_class the video GUI and set exactly the camera variables in env."""
+    module = type(sys)(gui.VIDEO_GUI_MODULE)
+    module.VIDEOVISUALIZERGUI = gui_class
+    monkeypatch.setitem(sys.modules, gui.VIDEO_GUI_MODULE, module)
+    for env_name in cfg.CAMERA_FOLDER_ENV.values():
+        monkeypatch.delenv(env_name, raising=False)
+    for env_name, value in (env or {}).items():
+        monkeypatch.setenv(env_name, value)
+
+
+def test_open_source_opens_the_video_gui_for_the_video_variant(gui, cfg, monkeypatch):
+    """The video variant hands the upload folder to the video GUI, not to TIMELYTELLER."""
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGui)
+    monkeypatch.setattr(gui, "TIMELYTELLER", lambda **kwargs: pytest.fail("opened the teller"))
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert isinstance(source, _FakeVideoGui)
+    assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
+
+
+def test_camera_folders_from_env_keeps_only_the_set_ones(dm, cfg, monkeypatch):
+    monkeypatch.setenv(cfg.CAMERA_FOLDER_ENV["mp4"], " /uploads/videos/Windows_Kamera ")
+    monkeypatch.setenv(cfg.CAMERA_FOLDER_ENV["avi"], "")
+
+    assert dm.camera_folders_from_env() == {"mp4": "/uploads/videos/Windows_Kamera"}
+
+
+def test_open_source_passes_the_configured_camera_folders(gui, cfg, monkeypatch):
+    """The camera folders of this Oasis reach the video GUI's fields."""
+    env = {
+        cfg.CAMERA_FOLDER_ENV["mp4"]: "/uploads/videos/Windows_Kamera",
+        cfg.CAMERA_FOLDER_ENV["avi"]: "/uploads/videos/ThorCam",
+    }
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiWithCameras, env)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert source.kwargs["camera_folders"] == {
+        "mp4": "/uploads/videos/Windows_Kamera",
+        "avi": "/uploads/videos/ThorCam",
+    }
+
+
+def test_open_source_passes_no_camera_folders_when_none_are_configured(gui, cfg, monkeypatch):
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiWithCameras)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert source.kwargs["camera_folders"] is None
+
+
+def test_open_source_leaves_camera_folders_out_for_an_older_video_gui(gui, cfg, monkeypatch):
+    """An insitu_analyser before v0.2.32 has no camera_folders argument and still opens."""
+    env = {cfg.CAMERA_FOLDER_ENV["mp4"]: "/uploads/videos/Windows_Kamera"}
+    _install_video_gui(monkeypatch, gui, cfg, _FakeVideoGuiBeforeCameras, env)
+
+    source = gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+    assert source.kwargs == {"search_dir": "/uploads/run-AbCdEfGhIjKlMnOpQrStUv"}
+
+
+def test_open_source_names_the_needed_release_when_the_video_gui_is_missing(gui, cfg, monkeypatch):
+    """An insitu_analyser older than the video GUI says which release is needed."""
+    monkeypatch.setitem(sys.modules, gui.VIDEO_GUI_MODULE, None)
+
+    with pytest.raises(ModuleNotFoundError, match=gui.VIDEO_GUI_MIN_VERSION):
+        gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+
+def test_open_source_keeps_the_message_of_a_missing_video_dependency(gui, cfg, monkeypatch):
+    """A dependency of the video GUI that is missing (cv2) is not blamed on insitu_analyser."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == gui.VIDEO_GUI_MODULE:
+            raise ModuleNotFoundError("No module named 'cv2'", name="cv2")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ModuleNotFoundError, match="cv2"):
+        gui.open_source("/uploads/run-AbCdEfGhIjKlMnOpQrStUv", cfg.VARIANTS["video"], 1200)
+
+
+def test_build_sections_of_the_video_variant_shows_the_video_gui(gui, cfg):
+    assert gui.build_sections(_FakeVideoGui(), cfg.VARIANTS["video"]) == ["video_visualizer"]
+
+
+def test_dispose_stops_a_running_render_before_closing(gui, monkeypatch):
+    """A new selection must not close the figures of a video still rendering in its thread."""
+    order = []
+    source = _FakeVideoGui()
+    source.stop = lambda: order.append("stop")
+    monkeypatch.setattr(gui.plt, "close", lambda which: order.append("close"))
+
+    session = gui.Session()
+    session.source = source
+    session.dispose()
+
+    assert order == ["stop", "close"]
+
+
+def test_dispose_of_a_source_without_stop_just_closes(gui, monkeypatch):
+    closed = []
+    monkeypatch.setattr(gui.plt, "close", lambda which: closed.append(which))
+
+    session = gui.Session()
+    session.source = _FakeTeller()
+    session.dispose()
+
+    assert closed == ["all"]
 
 
 def test_open_source_opens_one_file_for_a_measurement_variant(gui, cfg, monkeypatch):

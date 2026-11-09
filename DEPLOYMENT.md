@@ -209,6 +209,12 @@ Oasis needs. The table after it explains each variable.
 # HYSPRINT_PROJECT_SECTION1_UPLOAD_ID = ""
 # HYSPRINT_PROJECT_PROFILE_GENERATOR_UPLOAD_ID = ""
 
+# --- ISA Video Visualizer: camera folders ----------------------------------------------------
+# Full paths of the two camera recording folders the Video Visualizer's fields start with
+# (unset or empty: that field starts empty and users type the path).
+# HYSPRINT_ISA_CAMERA_FOLDER_MP4 = "/home/jovyan/uploads/<upload folder>/Windows_Kamera"
+# HYSPRINT_ISA_CAMERA_FOLDER_AVI = "/home/jovyan/uploads/<upload folder>/ThorCam"
+
 # --- Keys and tokens (never put them in the code, a notebook or git) -------------------------
 # A key an app needs is read from an environment variable of the same name. Set it here, in this
 # gitignored file (it becomes the variable before the apps start), or in the container's own
@@ -235,6 +241,7 @@ Oasis needs. The table after it explains each variable.
 | `HYSPRINT_DASHBOARD_HIDE_APPS` | only to drop apps from the App Dashboard | Comma-separated app folder names (or card names) to hide, e.g. `"XPS-Automated,SEM_crystal_counter"`. `Learning` and `Projects` name those two sections. Case and spaces are ignored; an unknown name logs a warning and is ignored. A category with no apps left disappears. Hidden apps stay in the upload and can still be opened directly. Unset: the dashboard is unchanged. |
 | `HYSPRINT_DASHBOARD_SHOW_APPS` | only to show a few apps | An allow-list of the same kind of names: when set, only these appear (and `Learning`/`Projects` only if named). The hide list is applied on top. Example: `"JV-Analysis,File_Uploader,Learning"`. |
 | `HYSPRINT_DASHBOARD_GROUP_ORDER` | only to change the order of the groups | Comma-separated group names (`Data Management`, `Device Characterization`, ...): these come first in this order, the rest follow in the default order. Case and spaces are ignored; an unknown name logs a warning. Unset: the default order. |
+| `HYSPRINT_ISA_CAMERA_FOLDER_MP4`, `HYSPRINT_ISA_CAMERA_FOLDER_AVI` | only if the Oasis holds the in-situ camera recordings | Full paths of the MP4 (Windows camera) and AVI (ThorCam) folders, read by ISA_Previewer's Video Visualizer (`config.CAMERA_FOLDER_ENV`) and passed to insitu_analyser, which holds no paths of its own since v0.2.32. Unset or empty: the field starts empty. On CE-AME they are the `Windows_Kamera` and `ThorCam` folders of its `sdc_videos` upload. |
 
 **Before adding a new dashboard setting:** the App Dashboard already reads three optional settings from `oasis_local_config.py` (`HYSPRINT_DASHBOARD_HIDE_APPS`, `HYSPRINT_DASHBOARD_SHOW_APPS`, `HYSPRINT_DASHBOARD_GROUP_ORDER`, parsed in `apps/App_dashboard/data_manager.py` by `select_dashboard`). To hide, allow-list or reorder apps or groups, use those; extend `select_dashboard` for anything similar instead of adding a separate mechanism. Groups open and close in the page by clicking their header.
 
