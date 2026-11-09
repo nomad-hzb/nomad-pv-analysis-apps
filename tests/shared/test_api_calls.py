@@ -370,3 +370,33 @@ def test_old_private_name_still_points_to_query_all():
     from hysprint_utils import api_calls
 
     assert api_calls._query_all is api_calls.query_all
+
+
+def test_get_all_batches_wth_data_asks_only_for_ids_in_upload_chunks(monkeypatch):
+    """JV failed with an HTTP error: the lookup asks only for upload_id and the batch lab_id,
+    a chunk of uploads per batch query, and skips a batch entry without lab_id."""
+    from hysprint_utils import api_calls
+
+    queries = []
+
+    def fake_query_all(url, token, endpoint, query, timeout=None):
+        queries.append((endpoint, query))
+        if endpoint == "entries/query":
+            return [{"upload_id": f"U{n}"} for n in range(5)]
+        uploads = query["query"]["upload_id:any"]
+        return [{"archive": {"data": {"lab_id": f"B_{u}"}}} for u in uploads] + [
+            {"archive": {"data": {}}}
+        ]
+
+    monkeypatch.setattr(api_calls, "query_all", fake_query_all)
+    monkeypatch.setattr(api_calls, "BATCH_LOOKUP_UPLOAD_CHUNK", 2)
+    res = api_calls.get_all_batches_wth_data("u", "t", "HySprint_JVmeasurement")
+    assert sorted(res) == [f"B_U{n}" for n in range(5)]
+    assert queries[0][1]["required"] == {"include": ["upload_id"]}
+    batch_queries = [q for e, q in queries if e == "entries/archive/query"]
+    assert [q["query"]["upload_id:any"] for q in batch_queries] == [
+        ["U0", "U1"],
+        ["U2", "U3"],
+        ["U4"],
+    ]
+    assert all(q["required"] == {"data": {"lab_id": "*"}} for q in batch_queries)
