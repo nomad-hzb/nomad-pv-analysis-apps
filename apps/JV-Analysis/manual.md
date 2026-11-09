@@ -12,7 +12,9 @@ NOMAD; it writes nothing back.
 JV measurement entries of the samples in one or more batches. The status of a measurement
 (light `L1`, `L2`, ... or dark `D1`, `D2`, ...) is read from the measurement name, for example
 `JV_FiNa_1B_L1.txt` gives `L1` and `device_A_D1_dark.txt` gives `D1`. The cell and the scan
-direction (forward or reverse) come from the entry.
+direction come from each curve's cell name in the entry: a name containing `Forward`, `For` or
+`FWD` (any case) is a forward scan, any other name a reverse scan; the cell is what is left of
+the name without these words and `Light`/`Dark` (`A FWD` and `A REV` are both cell `A`).
 
 ## Step by step
 
@@ -55,7 +57,7 @@ The tabs are used from left to right.
    - **Boxplot**: Option 1 is the parameter (Voc, Jsc, FF, PCE, Voc x FF, R_ser, R_shu, V_mpp,
      J_mpp, P_mpp, or "The big 4: Voc, Jsc, FF, PCE" for four plots at once), Option 2 what to
      group by: Batch, Variable, Sample, Cell, Scan Direction, Status, Status and Variable, Cell
-     and Variable. *Split by direction* separates forward and reverse. The two combined options
+     and Variable. *Split by direction* draws reverse and forward as two boxes side by side in every group. The two combined options
      draw one plot per condition (for example one per variable with L1/L2/L3 inside).
      Dark measurements (status D...) are left out of the *Status and Variable* and *Cell and
      Variable* plots.
