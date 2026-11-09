@@ -239,17 +239,48 @@ def get_template(url, token, upload_name, method):
     return data
 
 
-def get_token(url, name=None):
-    user = name if name is not None else input("Username")
-    print("Passwort: \n")
-    password = getpass.getpass()
+def _error_detail(response):
+    """NOMAD's own reason for a refused request ("detail"), else the start of the body."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else (response.text or "")[:200]
 
-    # Get a token from the api, login
+
+def password_login(url, username, password, timeout=REQUEST_TIMEOUT):
+    """A NOMAD access token for username and password: the one login every module uses.
+
+    POSTs to {url}/auth/token as form data (never in the URL, which would leak the password
+    into logs). Raises requests.HTTPError with NOMAD's reason (e.g. "Invalid credentials")
+    and the response attached when the login is refused, ValueError when the answer holds
+    no token."""
     response = SESSION.post(
-        f"{url}/auth/token", data=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
+        f"{url}/auth/token",
+        data={"username": username, "password": password},
+        timeout=timeout,
     )
-    response.raise_for_status()
-    return response.json()["access_token"]
+    if not response.ok:
+        raise requests.HTTPError(
+            f"NOMAD login failed ({response.status_code}): {_error_detail(response)}",
+            response=response,
+        )
+    token = (response.json() or {}).get("access_token")
+    if not token:
+        raise ValueError("Access token not found in response.")
+    return token
+
+
+def prompt_login(url, name=None, timeout=REQUEST_TIMEOUT):
+    """Ask for the username (unless name is given) and the password, then password_login."""
+    user = name if name is not None else input("Username: ")
+    return password_login(url, user, getpass.getpass("Password: "), timeout=timeout)
+
+
+def get_token(url, name=None):
+    """Interactive login (prompts for the password). Kept for old notebooks; apps get their
+    token from access_token.get_token, which tries the environment and token file first."""
+    return prompt_login(url, name)
 
 
 def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
