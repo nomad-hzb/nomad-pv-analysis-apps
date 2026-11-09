@@ -1050,6 +1050,25 @@ def test_load_generic_data_keeps_a_field_that_only_some_entries_have(monkeypatch
     assert df[column].dropna().tolist() == ["0.2"]
 
 
+def test_a_rerun_of_initialize_ui_closes_the_previous_widgets(monkeypatch, tmp_path):
+    import importlib.util
+
+    from hysprint_utils.widget_cleanup import live_widgets
+
+    app_path = Path(__file__).parents[2] / "apps" / "Entry_Auditor" / "app.py"
+    spec = importlib.util.spec_from_file_location("app_entry_auditor_rerun", app_path)
+    app = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(app)
+    monkeypatch.setattr(gc, "create_entry_auditor_ui", lambda *args: gc.widgets.Label("ui"))
+
+    first = app.initialize_ui("https://e.test/api", "tok")
+    first_ids = set(app._ui.widget_ids)
+    assert first.model_id in first_ids
+    second = app.initialize_ui("https://e.test/api", "tok")
+    assert not first_ids & set(live_widgets())
+    assert second.model_id in live_widgets()
+
+
 def test_export_csv_starts_the_download_without_a_link(monkeypatch):
     rows = pd.DataFrame({"correct_value": ["A"], "wrong_value": ["=a"]})
     monkeypatch.setattr(gc, "_corrections_dataframe", lambda: rows)
