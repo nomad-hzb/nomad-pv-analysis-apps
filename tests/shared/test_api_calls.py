@@ -68,7 +68,7 @@ def test_get_all_measurements_except_jv_fans_out_and_excludes_jv(monkeypatch):
     def fake_post(*args, **kwargs):
         return _Resp(next(responses))
 
-    monkeypatch.setattr("hysprint_utils.api_calls.requests.post", fake_post)
+    monkeypatch.setattr("hysprint_utils.api_calls.SESSION.post", fake_post)
 
     res = get_all_measurements_except_JV("https://example.test/api/v1", "token", ["S1", "S2"])
 
@@ -110,7 +110,7 @@ def test_query_all_follows_every_page(monkeypatch):
     from hysprint_utils import api_calls
 
     server = _PagedServer([{"i": n} for n in range(5)])
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     query = {"query": {"x": 1}}
     data = api_calls.query_all("https://e.test/api", "tok", "entries/query", query)
     assert [d["i"] for d in data] == [0, 1, 2, 3, 4]
@@ -122,7 +122,7 @@ def test_query_all_sets_default_page_size_and_timeout(monkeypatch):
     from hysprint_utils import api_calls
 
     server = _PagedServer([{"i": 1}], page_size=10)
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     sent = server.requests[0]
     assert sent["json"]["pagination"]["page_size"] == api_calls.DEFAULT_PAGE_SIZE
@@ -139,7 +139,7 @@ def test_query_all_stops_on_repeated_cursor(monkeypatch):
         def json(self):
             return {"data": [{"i": 1}], "pagination": {"next_page_after_value": "same"}}
 
-    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Loop())
+    monkeypatch.setattr(api_calls.SESSION, "post", lambda *a, **k: _Loop())
     data = api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     assert len(data) == 2  # first page, then the repeated cursor is served once and stopped
 
@@ -160,7 +160,7 @@ def test_get_all_mppt_returns_entries_beyond_the_first_page(monkeypatch):
         endpoint = "entries/archive/query" if url.endswith("archive/query") else "entries/query"
         return responses[endpoint].post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     res = api_calls.get_all_mppt("https://e.test/api", "tok", ["S0"])
     assert set(res) == {f"S{n}" for n in range(5)}
 
@@ -178,7 +178,7 @@ def test_get_all_batches_wth_data_raises_on_http_error(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Bad())
+    monkeypatch.setattr(api_calls.SESSION, "post", lambda *a, **k: _Bad())
     with pytest.raises(requests.HTTPError):
         api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T")
 
@@ -201,7 +201,7 @@ def test_get_all_batches_wth_data_reads_uploads_from_the_metadata_endpoint(monke
         endpoints.append((endpoint, kwargs["json"]["query"]))
         return responses[endpoint].post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     res = api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "HySprint_JVmeasurement")
     assert sorted(res) == ["B0", "B1", "B2"]
     assert endpoints[0] == ("entries/query", {"entry_type": "HySprint_JVmeasurement"})
@@ -218,7 +218,7 @@ def test_get_all_batches_wth_data_without_uploads_asks_nothing_more(monkeypatch)
         calls.append(url)
         return _PagedServer([]).post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     assert api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T") == []
     assert len(calls) == 1
 
@@ -228,7 +228,7 @@ def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
 
     batch = {"archive": {"data": {"entities": [{"lab_id": "S1"}]}}}
     server = _PagedServer([batch], page_size=10)
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     with caplog.at_level("WARNING"):
         ids = api_calls.get_ids_in_batch("https://e.test/api", "tok", ["B1", "B2"])
     assert ids == ["S1"]
@@ -340,7 +340,7 @@ def test_download_raw_file_quotes_path_and_returns_bytes(monkeypatch):
         calls.append((url, headers, timeout))
         return _FakeResponse(content=b"tiff-bytes")
 
-    monkeypatch.setattr(api_calls.requests, "get", fake_get)
+    monkeypatch.setattr(api_calls.SESSION, "get", fake_get)
     data = api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "sem data/VP 1.tif")
     assert data == b"tiff-bytes"
     url, headers, timeout = calls[0]
@@ -355,7 +355,7 @@ def test_download_raw_file_raises_on_http_error(monkeypatch):
 
     from hysprint_utils import api_calls
 
-    monkeypatch.setattr(api_calls.requests, "get", lambda *a, **k: _FakeResponse(status=404))
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _FakeResponse(status=404))
     with pytest.raises(requests.HTTPError):
         api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "missing.tif")
 
@@ -400,3 +400,33 @@ def test_get_all_batches_wth_data_asks_only_for_ids_in_upload_chunks(monkeypatch
         ["U4"],
     ]
     assert all(q["required"] == {"data": {"lab_id": "*"}} for q in batch_queries)
+
+
+def _retry_of(session):
+    """The urllib3 Retry of the adapter that serves an https URL."""
+    return session.get_adapter("https://nomad.example/api/v1").max_retries
+
+
+def test_read_session_retries_transient_errors_on_get_and_post_only():
+    from hysprint_utils import api_calls
+
+    retry = _retry_of(api_calls.SESSION)
+    assert set(retry.status_forcelist) == {502, 503, 504}
+    assert {"GET", "POST"} <= set(retry.allowed_methods)
+    assert "PUT" not in retry.allowed_methods
+    assert retry.read == 0  # a 300 s read timeout is never repeated
+    assert retry.total == 3 and not retry.raise_on_status  # last answer reaches raise_for_status
+
+
+def test_write_session_never_resends_a_request():
+    from hysprint_utils import api_calls
+
+    retry = _retry_of(api_calls.WRITE_SESSION)
+    assert retry.total == 0 or not retry.status_forcelist
+
+
+def test_logins_and_lookups_share_the_read_session():
+    from hysprint_utils import access_token, api_calls, auth_manager
+
+    assert access_token.SESSION is api_calls.SESSION
+    assert auth_manager.SESSION is api_calls.SESSION

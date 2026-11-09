@@ -8,6 +8,8 @@ import time
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 from hysprint_utils.config import ENTRY_TYPES
 
@@ -17,6 +19,42 @@ logger = logging.getLogger(__name__)
 # slow, so the read timeout is generous; it only exists so a dead server cannot hang an app.
 REQUEST_TIMEOUT = (10, 300)
 DEFAULT_PAGE_SIZE = 10000
+
+# Answers of an overloaded or restarting Oasis proxy that are worth one more try.
+TRANSIENT_STATUSES = (502, 503, 504)
+
+
+def _make_session(retry_transient):
+    """A requests.Session: one kept-alive connection per host instead of a new TLS handshake
+    per request (query_all pages, one /users lookup per author, upload polls).
+
+    With retry_transient, a 502/503/504 or a failed connect is tried again up to 3 times
+    (waits of about 1, 2 and 4 s), for GET and POST. A read timeout is not retried: the read
+    timeout is 300 s, so retrying it would hold an app for many minutes. After the last try
+    the response is returned as it is, so raise_for_status reports it as before."""
+    session = requests.Session()
+    if retry_transient:
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=0,
+            status=3,
+            backoff_factor=1.0,
+            status_forcelist=TRANSIENT_STATUSES,
+            allowed_methods=frozenset({"GET", "POST"}),
+            raise_on_status=False,
+            respect_retry_after_header=False,  # keeps the wait bounded
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+    return session
+
+
+# Reads, queries (POST to entries/query) and logins: safe to send again.
+SESSION = _make_session(retry_transient=True)
+# Uploads, processing requests and edits are never retried, so nothing is sent twice.
+WRITE_SESSION = _make_session(retry_transient=False)
 
 
 class EntryLookupError(LookupError, AssertionError):
@@ -50,7 +88,7 @@ def query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
     data = []
     seen_cursors = set()
     for _ in range(MAX_PAGES):
-        response = requests.post(f"{url}/{endpoint}", headers=headers, json=query, timeout=timeout)
+        response = SESSION.post(f"{url}/{endpoint}", headers=headers, json=query, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
         data.extend(payload["data"])
@@ -80,7 +118,7 @@ def edit_entry(url, token, entry_id, changes):
     carries NOMAD's own detail/validation-error text, which callers should
     surface as-is rather than replacing with a generic message.
     """
-    response = requests.post(
+    response = WRITE_SESSION.post(
         f"{url}/entries/{entry_id}/edit",
         headers={"Authorization": f"Bearer {token}"},
         json={"changes": changes},
@@ -92,7 +130,7 @@ def edit_entry(url, token, entry_id, changes):
 
 # retreive information about all uploads of current user
 def get_all_uploads(url, token, number_of_uploads=20):
-    response = requests.get(
+    response = SESSION.get(
         f"{url}/uploads",
         headers={"Authorization": f"Bearer {token}"},
         params=dict(page_size=number_of_uploads, order_by="upload_create_time", order="desc"),
@@ -207,7 +245,7 @@ def get_token(url, name=None):
     password = getpass.getpass()
 
     # Get a token from the api, login
-    response = requests.post(
+    response = SESSION.post(
         f"{url}/auth/token", data=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
@@ -236,7 +274,7 @@ def _resolve_user_names(url, token, user_ids):
     names = {}
     for user_id in user_ids:
         try:
-            response = requests.get(
+            response = SESSION.get(
                 f"{url}/users",
                 headers=headers,
                 params={"user_id": user_id},
@@ -434,7 +472,7 @@ def upload_raw_file_and_wait(
     is tolerated to fail, the poll decides the outcome. on_poll(waited, max_wait), if given,
     is called after each poll (for a progress bar)."""
     headers = {"Authorization": f"Bearer {token}"}
-    put_response = requests.put(
+    put_response = WRITE_SESSION.put(
         f"{url}/uploads/{upload_id}/raw/",
         data={"wait_for_processing": False},
         headers=headers,
@@ -442,7 +480,7 @@ def upload_raw_file_and_wait(
         timeout=REQUEST_TIMEOUT,
     )
     put_response.raise_for_status()
-    requests.post(
+    WRITE_SESSION.post(
         f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=REQUEST_TIMEOUT
     )
 
@@ -450,7 +488,7 @@ def upload_raw_file_and_wait(
     while waited < max_wait:
         time.sleep(poll_interval)
         waited += poll_interval
-        response = requests.get(
+        response = SESSION.get(
             f"{url}/uploads/{upload_id}", headers=headers, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
@@ -469,7 +507,7 @@ def download_raw_file(url, token, upload_id, path):
     """Bytes of one raw file of an upload. `path` is relative to the upload's raw folder, as
     NOMAD stores it in file references such as an SEM entry's data.detector_data. Raises
     requests.HTTPError when the file cannot be fetched."""
-    response = requests.get(
+    response = SESSION.get(
         f"{url}/uploads/{upload_id}/raw/{quote(path, safe='/')}",
         headers={"Authorization": f"Bearer {token}"},
         timeout=REQUEST_TIMEOUT,

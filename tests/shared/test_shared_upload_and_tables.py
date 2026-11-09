@@ -50,9 +50,9 @@ def _ok(payload=None):
 @pytest.fixture
 def http(monkeypatch):
     put, post, get = MagicMock(return_value=_ok()), MagicMock(return_value=_ok()), MagicMock()
-    monkeypatch.setattr(api_calls.requests, "put", put)
-    monkeypatch.setattr(api_calls.requests, "post", post)
-    monkeypatch.setattr(api_calls.requests, "get", get)
+    monkeypatch.setattr(api_calls.WRITE_SESSION, "put", put)
+    monkeypatch.setattr(api_calls.WRITE_SESSION, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "get", get)
     monkeypatch.setattr(api_calls.time, "sleep", lambda s: None)
     return put, post, get
 
