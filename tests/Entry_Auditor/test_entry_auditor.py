@@ -1048,3 +1048,17 @@ def test_load_generic_data_keeps_a_field_that_only_some_entries_have(monkeypatch
     column = "solution.solution_details.solute.2.concentration_mol"
     assert column in get_string_columns(df)
     assert df[column].dropna().tolist() == ["0.2"]
+
+
+def test_export_csv_starts_the_download_without_a_link(monkeypatch):
+    rows = pd.DataFrame({"correct_value": ["A"], "wrong_value": ["=a"]})
+    monkeypatch.setattr(gc, "_corrections_dataframe", lambda: rows)
+    started = []
+    monkeypatch.setattr(gc, "start_download", lambda *args: started.append(args))
+    tab = gc.create_corrections_tab()
+    export_button = tab.children[1].children[1]
+    export_button.click()
+    (output, content, filename, mime_type) = started[0]
+    assert output is tab.children[-1] and filename == "corrections.csv"
+    assert mime_type == "text/csv" and "'=a" in content
+    assert "<a " not in tab.children[-2].value

@@ -2,7 +2,7 @@
 GUI components for MPPT Analysis App
 """
 
-import base64
+import html
 import io
 import logging
 import os
@@ -17,11 +17,12 @@ from IPython.display import HTML, display
 from plotly.subplots import make_subplots
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.downloads import start_download
 from hysprint_utils.table_utils import keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.3"
 
 
 def _html_float_format(value):
@@ -1418,32 +1419,23 @@ class GUIComponents:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"MPPT_Analysis_Results_{timestamp}.zip"
 
-        # Encode for download
-        b64_data = base64.b64encode(zip_data).decode()
-
-        with download_link:
-            download_link.clear_output()
-            display(
-                HTML(f'''
+        size_mb = len(zip_data) / 1024 / 1024
+        summary = f"""
             <div style="padding: 20px; border: 2px solid #28a745; border-radius: 10px; background-color: #d4edda;">
-                <h3 style="color: #155724; margin-top: 0;">✅ Download Package Ready!</h3>
-                <p><strong>File size:</strong> {len(zip_data) / 1024 / 1024:.2f} MB</p>
+                <h3 style="color: #155724; margin-top: 0;">✅ Download Package Ready</h3>
+                <p><strong>{html.escape(filename)}</strong> ({size_mb:.2f} MB) is downloading. If
+                it does not appear, check whether the browser blocks downloads from this page,
+                then press <em>Generate Download Package</em> again.</p>
                 <p><strong>Contents:</strong></p>
                 <ul>
                     <li>Excel file with {self.app_state.get_fit_results_count()} fitted curves</li>
-                    <li>Plots ({plots_format} format)</li>
+                    <li>Plots ({html.escape(plots_format)} format)</li>
                     <li>Parameter histograms</li>
                     <li>README with analysis details</li>
                 </ul>
-                <a href="data:application/zip;base64,{b64_data}" 
-                   download="{filename}" 
-                   style="background-color: #28a745; color: white; padding: 10px 20px; 
-                          text-decoration: none; border-radius: 5px; font-weight: bold;">
-                    📥 Download {filename}
-                </a>
             </div>
-            ''')
-            )
+            """
+        start_download(download_link, zip_data, filename, "application/zip", note=summary)
 
         download_progress.value = download_progress.max
         download_progress.bar_style = "success"
