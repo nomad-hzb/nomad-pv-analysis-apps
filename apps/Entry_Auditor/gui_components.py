@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import base64
 import html
 import logging
 import re
@@ -23,6 +22,7 @@ from data_manager import (
 from natsort import natsort_keygen
 
 from hysprint_utils.batch_selection import create_batch_selection
+from hysprint_utils.downloads import start_download
 from hysprint_utils.table_utils import csv_safe
 
 logger = logging.getLogger(__name__)
@@ -620,6 +620,7 @@ def _corrections_dataframe() -> pd.DataFrame:
 def create_corrections_tab() -> widgets.VBox:
     table_out = widgets.HTML(value="")
     download_out = widgets.HTML(value="")
+    download_js = widgets.Output()  # runs the download script (widgets.HTML would not)
     refresh_button = widgets.Button(description="Refresh", button_style="info", icon="refresh")
     export_button = widgets.Button(
         description="Export CSV", button_style="success", icon="download"
@@ -638,11 +639,8 @@ def create_corrections_tab() -> widgets.VBox:
         if df.empty:
             download_out.value = "Nothing to export."
             return
-        b64_data = base64.b64encode(csv_safe(df).to_csv(index=False).encode()).decode()
-        download_out.value = (
-            f"<a href='data:text/csv;base64,{b64_data}' download='corrections.csv'>"
-            "Download corrections.csv</a>"
-        )
+        start_download(download_js, csv_safe(df).to_csv(index=False), "corrections.csv", "text/csv")
+        download_out.value = "Downloading corrections.csv - it should start by itself."
 
     refresh_button.on_click(_on_refresh)
     export_button.on_click(_on_export)
@@ -654,6 +652,7 @@ def create_corrections_tab() -> widgets.VBox:
             widgets.HBox([refresh_button, export_button]),
             table_out,
             download_out,
+            download_js,
         ]
     )
 

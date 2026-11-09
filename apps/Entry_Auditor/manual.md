@@ -60,7 +60,8 @@ The table is updated with the new values of the entries that were confirmed.
 ## Tab *Corrections*
 
 Lists every correction made so far (the wrong value and the value it was corrected to), read from
-the correction log. *Refresh* reloads it and *Export CSV* gives a `corrections.csv`.
+the correction log. *Refresh* reloads it and *Export CSV* downloads `corrections.csv`
+straight away.
 
 ## Known limits
 
