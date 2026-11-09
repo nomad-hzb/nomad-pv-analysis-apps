@@ -7,7 +7,6 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
-import base64
 import html
 import io
 import logging
@@ -38,6 +37,7 @@ from hysprint_utils.batch_selection import create_batch_selection
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.manual import manual_panel
+from hysprint_utils.table_utils import csv_safe, keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +433,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "jvc" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_sign(data["jvc"]).to_csv(index=False),
+                + csv_safe(flip_current_density_sign(data["jvc"])).to_csv(index=False),
                 dated_filename("jv_full.csv"),
                 "text/plain",
             )
@@ -446,7 +446,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "filtered" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_sign(data["filtered"]).to_csv(index=False),
+                + csv_safe(flip_current_density_sign(data["filtered"])).to_csv(index=False),
                 dated_filename("jv_filtered.csv"),
                 "text/plain",
             )
@@ -459,7 +459,7 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "curves" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_curve_rows(data["curves"]).to_csv(index=False),
+                + csv_safe(flip_current_density_curve_rows(data["curves"])).to_csv(index=False),
                 dated_filename("curves_full.csv"),
                 "text/plain",
             )
@@ -472,7 +472,9 @@ If you tested specific variables or conditions for each sample, please write the
         if data and "filtered_curves" in data:
             self.save_ui.trigger_download(
                 f"# {CURRENT_DENSITY_FLIP_NOTE}\n"
-                + flip_current_density_curve_rows(data["filtered_curves"]).to_csv(index=False),
+                + csv_safe(flip_current_density_curve_rows(data["filtered_curves"])).to_csv(
+                    index=False
+                ),
                 dated_filename("curves_filtered.csv"),
                 "text/plain",
             )
@@ -808,7 +810,7 @@ If you tested specific variables or conditions for each sample, please write the
             # Store plot data
             self.global_plot_data["figs"] = figs
             self.global_plot_data["names"] = names
-            self.global_plot_data["workbook"] = wb
+            self.global_plot_data["workbook"] = keep_text_as_text(wb)
 
             # Display plots using resizable plot utility
             with self.plot_ui.plotted_content:
@@ -926,28 +928,10 @@ If you tested specific variables or conditions for each sample, please write the
                 self.global_plot_data["figs"], self.global_plot_data["names"]
             )
 
-            b64 = base64.b64encode(zip_content).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/zip;base64,{b64}';
-            link.download = '{dated_filename("plots.zip")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(
-                        f'<button onclick="{js_code}">Click to download all plots</button>'
-                    )
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                zip_content, dated_filename("plots.zip"), "application/zip"
+            )
+            logger.info("Download of the plots started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving plots", e, self.save_ui.download_output)
@@ -964,28 +948,12 @@ If you tested specific variables or conditions for each sample, please write the
             self.global_plot_data["workbook"].save(excel_buffer)
             excel_buffer.seek(0)
 
-            b64 = base64.b64encode(excel_buffer.getvalue()).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            var mime = 'data:application/vnd.openxmlformats-officedocument'
-                + '.spreadsheetml.sheet;base64,';
-            link.href = mime + '{b64}';
-            link.download = '{dated_filename("collected_data.xlsx")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(f'<button onclick="{js_code}">Click to download data</button>')
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                excel_buffer.getvalue(),
+                dated_filename("collected_data.xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            logger.info("Download of the data started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving data", e, self.save_ui.download_output)
@@ -1016,28 +984,10 @@ If you tested specific variables or conditions for each sample, please write the
                 zip_file.writestr("collected_data.xlsx", excel_buffer.getvalue())
 
             zip_buffer.seek(0)
-            b64 = base64.b64encode(zip_buffer.getvalue()).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/zip;base64,{b64}';
-            link.download = '{dated_filename("results.zip")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(
-                        f'<button onclick="{js_code}">Click to download all files</button>'
-                    )
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                zip_buffer.getvalue(), dated_filename("results.zip"), "application/zip"
+            )
+            logger.info("Download of all files started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving all files", e, self.save_ui.download_output)

@@ -30,6 +30,7 @@ except ImportError:
     logger.warning("hysprint_utils.config not found; using hardcoded URL fallback")
 
 from hysprint_utils.north import get_current_user, get_uploads_path  # noqa: E402, F401
+from hysprint_utils.table_utils import csv_safe  # noqa: E402
 
 DOE_VOILA_PATH_TEMPLATE = "/nomad-oasis/north/user/{user}/voila/voila/render"
 DOE_APP_PATH = "DesignOfExperiments/DoE.ipynb"
@@ -374,7 +375,7 @@ def trigger_csv_download(df: pd.DataFrame, filename_prefix: str) -> str:
     # floating-point noise. See _round_preserving_significance for why this
     # isn't just a flat df.round(4): that would zero out any value smaller
     # than 0.0001 entirely.
-    csv_string = _round_dataframe_for_export(df).to_csv(index=False)
+    csv_string = csv_safe(_round_dataframe_for_export(df)).to_csv(index=False)
     b64 = base64.b64encode(csv_string.encode()).decode()
 
     js_code = f"""

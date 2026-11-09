@@ -243,3 +243,14 @@ def test_images_with_drawn_measurements_start_ignored(make_tiff, voronoi_film):
     assert entry.has_overlay and entry.ignored
     row = manager.image_table().iloc[0]
     assert row["status"] == "ignored" and row["note"] == dm.OVERLAY_NOTE
+
+
+def test_results_workbook_keeps_formula_like_text_as_text(demo, monkeypatch):
+    import io
+
+    import openpyxl
+    import pandas as pd
+
+    monkeypatch.setattr(demo, "settings_table", lambda: pd.DataFrame({"item": ["=1+1"]}))
+    sheet = openpyxl.load_workbook(io.BytesIO(demo.results_workbook()))["Settings"]
+    assert (sheet["A2"].value, sheet["A2"].data_type) == ("=1+1", "s")

@@ -49,6 +49,8 @@ One of two sources, which can be mixed:
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV file, so a spreadsheet shows it as text instead of running it as a formula.
 - The peak controls only change the display and the peak list; the exported CSV holds the raw
   patterns, not the peaks.
 - Peaks are found on the data as loaded (no smoothing or background subtraction).
