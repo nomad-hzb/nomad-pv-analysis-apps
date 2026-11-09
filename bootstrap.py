@@ -10,7 +10,7 @@ Overrides are opt-in. The one built-in default is the HZB outbound proxy for
 the HZB SE Oasis (see HZB_SE_PROXY); every other deployment gets nothing it
 did not ask for. A deployment that needs overrides creates
 oasis_local_config.py next to this file (gitignored, same pattern as
-secrets.py) assigning plain uppercase strings:
+nomad_secrets.py) assigning plain uppercase strings:
 
     HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
     HTTP_PROXY = "http://proxy.example.org:3128"
