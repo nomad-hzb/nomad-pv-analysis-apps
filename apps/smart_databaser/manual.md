@@ -32,7 +32,9 @@ setup is applied when the page opens.
 Search and select a **past batch** and click *Replicate Experiment*: its process steps **replace**
 your current process sequence and are filled in with its values (if a value differed between that
 batch's samples, the first sample's value is used). This can take a while for batches with many
-steps. Everything stays editable afterwards, and picking another batch replaces the sequence again.
+steps: until everything is filled in, a *Loading the template batch...* line stands in for the
+process sequence and the varying fields, which then appear together. Everything stays editable
+afterwards, and picking another batch replaces the sequence again.
 The same batch is the source for the *Adopt from template batch* button of a single process (see
 below).
 

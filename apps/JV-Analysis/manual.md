@@ -80,10 +80,15 @@ The tabs are used from left to right.
      *All_data* and further analysis sheets.
    - *Everything together*: one zip with the plots and the workbook.
 
-   If a download does not start, click the button that appears and check the pop-up blocker.
+   Each download starts by itself. If one does not, check whether the browser blocks downloads
+   from the page.
 
 ## Known limits
 
+- Text from NOMAD that starts with `=`, `+`, `-` or `@` (and is not a number) gets an apostrophe in
+  front in the CSV files, so a spreadsheet shows it as text instead of running it as a formula.
+- In the Excel summary, text from NOMAD that starts with `=` is stored as text, so Excel shows it
+  instead of running it as a formula.
 - Plots, the Excel summary and the zip are built when you press *Plot Selection*; after
   changing filters, plot again.
 - PNG images are skipped when the image export is not available on the server; the HTML plots

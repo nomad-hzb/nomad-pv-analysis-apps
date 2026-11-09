@@ -479,7 +479,12 @@ def create_finish_section(
 
 
 def create_whole_experiment_template_picker(
-    state: ExperimentState, url: str, token: str, cache: NomadSessionCache, on_change=None
+    state: ExperimentState,
+    url: str,
+    token: str,
+    cache: NomadSessionCache,
+    on_change=None,
+    on_busy=None,
 ) -> widgets.VBox:
     """Picking a batch here REPLACES the current process sequence: that batch's own steps
     are used to populate a full sequence here, fully filled in (see
@@ -493,7 +498,11 @@ def create_whole_experiment_template_picker(
     across every process in the replicated sequence) - shows a progress bar across the
     per-process autofill phase (see apply_whole_experiment_template's progress_callback),
     on top of _create_batch_picker's own "Working..." indicator for the initial batch
-    fetch."""
+    fetch.
+
+    on_busy(True) is called before the batch is fetched and on_busy(False) once on_change
+    has rebuilt everything (also after a failure), so the caller can show a loading message
+    instead of half-built sections."""
 
     progress_bar = widgets.FloatProgress(
         min=0,
@@ -512,13 +521,19 @@ def create_whole_experiment_template_picker(
 
     def on_load(batch_id):
         progress_bar.value = 0
-        written_by_process = apply_whole_experiment_template(
-            state, url, token, cache, batch_id, progress_callback=on_progress
-        )
-        progress_bar.layout.visibility = "hidden"
-        progress_label.value = ""
-        if on_change:
-            on_change()
+        if on_busy:
+            on_busy(True)
+        try:
+            written_by_process = apply_whole_experiment_template(
+                state, url, token, cache, batch_id, progress_callback=on_progress
+            )
+            if on_change:
+                on_change()
+        finally:
+            progress_bar.layout.visibility = "hidden"
+            progress_label.value = ""
+            if on_busy:
+                on_busy(False)
         process_count = len(state.process_sequence)
         field_count = sum(written_by_process.values())
         return (
