@@ -7,7 +7,6 @@ __author__ = "Edgar Nandayapa"
 __institution__ = "Helmholtz-Zentrum Berlin"
 __created__ = "August 2025"
 
-import base64
 import html
 import io
 import logging
@@ -929,28 +928,10 @@ If you tested specific variables or conditions for each sample, please write the
                 self.global_plot_data["figs"], self.global_plot_data["names"]
             )
 
-            b64 = base64.b64encode(zip_content).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/zip;base64,{b64}';
-            link.download = '{dated_filename("plots.zip")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(
-                        f'<button onclick="{js_code}">Click to download all plots</button>'
-                    )
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                zip_content, dated_filename("plots.zip"), "application/zip"
+            )
+            logger.info("Download of the plots started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving plots", e, self.save_ui.download_output)
@@ -967,28 +948,12 @@ If you tested specific variables or conditions for each sample, please write the
             self.global_plot_data["workbook"].save(excel_buffer)
             excel_buffer.seek(0)
 
-            b64 = base64.b64encode(excel_buffer.getvalue()).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            var mime = 'data:application/vnd.openxmlformats-officedocument'
-                + '.spreadsheetml.sheet;base64,';
-            link.href = mime + '{b64}';
-            link.download = '{dated_filename("collected_data.xlsx")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(f'<button onclick="{js_code}">Click to download data</button>')
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                excel_buffer.getvalue(),
+                dated_filename("collected_data.xlsx"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            logger.info("Download of the data started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving data", e, self.save_ui.download_output)
@@ -1019,28 +984,10 @@ If you tested specific variables or conditions for each sample, please write the
                 zip_file.writestr("collected_data.xlsx", excel_buffer.getvalue())
 
             zip_buffer.seek(0)
-            b64 = base64.b64encode(zip_buffer.getvalue()).decode()
-            js_code = f"""
-            var link = document.createElement('a');
-            link.href = 'data:application/zip;base64,{b64}';
-            link.download = '{dated_filename("results.zip")}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            """
-
-            with self.save_ui.download_output:
-                display(
-                    widgets.HTML(
-                        f'<button onclick="{js_code}">Click to download all files</button>'
-                    )
-                )
-                logger.info(
-                    (
-                        "Download initiated. If it doesn't start automatically, "
-                        "click the button above."
-                    )
-                )
+            self.save_ui.trigger_download(
+                zip_buffer.getvalue(), dated_filename("results.zip"), "application/zip"
+            )
+            logger.info("Download of all files started.")
 
         except Exception as e:
             ErrorHandler.log_error("saving all files", e, self.save_ui.download_output)
