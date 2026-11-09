@@ -28,7 +28,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta
-from hysprint_utils.table_utils import pivot_by_group
+from hysprint_utils.table_utils import csv_safe, pivot_by_group
 
 logger = logging.getLogger(__name__)
 # Measurement type constant -- imported by gui_components.py
@@ -248,7 +248,7 @@ class TRPLDataManager:
     def to_csv_string(self) -> str:
         """Return the current DataFrame as a CSV string (excluding array columns)."""
         scalar_cols = [c for c in self.data.columns if not isinstance(self.data[c].iloc[0], list)]
-        return self.data[scalar_cols].to_csv()
+        return csv_safe(self.data[scalar_cols]).to_csv()
 
     def get_pivot_table(self, value_col: str, group_col: str) -> pd.DataFrame:
         """One column per group, one row per measurement in it (every measurement is kept)."""

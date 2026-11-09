@@ -13,6 +13,7 @@ from hysprint_utils.api_calls import (
 from hysprint_utils.config import ENTRY_TYPES
 from hysprint_utils.error_handler import ErrorHandler
 from hysprint_utils.schemas import SampleMeta  # noqa: F401  (available for import by callers)
+from hysprint_utils.table_utils import csv_safe
 
 logger = logging.getLogger(__name__)
 
@@ -232,8 +233,8 @@ class EQEDataManager:
     def to_csv_dict(self) -> dict[str, str]:
         """Return a {filename: csv_string} dict for all four DataFrames."""
         return {
-            "eqe_curve.csv": self.curves.to_csv(),
-            "eqe_params.csv": self.params.to_csv(),
-            "eqe_properties.csv": self.properties.to_csv(),
-            "eqe_entries.csv": self.entries.to_csv(),
+            "eqe_curve.csv": csv_safe(self.curves).to_csv(),
+            "eqe_params.csv": csv_safe(self.params).to_csv(),
+            "eqe_properties.csv": csv_safe(self.properties).to_csv(),
+            "eqe_entries.csv": csv_safe(self.entries).to_csv(),
         }

@@ -94,8 +94,10 @@ export HYSPRINT_API_ENDPOINT=/nomad-oasis/api/v1
 ```
 
 For authentication, export `NOMAD_CLIENT_ACCESS_TOKEN`, or create a
-`secrets.py` file at the repo root (never commit this file) defining
-`NOMAD_TOKEN = "your_token_here"`.
+`nomad_secrets.py` file at the repo root (gitignored; never commit it) with the single line
+`NOMAD_TOKEN = "your_token_here"`. The file is read as data, not run. An existing
+`secrets.py` still works but should be renamed: under that name it hides Python's own
+`secrets` module and breaks numpy and plotly imports.
 
 Deploying the suite to an Oasis other than HZB SE — including one behind an
 outbound proxy — is covered step by step in [DEPLOYMENT.md](DEPLOYMENT.md).

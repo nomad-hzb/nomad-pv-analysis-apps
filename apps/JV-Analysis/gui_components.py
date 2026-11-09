@@ -1007,16 +1007,26 @@ class SaveUI:
         self.download_output = WidgetFactory.create_output()
 
     def trigger_download(self, content, filename, content_type="text/json"):
-        """Trigger file download"""
+        """Start the browser download of content (bytes or text) as filename.
+
+        The data goes to the browser in a script that runs once and hands it over as a Blob:
+        a data URL in a button's onclick kept megabytes of base64 in the page, and the file
+        name is passed as JSON, so no quote in it can break out of the script."""
         content_b64 = base64.b64encode(
             content if isinstance(content, bytes) else content.encode()
         ).decode()
-        data_url = f"data:{content_type};charset=utf-8;base64,{content_b64}"
         js_code = f"""
+            var bytes = Uint8Array.from(atob('{content_b64}'), function (c) {{
+                return c.charCodeAt(0);
+            }});
+            var url = URL.createObjectURL(new Blob([bytes], {{type: {json.dumps(content_type)}}}));
             var a = document.createElement('a');
-            a.setAttribute('download', '{filename}');
-            a.setAttribute('href', '{data_url}');
-            a.click()
+            a.href = url;
+            a.download = {json.dumps(filename)};
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () {{ URL.revokeObjectURL(url); }}, 60000);
         """
         with self.download_output:
             clear_output()
