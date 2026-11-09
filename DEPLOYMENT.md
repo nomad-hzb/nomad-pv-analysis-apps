@@ -467,7 +467,9 @@ retries once (its defaults, 15 s and 5 retries, let an unreachable proxy or
 index hold a start for minutes per package), and a whole install is stopped
 after 10 minutes. A stopped install counts as a failed one and takes the
 failure path described for its step. The same limits apply when `shared/`
-reinstalls because its sources changed, for example after a branch switch.
+reinstalls because its `pyproject.toml` changed. Editing its Python sources or
+switching branches does not reinstall it: the kernel imports `hysprint_utils`
+from `shared/` on `sys.path`, not from the installed copy.
 
 **A failed app install is a warning, not an error.** Most apps need nothing
 beyond what the NORTH image already provides, and none of them were installed

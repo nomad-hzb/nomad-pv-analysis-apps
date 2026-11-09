@@ -203,15 +203,15 @@ SHARED_RUNTIME_MODULES = ("hysprint_utils", "requests", "pandas", "plotly")
 def _shared_install_marker(shared: Path) -> Path:
     """Path of the once-per-container marker for the `shared/` install.
 
-    Keyed on the shared location and the contents of its pyproject.toml and
-    Python sources, so an edited shared package reinstalls while an unchanged
-    one never pays for pip on every launch.
+    Keyed on the shared location and its pyproject.toml only. The kernel imports
+    hysprint_utils from shared/ on sys.path (see _install_shared), never from the
+    installed copy, so an edited source file or a branch switch needs no pip run;
+    the install only brings in the dependencies, and those live in pyproject.toml.
     """
     digest = hashlib.sha256(str(shared).encode())
-    for path in sorted([shared / "pyproject.toml", *shared.rglob("*.py")]):
-        if path.is_file():
-            digest.update(path.relative_to(shared).as_posix().encode())
-            digest.update(path.read_bytes())
+    pyproject = shared / "pyproject.toml"
+    if pyproject.is_file():
+        digest.update(pyproject.read_bytes())
     return Path(tempfile.gettempdir()) / f"hysprint-bootstrap-shared-{digest.hexdigest()[:16]}.done"
 
 
