@@ -150,30 +150,42 @@ def get_samples_with_substrates(url, token, upload_id, sample_type=ENTRY_TYPES["
     ]
 
 
+# Uploads per batch query in get_all_batches_wth_data: one upload_id:any list with every
+# upload of a large technique (JV) makes a single very large request.
+BATCH_LOOKUP_UPLOAD_CHUNK = 200
+
+
 def get_all_batches_wth_data(url, token, entry_type):
     """Lab ids of the batches in every upload that has an entry of entry_type.
 
-    Step 1 asks the metadata endpoint (entries/query): the archive endpoint answered with an
-    HTTP error for large entry types such as JV and MPPT."""
+    Asks only for what it needs, so the answers stay small even for JV, the technique with
+    the most entries: the upload_id of each measurement (metadata endpoint; the archive
+    endpoint answered with an HTTP error for JV and MPPT), then the lab_id of the batches in
+    those uploads, a chunk of uploads at a time. A batch entry without lab_id is skipped."""
     query = {
         "owner": "visible",
         "query": {"entry_type": entry_type},
+        "required": {"include": ["upload_id"]},
         "pagination": {"page_size": 10000},
     }
-
-    data = query_all(url, token, "entries/query", query)
-    upload_ids = list({u["upload_id"] for u in data if "upload_id" in u})
-    if not upload_ids:
-        return []
-    query = {
-        "required": {"data": "*"},
-        "owner": "visible",
-        "query": {"entry_type": ENTRY_TYPES["batch"], "upload_id:any": upload_ids},
-        "pagination": {"page_size": 10000},
-    }
-    data = query_all(url, token, "entries/archive/query", query)
-
-    return list(set([b["archive"]["data"]["lab_id"] for b in data]))
+    entries = query_all(url, token, "entries/query", query)
+    upload_ids = sorted({e["upload_id"] for e in entries if "upload_id" in e})
+    batch_ids = set()
+    for start in range(0, len(upload_ids), BATCH_LOOKUP_UPLOAD_CHUNK):
+        query = {
+            "required": {"data": {"lab_id": "*"}},
+            "owner": "visible",
+            "query": {
+                "entry_type": ENTRY_TYPES["batch"],
+                "upload_id:any": upload_ids[start : start + BATCH_LOOKUP_UPLOAD_CHUNK],
+            },
+            "pagination": {"page_size": 1000},
+        }
+        for batch in query_all(url, token, "entries/archive/query", query):
+            lab_id = ((batch.get("archive") or {}).get("data") or {}).get("lab_id")
+            if lab_id:
+                batch_ids.add(lab_id)
+    return list(batch_ids)
 
 
 def get_template(url, token, upload_name, method):
