@@ -20,28 +20,20 @@ from gui_components import (
 )
 
 from hysprint_utils.manual import manual_panel
+from hysprint_utils.widget_cleanup import UiRebuild
 
 logger = logging.getLogger(__name__)
 
-# Widgets created by the previous call to initialize_ui() are explicitly closed before
-# building new ones, mirroring File_Uploader's app.py pattern: clear_output() only hides
-# widgets from display, it doesn't destroy them, so stale on_click/observe handlers from
-# prior cell re-runs would otherwise all fire simultaneously on one click.
-_ui_widget_ids: set = set()
+# A re-run of the cell first closes the widgets of the previous run (see UiRebuild).
+_ui = UiRebuild()
 
 
 def initialize_ui(url: str, token: str) -> widgets.VBox:
-    global _ui_widget_ids
-    for widget_id in list(_ui_widget_ids):
-        widget = widgets.Widget.widgets.get(widget_id)
-        if widget is not None:
-            try:
-                widget.close()
-            except Exception:
-                pass
-    _ui_widget_ids = set()
-    ids_before = set(widgets.Widget.widgets.keys())
+    with _ui.build():
+        return _build_ui(url, token)
 
+
+def _build_ui(url: str, token: str) -> widgets.VBox:
     state = ExperimentState()
     cache = NomadSessionCache()
     rebuild_field_specs(state)  # populate experiment_info_fields up front
@@ -142,5 +134,4 @@ def initialize_ui(url: str, token: str) -> widgets.VBox:
         layout=widgets.Layout(padding="15px", max_width="98vw"),
     )
 
-    _ui_widget_ids = set(widgets.Widget.widgets.keys()) - ids_before
     return main_interface

@@ -2529,13 +2529,14 @@ def test_initialize_ui_closes_widgets_from_previous_call():
         initialize_ui("url", "token")
         import app as app_module
 
-        first_call_ids = set(app_module._ui_widget_ids)
+        first_call_ids = set(app_module._ui.widget_ids)
         initialize_ui("url", "token")
 
-    import ipywidgets as widgets
+    from hysprint_utils.widget_cleanup import live_widgets
 
+    assert first_call_ids
     for widget_id in first_call_ids:
-        assert widget_id not in widgets.Widget.widgets
+        assert widget_id not in live_widgets()
 
 
 def test_initialize_ui_template_pick_refreshes_visible_sequence_rows():
