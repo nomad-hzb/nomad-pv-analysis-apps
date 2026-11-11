@@ -263,32 +263,56 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
 
 
+USER_LOOKUP_CHUNK = 50  # user ids per /users request; keeps the URL short
+
+
+def _user_names_from(response_data, wanted):
+    """{user_id: display name} for the users in a /users answer that were asked for."""
+    names = {}
+    for user in response_data or []:
+        user_id = user.get("user_id")
+        name = user.get("name") or user.get("username")
+        if user_id in wanted and name:
+            names[user_id] = name
+    return names
+
+
 def _resolve_user_names(url, token, user_ids):
     """Resolve raw NOMAD user_ids to display names via the /users endpoint - the same
     one /users/me (see auth_manager.APIClient.get_user_verification_url) uses for the
-    current user, just parameterized by id instead of "me". Best-effort: an id that
-    can't be resolved is simply left out of the returned dict rather than raising, so
-    one bad/renamed id doesn't break the whole batch list.
+    current user, parameterized by id instead of "me". It takes several user_id values at
+    once, so the ids go in chunks of USER_LOOKUP_CHUNK instead of one request each.
+    Best-effort: an id that can't be resolved is simply left out of the returned dict
+    rather than raising; if a whole chunk fails, its ids are tried one by one, so one
+    bad/renamed id doesn't break the whole batch list.
     """
     headers = {"Authorization": f"Bearer {token}"}
+    ids = list(dict.fromkeys(user_ids))
     names = {}
-    for user_id in user_ids:
+
+    def lookup(chunk):
+        response = SESSION.get(
+            f"{url}/users",
+            headers=headers,
+            params={"user_id": chunk},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return _user_names_from(response.json().get("data"), set(chunk))
+
+    for start in range(0, len(ids), USER_LOOKUP_CHUNK):
+        chunk = ids[start : start + USER_LOOKUP_CHUNK]
         try:
-            response = SESSION.get(
-                f"{url}/users",
-                headers=headers,
-                params={"user_id": user_id},
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            matches = response.json().get("data") or []
-            if matches:
-                user = matches[0]
-                name = user.get("name") or user.get("username")
-                if name:
-                    names[user_id] = name
-        except requests.RequestException:
+            names.update(lookup(chunk))
             continue
+        except requests.RequestException:
+            if len(chunk) == 1:
+                continue
+        for user_id in chunk:
+            try:
+                names.update(lookup([user_id]))
+            except requests.RequestException:
+                continue
     return names
 
 
@@ -531,6 +555,7 @@ def get_sample_entry_links(url, token, sample_ids):
     }
     data = query_all(url, token, "entries/query", query)
 
+    wanted = set(sample_ids)  # one lookup per lab_id instead of a scan of the list
     result = {}
     for entry in data:
         entry_id = entry.get("entry_id")
@@ -540,7 +565,7 @@ def get_sample_entry_links(url, token, sample_ids):
             continue
         gui_url = f"{base_url}/gui/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}"
         for lab_id in lab_ids:
-            if lab_id in sample_ids:
+            if lab_id in wanted:
                 result[lab_id] = gui_url
 
     logger.debug(
