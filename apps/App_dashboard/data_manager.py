@@ -22,6 +22,12 @@ except ImportError:
         "hysprint_utils.config not found; using hardcoded URL fallback"
     )
 
+# Host prefix for the app links. Inside NORTH (JupyterHub sets JUPYTERHUB_SERVICE_PREFIX) the
+# links are server-relative, so the browser stays on the server it already uses for this tool
+# (URL_BASE can be an address only the container reaches); outside NORTH they are absolute.
+# Same idea as ISA_Previewer's build_notebook_url.
+LINK_BASE = "" if os.environ.get("JUPYTERHUB_SERVICE_PREFIX") else URL_BASE
+
 try:
     from hysprint_utils.usage_tracking import log_button_usage
 except ImportError:
