@@ -430,3 +430,64 @@ def test_logins_and_lookups_share_the_read_session():
 
     assert access_token.prompt_login is api_calls.prompt_login  # whose login uses SESSION
     assert auth_manager.SESSION is api_calls.SESSION
+
+
+class _UsersResponse:
+    def __init__(self, data, failed):
+        self._data, self._failed = data, failed
+
+    def raise_for_status(self):
+        if self._failed:
+            import requests
+
+            raise requests.HTTPError("500 error")
+
+    def json(self):
+        return {"data": self._data}
+
+
+class _UsersServer:
+    """Fake /users: answers every requested id it knows; ids in `broken` fail the request."""
+
+    def __init__(self, known, broken=()):
+        self.known, self.broken, self.calls = known, set(broken), []
+
+    def get(self, url, params=None, **kwargs):
+        ids = list(params["user_id"])
+        self.calls.append(ids)
+        data = [{"user_id": i, "name": self.known[i]} for i in ids if i in self.known]
+        return _UsersResponse(data, failed=bool(self.broken & set(ids)))
+
+
+def test_user_names_are_looked_up_in_chunks_not_one_request_each(monkeypatch):
+    from hysprint_utils import api_calls
+
+    known = {f"u{i}": f"Name {i}" for i in range(120)}
+    server = _UsersServer(known)
+    monkeypatch.setattr(api_calls.SESSION, "get", server.get)
+    names = api_calls._resolve_user_names("https://e.test/api/v1", "tok", list(known) + ["gone"])
+    assert names == known  # an unknown id is just left out
+    assert [len(c) for c in server.calls] == [50, 50, 21]
+
+
+def test_a_failing_chunk_falls_back_to_one_request_per_id(monkeypatch):
+    from hysprint_utils import api_calls
+
+    server = _UsersServer({"a": "A", "b": "B", "bad": "X"}, broken={"bad"})
+    monkeypatch.setattr(api_calls.SESSION, "get", server.get)
+    names = api_calls._resolve_user_names("https://e.test/api/v1", "tok", ["a", "bad", "b"])
+    assert names == {"a": "A", "b": "B"}
+    assert server.calls == [["a", "bad", "b"], ["a"], ["bad"], ["b"]]
+
+
+def test_sample_entry_links_only_for_the_requested_samples(monkeypatch):
+    from hysprint_utils import api_calls
+
+    entries = [
+        {"entry_id": "e1", "upload_id": "u1", "results": {"eln": {"lab_ids": ["S1", "other"]}}},
+        {"entry_id": "e2", "upload_id": "u2", "results": {"eln": {"lab_ids": ["S2"]}}},
+    ]
+    monkeypatch.setattr(api_calls, "query_all", lambda *a, **k: entries)
+    links = api_calls.get_sample_entry_links("https://o.test/nomad-oasis/api/v1", "t", ["S1", "S2"])
+    assert set(links) == {"S1", "S2"}
+    assert links["S2"].endswith("/upload/id/u2/entry/id/e2")

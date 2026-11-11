@@ -4,58 +4,9 @@ import os
 import requests
 
 from hysprint_utils.api_calls import SESSION, password_login
-from hysprint_utils.config import API_ENDPOINT, URL_BASE
 
-# --- Constants ---
-STRINGS = {
-    "STATUS_NOT_AUTH": "Status: Not Authenticated",
-    "STATUS_AUTH_CHANGED": "Status: Not Authenticated (Method changed)",
-    "STATUS_AUTHENTICATING": "Status: Authenticating...",
-    "AUTH_REQUIRED": "Authentication required. Please authenticate first in Connection Settings.",
-    "SE_OASIS_URL": URL_BASE,
-    "API_ENDPOINT": API_ENDPOINT,
-    "DATA_LOADED_SUCCESS": "Data Loaded Successfully!",
-    "LOADING_DATA": "Loading Data",
-    "VARIABLES_NOT_LOADED": "⚠️ Variables not loaded",
-    "VARIABLES_LOADED": "Variables loaded",
-    "ERROR_PREFIX": "Error: ",
-    "STATUS_PREFIX": "Status: ",
-}
-
-# --- Layout Constants ---
-LAYOUT = {
-    "TIMEOUT_STANDARD": 10,
-    "BUTTON_MIN_WIDTH": "150px",
-    "DROPDOWN_WIDTH": "200px",
-    "DROPDOWN_WIDE": "250px",
-    "DROPDOWN_EXTRA_WIDE": "300px",
-    "TEXT_INPUT_WIDTH": "100px",
-    "LABEL_WIDTH": "80px",
-    "TOKEN_INPUT_WIDTH": "95%",
-    "CONTAINER_MAX_WIDTH": "1200px",
-    "OUTPUT_MIN_HEIGHT": "100px",
-    "OUTPUT_SCROLL_HEIGHT": "300px",
-    "OUTPUT_SCROLL_WIDTH": "400px",
-    "OUTPUT_LARGE_HEIGHT": "250px",
-    "OUTPUT_MEDIUM_HEIGHT": "200px",
-    "PLOT_MIN_WIDTH": "400px",
-    "PLOT_MIN_HEIGHT": "300px",
-    "PLOT_DEFAULT_WIDTH": "820px",
-    "PLOT_DEFAULT_HEIGHT": "620px",
-    "PLOT_CONTAINER_WIDTH": "800px",
-    "PLOT_CONTAINER_HEIGHT": "600px",
-    "RESIZE_HANDLE_SIZE": "15px",
-    "MARGIN_STANDARD": "10px",
-    "MARGIN_SMALL": "5px",
-    "BORDER_STANDARD": "1px solid #ccc",
-    "BORDER_LIGHT": "1px solid #eee",
-    "BORDER_DARK": "1px solid #ddd",
-    "PADDING_STANDARD": "10px",
-    "PADDING_LARGE": "15px",
-    "DPI_HIGH": 150,
-    "RESIZE_POLL_INTERVAL": 200,
-    "IFRAME_RESIZE_DELAY": 100,
-}
+# Re-exported: code written against auth_manager.LAYOUT / STRINGS keeps working.
+from hysprint_utils.ui_constants import LAYOUT, STRINGS  # noqa: F401
 
 
 # --- API Client for URL Construction ---
@@ -64,6 +15,9 @@ class APIClient:
         self.base_url = base_url
         self.api_endpoint = api_endpoint
         self.full_api_url = f"{base_url}{api_endpoint}"
+        # The GUI sits next to the API: "/nomad-oasis/api/v1" -> "/nomad-oasis/gui", and
+        # "/api/v1" (an Oasis served at the root) -> "/gui".
+        self.gui_url = f"{base_url}{api_endpoint.split('/api/')[0]}/gui"
 
     # Authentication endpoints
     def get_auth_token_url(self):
@@ -77,12 +31,12 @@ class APIClient:
     # Data entry URLs
     def get_entry_data_url(self, entry_id):
         """Get URL for entry data view"""
-        return f"{self.base_url}/nomad-oasis/gui/entry/id/{entry_id}/data/data"
+        return f"{self.gui_url}/entry/id/{entry_id}/data/data"
 
     def get_entry_image_preview_url(self, entry_id, image_index=0):
         """Get URL for entry image preview (for SEM images)"""
         return (
-            f"{self.base_url}/nomad-oasis/gui/entry/id/{entry_id}/data/data/"
+            f"{self.gui_url}/entry/id/{entry_id}/data/data/"
             f"images:{image_index}/image_preview/preview"
         )
 

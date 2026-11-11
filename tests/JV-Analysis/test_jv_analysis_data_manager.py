@@ -264,3 +264,30 @@ def test_filter_row_options_are_real_columns_and_filter(loaded_manager, source_f
         # only logged and silently keeps them all.
         filtered, omitted, _ = loaded_manager.apply_filters([(column, ">", "1e9")], verbose=False)
         assert len(filtered) == 0 and len(omitted) > 0, column
+
+
+def test_rows_matching_keeps_rows_whose_key_occurs_in_the_reference():
+    from data_manager import rows_matching
+
+    curves = pd.DataFrame(
+        {
+            "sample_id": ["a", "a", "b", "c"],
+            "cell": ["A", "A", "B", "A"],
+            "status": ["ok", None, None, "ok"],
+            "value": [1, 2, 3, 4],
+        }
+    )
+    jv = pd.DataFrame({"sample_id": ["a", "b"], "cell": ["A", "B"], "status": [None, None]})
+    assert rows_matching(curves, jv, ["sample_id", "cell"])["value"].tolist() == [1, 2, 3]
+    # a missing value matches a missing value, as the old tuple sets did for None
+    assert rows_matching(curves, jv, ["sample_id", "cell", "status"])["value"].tolist() == [2, 3]
+
+
+def test_rows_matching_without_a_key_column_matches_nothing():
+    from data_manager import rows_matching
+
+    curves = pd.DataFrame({"sample": ["a"], "cell": ["A"]})
+    jv = pd.DataFrame({"sample_id": ["a"], "cell": ["A"]})
+    result = rows_matching(curves, jv, ["sample_id", "cell"])
+    assert result.empty and list(result.columns) == ["sample", "cell"]
+    assert rows_matching(curves, jv.iloc[0:0], ["cell"]).empty
