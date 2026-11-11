@@ -48,13 +48,26 @@ def test_shared_install_runs_once_then_is_skipped(bs, monkeypatch):
     assert len(calls) == 1
 
 
-def test_shared_install_reruns_when_shared_changes(bs, monkeypatch, tmp_path):
+def test_shared_install_reruns_when_its_dependencies_change(bs, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(bs, "_pip_install", lambda target: calls.append(target) or (0, ""))
+    bs._install_shared()
+    (tmp_path / "shared" / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["requests"]\n', encoding="utf-8"
+    )
+    bs._install_shared()
+    assert len(calls) == 2
+
+
+def test_shared_install_is_skipped_after_a_source_edit_or_branch_switch(bs, monkeypatch, tmp_path):
+    """The kernel imports shared/ from sys.path, so only the dependencies need pip (N5)."""
     calls = []
     monkeypatch.setattr(bs, "_pip_install", lambda target: calls.append(target) or (0, ""))
     bs._install_shared()
     (tmp_path / "shared" / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    (tmp_path / "shared" / "new_module.py").write_text("y = 1\n", encoding="utf-8")
     bs._install_shared()
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 def test_failed_shared_install_writes_no_marker(bs, monkeypatch):

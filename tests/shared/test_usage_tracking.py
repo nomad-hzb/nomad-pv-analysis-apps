@@ -56,6 +56,17 @@ def test_button_usage_falls_back_to_environment_user(log_dir):
     assert _lines(log_dir / usage_tracking.BUTTON_LOG)[1].endswith(",alice,back_to_dashboard")
 
 
+def test_a_comma_or_quote_in_a_value_does_not_shift_the_columns(log_dir):
+    import csv
+
+    usage_tracking.log_button_usage('open_project:Slot-die coater, ML "v2"', user="bob, jr")
+    with (log_dir / usage_tracking.BUTTON_LOG).open(encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ["Date", "Time", "User", "Action"]
+    assert rows[1][2:] == ["bob, jr", 'open_project:Slot-die coater, ML "v2"']
+    assert len(rows[1]) == 4
+
+
 def test_old_log_next_to_the_module_is_moved_once(log_dir, tmp_path, monkeypatch):
     package_dir = tmp_path / "hysprint_utils"
     package_dir.mkdir()
