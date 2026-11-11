@@ -2434,6 +2434,27 @@ def test_create_whole_experiment_template_picker_applies_selected_batch(fresh_st
     assert progress_label.value == ""
 
 
+def test_replicate_shows_an_activity_bar_until_it_is_done(fresh_state):
+    cache = NomadSessionCache()
+    seen = []
+
+    with (
+        patch("data_manager.get_batch_ids", return_value=["B1"]),
+        patch("data_manager.get_ids_in_batch", return_value=["S1"]),
+        patch("data_manager.get_processing_steps", return_value=[SPIN_COATING_STEP]),
+    ):
+        picker = create_whole_experiment_template_picker(
+            fresh_state, "url", "token", cache, on_busy=lambda busy: seen.append(status.value)
+        )
+        _search_field, selector, load_button, status = picker.children[2].children
+        selector.value = ("B1",)
+        load_button.click()
+
+    # on_busy(True) runs inside the click, while the batch is fetched
+    assert "hysprint-activity" in seen[0] and "Batch B1" in seen[0]
+    assert "hysprint-activity" not in status.value and "Replicated" in status.value
+
+
 def test_create_whole_experiment_template_picker_shows_error_on_failure(fresh_state):
     cache = NomadSessionCache()
 
@@ -3370,12 +3391,17 @@ def _mock_response(json_data=None, raise_error=False):
     return response
 
 
+# Uploads go through api_calls.WRITE_SESSION (never retried), polls through api_calls.SESSION.
+_WRITE = "hysprint_utils.api_calls.WRITE_SESSION"
+_READ = "hysprint_utils.api_calls.SESSION"
+
+
 def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()) as mock_put,
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()) as mock_put,
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3395,10 +3421,10 @@ def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
 
 def test_upload_experiment_excel_triggers_process_action_after_put():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()) as mock_post,
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()) as mock_post,
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3419,9 +3445,9 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
         _mock_response({"data": {"process_running": False}}),
     ]
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get", side_effect=poll_responses) as mock_get,
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get", side_effect=poll_responses) as mock_get,
         patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
@@ -3436,11 +3462,9 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
 
 def test_upload_experiment_excel_raises_on_put_failure():
     with (
-        patch(
-            "hysprint_utils.api_calls.requests.put", return_value=_mock_response(raise_error=True)
-        ),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get"),
+        patch(f"{_WRITE}.put", return_value=_mock_response(raise_error=True)),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get"),
         patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(requests.HTTPError),
     ):
@@ -3454,12 +3478,10 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
     NOMAD version. Must not raise here (matches apps/File_Uploader/gui_components.py's
     proven _process_upload pattern) - the polling loop is the real source of truth."""
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response(raise_error=True)),
         patch(
-            "hysprint_utils.api_calls.requests.post", return_value=_mock_response(raise_error=True)
-        ),
-        patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ) as mock_get,
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3471,10 +3493,10 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
 
 def test_upload_experiment_excel_raises_timeout_if_never_finishes():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": True}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3645,14 +3667,16 @@ def test_create_finish_section_download_and_upload_reports_upload_failure(fresh_
     assert "failed" in status_output.value.lower()
 
 
-def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh_state):
+def test_create_finish_section_gates_download_behind_nudge_flow_when_switched_on(fresh_state):
     fresh_state.add_process("Evaporation")
     rebuild_field_specs(fresh_state)
     _fill_critical_fields(fresh_state)
     cache = NomadSessionCache()
 
     with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
-        section = create_finish_section(fresh_state, "url", "token", cache)
+        section = create_finish_section(
+            fresh_state, "url", "token", cache, nudge_before_finish=True
+        )
         (
             skip_checkbox,
             _caption,
@@ -3675,6 +3699,51 @@ def test_create_finish_section_gates_download_behind_nudge_flow_by_default(fresh
 
     assert "base64," in status_output.value
     assert nudge_area.children == ()
+
+
+def test_create_finish_section_acts_at_once_while_the_nudge_gate_is_off(fresh_state):
+    """Issue #258: 'Skip nudge review' starts ticked, so Finish acts at once."""
+    import gui_components
+
+    assert gui_components.NUDGE_BEFORE_FINISH is False
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
+    cache = NomadSessionCache()
+
+    with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
+        section = create_finish_section(fresh_state, "url", "token", cache)
+        skip_checkbox, caption, _dropdown, buttons_row, nudge_area, status_output, _js = (
+            section.children
+        )
+        assert skip_checkbox.value is True
+        assert skip_checkbox.layout.display != "none" and caption.layout.display != "none"
+        buttons_row.children[0].click()
+
+    assert nudge_area.children == ()
+    assert "base64," in status_output.value
+
+
+def test_create_finish_section_shows_an_activity_bar_while_uploading(fresh_state):
+    fresh_state.add_process("Evaporation")
+    rebuild_field_specs(fresh_state)
+    _fill_critical_fields(fresh_state)
+    cache = NomadSessionCache()
+    seen = []
+
+    with patch("data_manager.get_all_uploads", return_value=[{"upload_id": "UP1"}]):
+        section = create_finish_section(fresh_state, "url", "token", cache)
+        _skip, _caption, upload_dropdown, buttons_row, _nudge, status_output, _js = section.children
+        with patch(
+            "gui_components.upload_experiment_excel",
+            side_effect=lambda *a, **k: seen.append(status_output.value),
+        ):
+            upload_dropdown.value = "UP1"
+            buttons_row.children[1].click()
+
+    assert "hysprint-activity" in seen[0] and "waiting for NOMAD" in seen[0]
+    assert "hysprint-activity" not in status_output.value  # gone once the upload is done
+    assert "Uploaded" in status_output.value
 
 
 def test_create_finish_section_skip_checkbox_bypasses_nudge_flow(fresh_state):
@@ -4336,9 +4405,9 @@ def test_upload_reports_a_failed_processing_instead_of_success():
         }
     )
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get", return_value=failed),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get", return_value=failed),
         patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(RuntimeError, match="bad sheet"),
     ):

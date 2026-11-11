@@ -17,7 +17,7 @@ from pathlib import Path
 import ipywidgets as widgets
 import openpyxl
 import pandas as pd
-from data_manager import DataManager
+from data_manager import DataManager, rows_matching
 from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, PlotUI, SaveUI
 from IPython.display import Javascript, Markdown, clear_output, display
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -836,84 +836,25 @@ If you tested specific variables or conditions for each sample, please write the
                 )
             ErrorHandler.handle_plot_error(e, self.plot_ui.plotted_content)
 
-    def _create_matching_curves_from_filtered_jv(self, filtered_jv_data, original_curves_data):
-        """Create curves data that exactly matches filtered JV data using sample_id"""
-
-        if filtered_jv_data.empty:
-            return pd.DataFrame()
-
-        # Get unique sample_id + cell + direction + ilum combinations from filtered JV
-        filtered_combinations = set()
-        for _, row in filtered_jv_data.iterrows():
-            combination = (row["sample_id"], row["cell"], row["direction"], row["ilum"])
-            filtered_combinations.add(combination)
-
-        # Filter curves data to match exactly
-        def should_include_curve(curve_row):
-            if "sample_id" not in curve_row:
-                return False
-            combination = (
-                curve_row["sample_id"],
-                curve_row["cell"],
-                curve_row["direction"],
-                curve_row["ilum"],
-            )
-            return combination in filtered_combinations
-
-        matching_curves = original_curves_data[
-            original_curves_data.apply(should_include_curve, axis=1)
-        ].copy()
-
-        return matching_curves
-
     def _create_filtered_curves_data(self, filtered_jv_data, original_curves_data):
-        """Create curves data that matches filtered JV data with debugging"""
-
-        # Get sample-cell combinations from filtered JV data
-        filtered_combinations = set()
-        for _, row in filtered_jv_data.iterrows():
-            filtered_combinations.add((row["sample"], row["cell"]))
-
-        # Try exact matching first
-        def should_include_curve(row):
-            return (row["sample"], row["cell"]) in filtered_combinations
-
-        filtered_curves = original_curves_data[
-            original_curves_data.apply(should_include_curve, axis=1)
-        ].copy()
-
+        """Curves of the filtered JV rows, matched on sample and cell. If none match, on the
+        part of the sample name after its last "_" and cell, for tables that write the same
+        sample differently (e.g. "C-11" against "HZB_..._C-11"). Always a DataFrame."""
+        filtered_curves = rows_matching(original_curves_data, filtered_jv_data, ["sample", "cell"])
         logger.debug("DEBUG: Exact matching found %s curve records", len(filtered_curves))
+        if filtered_curves.empty and all(
+            "sample" in frame.columns for frame in (filtered_jv_data, original_curves_data)
+        ):
 
-        # If exact matching fails, try alternative sample name matching
-        if len(filtered_curves) == 0:
-            logger.debug("DEBUG: Trying alternative sample name matching...")
+            def with_short_name(frame):
+                return frame.assign(_short=frame["sample"].astype(str).str.split("_").str[-1])
 
-            # Extract clean sample names from both datasets for comparison
-            jv_clean_samples = set()
-            for _, row in filtered_jv_data.iterrows():
-                # Extract the core sample name (like C-11)
-                clean_name = row["sample"].split("_")[-1] if "_" in row["sample"] else row["sample"]
-                jv_clean_samples.add((clean_name, row["cell"]))
-
-            def should_include_curve_alt(row):
-                curve_clean = (
-                    row["sample"].split("_")[-1] if "_" in row["sample"] else row["sample"]
-                )
-                return (curve_clean, row["cell"]) in jv_clean_samples
-
-            filtered_curves = original_curves_data[
-                original_curves_data.apply(should_include_curve_alt, axis=1)
-            ].copy()
-
+            filtered_curves = rows_matching(
+                with_short_name(original_curves_data),
+                with_short_name(filtered_jv_data),
+                ["_short", "cell"],
+            ).drop(columns="_short")
             logger.debug("DEBUG: Alternative matching found %s curve records", len(filtered_curves))
-
-        # Always return a DataFrame, even if empty
-        if filtered_curves is None or len(filtered_curves) == 0:
-            logger.debug("DEBUG: No matching curves found, returning empty DataFrame")
-            return original_curves_data.iloc[
-                0:0
-            ].copy()  # Return empty DataFrame with same structure
-
         return filtered_curves
 
     def _on_save_plots(self, b):

@@ -8,6 +8,8 @@ import time
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 from hysprint_utils.config import ENTRY_TYPES
 
@@ -17,6 +19,42 @@ logger = logging.getLogger(__name__)
 # slow, so the read timeout is generous; it only exists so a dead server cannot hang an app.
 REQUEST_TIMEOUT = (10, 300)
 DEFAULT_PAGE_SIZE = 10000
+
+# Answers of an overloaded or restarting Oasis proxy that are worth one more try.
+TRANSIENT_STATUSES = (502, 503, 504)
+
+
+def _make_session(retry_transient):
+    """A requests.Session: one kept-alive connection per host instead of a new TLS handshake
+    per request (query_all pages, one /users lookup per author, upload polls).
+
+    With retry_transient, a 502/503/504 or a failed connect is tried again up to 3 times
+    (waits of about 1, 2 and 4 s), for GET and POST. A read timeout is not retried: the read
+    timeout is 300 s, so retrying it would hold an app for many minutes. After the last try
+    the response is returned as it is, so raise_for_status reports it as before."""
+    session = requests.Session()
+    if retry_transient:
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=0,
+            status=3,
+            backoff_factor=1.0,
+            status_forcelist=TRANSIENT_STATUSES,
+            allowed_methods=frozenset({"GET", "POST"}),
+            raise_on_status=False,
+            respect_retry_after_header=False,  # keeps the wait bounded
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+    return session
+
+
+# Reads, queries (POST to entries/query) and logins: safe to send again.
+SESSION = _make_session(retry_transient=True)
+# Uploads, processing requests and edits are never retried, so nothing is sent twice.
+WRITE_SESSION = _make_session(retry_transient=False)
 
 
 class EntryLookupError(LookupError, AssertionError):
@@ -50,7 +88,7 @@ def query_all(url, token, endpoint, query, timeout=REQUEST_TIMEOUT):
     data = []
     seen_cursors = set()
     for _ in range(MAX_PAGES):
-        response = requests.post(f"{url}/{endpoint}", headers=headers, json=query, timeout=timeout)
+        response = SESSION.post(f"{url}/{endpoint}", headers=headers, json=query, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
         data.extend(payload["data"])
@@ -80,7 +118,7 @@ def edit_entry(url, token, entry_id, changes):
     carries NOMAD's own detail/validation-error text, which callers should
     surface as-is rather than replacing with a generic message.
     """
-    response = requests.post(
+    response = WRITE_SESSION.post(
         f"{url}/entries/{entry_id}/edit",
         headers={"Authorization": f"Bearer {token}"},
         json={"changes": changes},
@@ -92,7 +130,7 @@ def edit_entry(url, token, entry_id, changes):
 
 # retreive information about all uploads of current user
 def get_all_uploads(url, token, number_of_uploads=20):
-    response = requests.get(
+    response = SESSION.get(
         f"{url}/uploads",
         headers={"Authorization": f"Bearer {token}"},
         params=dict(page_size=number_of_uploads, order_by="upload_create_time", order="desc"),
@@ -201,17 +239,48 @@ def get_template(url, token, upload_name, method):
     return data
 
 
-def get_token(url, name=None):
-    user = name if name is not None else input("Username")
-    print("Passwort: \n")
-    password = getpass.getpass()
+def _error_detail(response):
+    """NOMAD's own reason for a refused request ("detail"), else the start of the body."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else (response.text or "")[:200]
 
-    # Get a token from the api, login
-    response = requests.post(
-        f"{url}/auth/token", data=dict(username=user, password=password), timeout=REQUEST_TIMEOUT
+
+def password_login(url, username, password, timeout=REQUEST_TIMEOUT):
+    """A NOMAD access token for username and password: the one login every module uses.
+
+    POSTs to {url}/auth/token as form data (never in the URL, which would leak the password
+    into logs). Raises requests.HTTPError with NOMAD's reason (e.g. "Invalid credentials")
+    and the response attached when the login is refused, ValueError when the answer holds
+    no token."""
+    response = SESSION.post(
+        f"{url}/auth/token",
+        data={"username": username, "password": password},
+        timeout=timeout,
     )
-    response.raise_for_status()
-    return response.json()["access_token"]
+    if not response.ok:
+        raise requests.HTTPError(
+            f"NOMAD login failed ({response.status_code}): {_error_detail(response)}",
+            response=response,
+        )
+    token = (response.json() or {}).get("access_token")
+    if not token:
+        raise ValueError("Access token not found in response.")
+    return token
+
+
+def prompt_login(url, name=None, timeout=REQUEST_TIMEOUT):
+    """Ask for the username (unless name is given) and the password, then password_login."""
+    user = name if name is not None else input("Username: ")
+    return password_login(url, user, getpass.getpass("Password: "), timeout=timeout)
+
+
+def get_token(url, name=None):
+    """Interactive login (prompts for the password). Kept for old notebooks; apps get their
+    token from access_token.get_token, which tries the environment and token file first."""
+    return prompt_login(url, name)
 
 
 def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
@@ -225,32 +294,56 @@ def get_batch_ids(url, token, batch_type=ENTRY_TYPES["batch"]):
     return [d["archive"]["data"]["lab_id"] for d in data if "lab_id" in d["archive"]["data"]]
 
 
+USER_LOOKUP_CHUNK = 50  # user ids per /users request; keeps the URL short
+
+
+def _user_names_from(response_data, wanted):
+    """{user_id: display name} for the users in a /users answer that were asked for."""
+    names = {}
+    for user in response_data or []:
+        user_id = user.get("user_id")
+        name = user.get("name") or user.get("username")
+        if user_id in wanted and name:
+            names[user_id] = name
+    return names
+
+
 def _resolve_user_names(url, token, user_ids):
     """Resolve raw NOMAD user_ids to display names via the /users endpoint - the same
     one /users/me (see auth_manager.APIClient.get_user_verification_url) uses for the
-    current user, just parameterized by id instead of "me". Best-effort: an id that
-    can't be resolved is simply left out of the returned dict rather than raising, so
-    one bad/renamed id doesn't break the whole batch list.
+    current user, parameterized by id instead of "me". It takes several user_id values at
+    once, so the ids go in chunks of USER_LOOKUP_CHUNK instead of one request each.
+    Best-effort: an id that can't be resolved is simply left out of the returned dict
+    rather than raising; if a whole chunk fails, its ids are tried one by one, so one
+    bad/renamed id doesn't break the whole batch list.
     """
     headers = {"Authorization": f"Bearer {token}"}
+    ids = list(dict.fromkeys(user_ids))
     names = {}
-    for user_id in user_ids:
+
+    def lookup(chunk):
+        response = SESSION.get(
+            f"{url}/users",
+            headers=headers,
+            params={"user_id": chunk},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return _user_names_from(response.json().get("data"), set(chunk))
+
+    for start in range(0, len(ids), USER_LOOKUP_CHUNK):
+        chunk = ids[start : start + USER_LOOKUP_CHUNK]
         try:
-            response = requests.get(
-                f"{url}/users",
-                headers=headers,
-                params={"user_id": user_id},
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-            matches = response.json().get("data") or []
-            if matches:
-                user = matches[0]
-                name = user.get("name") or user.get("username")
-                if name:
-                    names[user_id] = name
-        except requests.RequestException:
+            names.update(lookup(chunk))
             continue
+        except requests.RequestException:
+            if len(chunk) == 1:
+                continue
+        for user_id in chunk:
+            try:
+                names.update(lookup([user_id]))
+            except requests.RequestException:
+                continue
     return names
 
 
@@ -434,7 +527,7 @@ def upload_raw_file_and_wait(
     is tolerated to fail, the poll decides the outcome. on_poll(waited, max_wait), if given,
     is called after each poll (for a progress bar)."""
     headers = {"Authorization": f"Bearer {token}"}
-    put_response = requests.put(
+    put_response = WRITE_SESSION.put(
         f"{url}/uploads/{upload_id}/raw/",
         data={"wait_for_processing": False},
         headers=headers,
@@ -442,7 +535,7 @@ def upload_raw_file_and_wait(
         timeout=REQUEST_TIMEOUT,
     )
     put_response.raise_for_status()
-    requests.post(
+    WRITE_SESSION.post(
         f"{url}/uploads/{upload_id}/action/process", headers=headers, timeout=REQUEST_TIMEOUT
     )
 
@@ -450,7 +543,7 @@ def upload_raw_file_and_wait(
     while waited < max_wait:
         time.sleep(poll_interval)
         waited += poll_interval
-        response = requests.get(
+        response = SESSION.get(
             f"{url}/uploads/{upload_id}", headers=headers, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
@@ -469,7 +562,7 @@ def download_raw_file(url, token, upload_id, path):
     """Bytes of one raw file of an upload. `path` is relative to the upload's raw folder, as
     NOMAD stores it in file references such as an SEM entry's data.detector_data. Raises
     requests.HTTPError when the file cannot be fetched."""
-    response = requests.get(
+    response = SESSION.get(
         f"{url}/uploads/{upload_id}/raw/{quote(path, safe='/')}",
         headers={"Authorization": f"Bearer {token}"},
         timeout=REQUEST_TIMEOUT,
@@ -493,6 +586,7 @@ def get_sample_entry_links(url, token, sample_ids):
     }
     data = query_all(url, token, "entries/query", query)
 
+    wanted = set(sample_ids)  # one lookup per lab_id instead of a scan of the list
     result = {}
     for entry in data:
         entry_id = entry.get("entry_id")
@@ -502,7 +596,7 @@ def get_sample_entry_links(url, token, sample_ids):
             continue
         gui_url = f"{base_url}/gui/user/uploads/upload/id/{upload_id}/entry/id/{entry_id}"
         for lab_id in lab_ids:
-            if lab_id in sample_ids:
+            if lab_id in wanted:
                 result[lab_id] = gui_url
 
     logger.debug(

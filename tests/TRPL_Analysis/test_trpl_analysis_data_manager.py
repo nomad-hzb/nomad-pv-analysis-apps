@@ -409,7 +409,7 @@ def test_upload_fallback_reads_every_page(monkeypatch):
 
         return _Resp()
 
-    monkeypatch.setattr("hysprint_utils.api_calls.requests.post", fake_post)
+    monkeypatch.setattr("hysprint_utils.api_calls.SESSION.post", fake_post)
     dm = TRPLDataManager(url="http://mock", token="mock-token")
 
     res = dm._fetch_trpl_by_upload(["B1"])

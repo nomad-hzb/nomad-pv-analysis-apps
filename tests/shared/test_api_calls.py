@@ -68,7 +68,7 @@ def test_get_all_measurements_except_jv_fans_out_and_excludes_jv(monkeypatch):
     def fake_post(*args, **kwargs):
         return _Resp(next(responses))
 
-    monkeypatch.setattr("hysprint_utils.api_calls.requests.post", fake_post)
+    monkeypatch.setattr("hysprint_utils.api_calls.SESSION.post", fake_post)
 
     res = get_all_measurements_except_JV("https://example.test/api/v1", "token", ["S1", "S2"])
 
@@ -110,7 +110,7 @@ def test_query_all_follows_every_page(monkeypatch):
     from hysprint_utils import api_calls
 
     server = _PagedServer([{"i": n} for n in range(5)])
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     query = {"query": {"x": 1}}
     data = api_calls.query_all("https://e.test/api", "tok", "entries/query", query)
     assert [d["i"] for d in data] == [0, 1, 2, 3, 4]
@@ -122,7 +122,7 @@ def test_query_all_sets_default_page_size_and_timeout(monkeypatch):
     from hysprint_utils import api_calls
 
     server = _PagedServer([{"i": 1}], page_size=10)
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     sent = server.requests[0]
     assert sent["json"]["pagination"]["page_size"] == api_calls.DEFAULT_PAGE_SIZE
@@ -139,7 +139,7 @@ def test_query_all_stops_on_repeated_cursor(monkeypatch):
         def json(self):
             return {"data": [{"i": 1}], "pagination": {"next_page_after_value": "same"}}
 
-    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Loop())
+    monkeypatch.setattr(api_calls.SESSION, "post", lambda *a, **k: _Loop())
     data = api_calls.query_all("https://e.test/api", "tok", "entries/query", {"query": {}})
     assert len(data) == 2  # first page, then the repeated cursor is served once and stopped
 
@@ -160,7 +160,7 @@ def test_get_all_mppt_returns_entries_beyond_the_first_page(monkeypatch):
         endpoint = "entries/archive/query" if url.endswith("archive/query") else "entries/query"
         return responses[endpoint].post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     res = api_calls.get_all_mppt("https://e.test/api", "tok", ["S0"])
     assert set(res) == {f"S{n}" for n in range(5)}
 
@@ -178,7 +178,7 @@ def test_get_all_batches_wth_data_raises_on_http_error(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr(api_calls.requests, "post", lambda *a, **k: _Bad())
+    monkeypatch.setattr(api_calls.SESSION, "post", lambda *a, **k: _Bad())
     with pytest.raises(requests.HTTPError):
         api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T")
 
@@ -201,7 +201,7 @@ def test_get_all_batches_wth_data_reads_uploads_from_the_metadata_endpoint(monke
         endpoints.append((endpoint, kwargs["json"]["query"]))
         return responses[endpoint].post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     res = api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "HySprint_JVmeasurement")
     assert sorted(res) == ["B0", "B1", "B2"]
     assert endpoints[0] == ("entries/query", {"entry_type": "HySprint_JVmeasurement"})
@@ -218,7 +218,7 @@ def test_get_all_batches_wth_data_without_uploads_asks_nothing_more(monkeypatch)
         calls.append(url)
         return _PagedServer([]).post(url, **kwargs)
 
-    monkeypatch.setattr(api_calls.requests, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
     assert api_calls.get_all_batches_wth_data("https://e.test/api", "tok", "T") == []
     assert len(calls) == 1
 
@@ -228,7 +228,7 @@ def test_get_ids_in_batch_warns_instead_of_asserting(monkeypatch, caplog):
 
     batch = {"archive": {"data": {"entities": [{"lab_id": "S1"}]}}}
     server = _PagedServer([batch], page_size=10)
-    monkeypatch.setattr(api_calls.requests, "post", server.post)
+    monkeypatch.setattr(api_calls.SESSION, "post", server.post)
     with caplog.at_level("WARNING"):
         ids = api_calls.get_ids_in_batch("https://e.test/api", "tok", ["B1", "B2"])
     assert ids == ["S1"]
@@ -340,7 +340,7 @@ def test_download_raw_file_quotes_path_and_returns_bytes(monkeypatch):
         calls.append((url, headers, timeout))
         return _FakeResponse(content=b"tiff-bytes")
 
-    monkeypatch.setattr(api_calls.requests, "get", fake_get)
+    monkeypatch.setattr(api_calls.SESSION, "get", fake_get)
     data = api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "sem data/VP 1.tif")
     assert data == b"tiff-bytes"
     url, headers, timeout = calls[0]
@@ -355,7 +355,7 @@ def test_download_raw_file_raises_on_http_error(monkeypatch):
 
     from hysprint_utils import api_calls
 
-    monkeypatch.setattr(api_calls.requests, "get", lambda *a, **k: _FakeResponse(status=404))
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _FakeResponse(status=404))
     with pytest.raises(requests.HTTPError):
         api_calls.download_raw_file("https://e.test/api", "tok", "UP1", "missing.tif")
 
@@ -450,3 +450,94 @@ def test_mppt_archives_keep_small_pages_and_processes_ask_only_for_data(monkeypa
     api_calls.get_processing_steps("u", "t", ["S1"])
     assert calls[1][1]["pagination"]["page_size"] == api_calls.MPPT_ARCHIVE_PAGE_SIZE == 100
     assert calls[3][1]["required"] == {"data": "*"}
+
+
+def _retry_of(session):
+    """The urllib3 Retry of the adapter that serves an https URL."""
+    return session.get_adapter("https://nomad.example/api/v1").max_retries
+
+
+def test_read_session_retries_transient_errors_on_get_and_post_only():
+    from hysprint_utils import api_calls
+
+    retry = _retry_of(api_calls.SESSION)
+    assert set(retry.status_forcelist) == {502, 503, 504}
+    assert {"GET", "POST"} <= set(retry.allowed_methods)
+    assert "PUT" not in retry.allowed_methods
+    assert retry.read == 0  # a 300 s read timeout is never repeated
+    assert retry.total == 3 and not retry.raise_on_status  # last answer reaches raise_for_status
+
+
+def test_write_session_never_resends_a_request():
+    from hysprint_utils import api_calls
+
+    retry = _retry_of(api_calls.WRITE_SESSION)
+    assert retry.total == 0 or not retry.status_forcelist
+
+
+def test_logins_and_lookups_share_the_read_session():
+    from hysprint_utils import access_token, api_calls, auth_manager
+
+    assert access_token.prompt_login is api_calls.prompt_login  # whose login uses SESSION
+    assert auth_manager.SESSION is api_calls.SESSION
+
+
+class _UsersResponse:
+    def __init__(self, data, failed):
+        self._data, self._failed = data, failed
+
+    def raise_for_status(self):
+        if self._failed:
+            import requests
+
+            raise requests.HTTPError("500 error")
+
+    def json(self):
+        return {"data": self._data}
+
+
+class _UsersServer:
+    """Fake /users: answers every requested id it knows; ids in `broken` fail the request."""
+
+    def __init__(self, known, broken=()):
+        self.known, self.broken, self.calls = known, set(broken), []
+
+    def get(self, url, params=None, **kwargs):
+        ids = list(params["user_id"])
+        self.calls.append(ids)
+        data = [{"user_id": i, "name": self.known[i]} for i in ids if i in self.known]
+        return _UsersResponse(data, failed=bool(self.broken & set(ids)))
+
+
+def test_user_names_are_looked_up_in_chunks_not_one_request_each(monkeypatch):
+    from hysprint_utils import api_calls
+
+    known = {f"u{i}": f"Name {i}" for i in range(120)}
+    server = _UsersServer(known)
+    monkeypatch.setattr(api_calls.SESSION, "get", server.get)
+    names = api_calls._resolve_user_names("https://e.test/api/v1", "tok", list(known) + ["gone"])
+    assert names == known  # an unknown id is just left out
+    assert [len(c) for c in server.calls] == [50, 50, 21]
+
+
+def test_a_failing_chunk_falls_back_to_one_request_per_id(monkeypatch):
+    from hysprint_utils import api_calls
+
+    server = _UsersServer({"a": "A", "b": "B", "bad": "X"}, broken={"bad"})
+    monkeypatch.setattr(api_calls.SESSION, "get", server.get)
+    names = api_calls._resolve_user_names("https://e.test/api/v1", "tok", ["a", "bad", "b"])
+    assert names == {"a": "A", "b": "B"}
+    assert server.calls == [["a", "bad", "b"], ["a"], ["bad"], ["b"]]
+
+
+def test_sample_entry_links_only_for_the_requested_samples(monkeypatch):
+    from hysprint_utils import api_calls
+
+    entries = [
+        {"entry_id": "e1", "upload_id": "u1", "results": {"eln": {"lab_ids": ["S1", "other"]}}},
+        {"entry_id": "e2", "upload_id": "u2", "results": {"eln": {"lab_ids": ["S2"]}}},
+    ]
+    monkeypatch.setattr(api_calls, "query_all", lambda *a, **k: entries)
+    links = api_calls.get_sample_entry_links("https://o.test/nomad-oasis/api/v1", "t", ["S1", "S2"])
+    assert set(links) == {"S1", "S2"}
+    assert links["S2"].endswith("/upload/id/u2/entry/id/e2")

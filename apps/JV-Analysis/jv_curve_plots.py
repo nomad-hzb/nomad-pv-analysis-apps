@@ -7,6 +7,7 @@ import logging
 
 import pandas as pd
 import plotly.graph_objects as go
+from data_manager import CURVE_KEY_COLUMNS, rows_matching
 from plotly.subplots import make_subplots
 
 logger = logging.getLogger(__name__)
@@ -20,142 +21,22 @@ class JVCurvePlotsMixin:
         if jv_data.empty:
             return curves_data.iloc[0:0].copy()  # Return empty DataFrame with same structure
 
-        # Check if status field exists in both datasets
-        has_status_jv = "status" in jv_data.columns
-        has_status_curves = "status" in curves_data.columns
-
-        # Use sample_id for precise matching if available
         if "sample_id" in jv_data.columns and "sample_id" in curves_data.columns:
-            logger.debug("  Using sample_id for precise matching")
-
-            # Create set of exact measurement combinations from JV data
-            jv_combinations = set()
-            duplicate_combinations = []
-
-            for _, row in jv_data.iterrows():
-                if has_status_jv and has_status_curves:
-                    # Use 5-field matching including status
-                    combination = (
-                        row["sample_id"],
-                        row["cell"],
-                        row["direction"],
-                        row["ilum"],
-                        row["status"],
-                    )
-                else:
-                    # Use 4-field matching without status
-                    combination = (row["sample_id"], row["cell"], row["direction"], row["ilum"])
-
-                if combination in jv_combinations:
-                    duplicate_combinations.append(combination)
-                jv_combinations.add(combination)
-
-            logger.debug("  JV combinations to match: %s", len(jv_combinations))
-            logger.debug("  Total JV records: %s", len(jv_data))
-            logger.debug("  Duplicate combinations found: %s", len(duplicate_combinations))
-
-            if len(duplicate_combinations) > 0:
-                logger.debug("  Example duplicates: %s", duplicate_combinations[:3])
-                # Show what makes these records different
-                example_dup = duplicate_combinations[0] if duplicate_combinations else None
-                if example_dup:
-                    if has_status_jv and has_status_curves:
-                        sample_id, cell, direction, ilum, status = example_dup
-                        matching_records = jv_data[
-                            (jv_data["sample_id"] == sample_id)
-                            & (jv_data["cell"] == cell)
-                            & (jv_data["direction"] == direction)
-                            & (jv_data["ilum"] == ilum)
-                            & (jv_data["status"] == status)
-                        ]
-                    else:
-                        sample_id, cell, direction, ilum = example_dup
-                        matching_records = jv_data[
-                            (jv_data["sample_id"] == sample_id)
-                            & (jv_data["cell"] == cell)
-                            & (jv_data["direction"] == direction)
-                            & (jv_data["ilum"] == ilum)
-                        ]
-                    logger.debug("  Records with same combination:")
-                    for _, record in matching_records.iterrows():
-                        logger.debug(
-                            "    PCE: %.2f%%, Status: %s",
-                            record["PCE(%)"],
-                            record.get("status", "N/A"),
-                        )
-
-            # Filter curves using exact matching
-            def should_include_curve(curve_row):
-                if has_status_jv and has_status_curves:
-                    combination = (
-                        curve_row["sample_id"],
-                        curve_row["cell"],
-                        curve_row["direction"],
-                        curve_row["ilum"],
-                        curve_row["status"],
-                    )
-                else:
-                    combination = (
-                        curve_row["sample_id"],
-                        curve_row["cell"],
-                        curve_row["direction"],
-                        curve_row["ilum"],
-                    )
-                return combination in jv_combinations
-
-            matching_curves = curves_data[curves_data.apply(should_include_curve, axis=1)].copy()
-
+            columns = list(CURVE_KEY_COLUMNS)
+            if "status" in jv_data.columns and "status" in curves_data.columns:
+                columns.append("status")
         else:
             # Fallback to sample name matching
-            logger.debug("  Using sample name matching (fallback)")
+            columns = ["sample", "cell", "direction", "ilum"]
+        matching_curves = rows_matching(curves_data, jv_data, columns)
 
-            jv_combinations = set()
-            for _, row in jv_data.iterrows():
-                combination = (row["sample"], row["cell"], row["direction"], row["ilum"])
-                jv_combinations.add(combination)
-
-            def should_include_curve(curve_row):
-                combination = (
-                    curve_row["sample"],
-                    curve_row["cell"],
-                    curve_row["direction"],
-                    curve_row["ilum"],
-                )
-                return combination in jv_combinations
-
-            matching_curves = curves_data[curves_data.apply(should_include_curve, axis=1)].copy()
-
-        logger.debug("  Matching curve records found: %s", len(matching_curves))
         logger.debug(
-            "  Expected ratio curves/JV: %.1fx (should be ~2x)",
-            len(matching_curves) / len(jv_data) if jv_data is not None and len(jv_data) > 0 else 0,
+            "  Matched %s curve records on %s for %s JV records (%s duplicate keys)",
+            len(matching_curves),
+            columns,
+            len(jv_data),
+            int(jv_data.duplicated(columns).sum()) if set(columns) <= set(jv_data.columns) else 0,
         )
-
-        # Additional verification: check if we're getting the right samples
-        if not matching_curves.empty:
-            unique_curve_devices = set()
-            for _, row in matching_curves.iterrows():
-                device = f"{row['sample']}_{row['cell']}"
-                unique_curve_devices.add(device)
-
-            unique_jv_devices = set()
-            for _, row in jv_data.iterrows():
-                device = f"{row['sample']}_{row['cell']}"
-                unique_jv_devices.add(device)
-
-            logger.debug("  Unique devices in curves: %s", len(unique_curve_devices))
-            logger.debug("  Unique devices in JV: %s", len(unique_jv_devices))
-            logger.debug(
-                "  Device overlap: %s", len(unique_curve_devices.intersection(unique_jv_devices))
-            )
-
-            # Show some examples to verify correctness
-            if len(unique_curve_devices) > 0:
-                curve_examples = list(unique_curve_devices)[:3]
-                jv_examples = list(unique_jv_devices)[:3]
-                logger.debug("  Curve device examples: %s", curve_examples)
-                logger.debug("  JV device examples: %s", jv_examples)
-
         return matching_curves
 
     def create_jv_best_device_plot(

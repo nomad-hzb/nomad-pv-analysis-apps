@@ -80,6 +80,11 @@ chooses the colouring and *Solutes* filters which solutes are shown (Ctrl or Cmd
 
 ## Known limits
 
+- The 3D plots (*3D Solvent Space*, the *Blend Optimiser* result, *Inks* and *Perovskite*) need
+  WebGL in the browser. If a plot says "WebGL is not supported", turn on hardware acceleration
+  (in Chrome: *Use graphics acceleration when available*; in Firefox: *Use recommended performance
+  settings* or *Use hardware acceleration when available*) and reload, or use another browser.
+  The *2D Properties* and *Mixture Calculator* tabs work without it.
 - The data are what the two files contain; add or correct values in the files themselves.
 - The Hansen parameters are tabulated values for pure substances; the blend values are linear
   averages by volume fraction, which is the usual approximation.

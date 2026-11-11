@@ -114,6 +114,16 @@ def test_seeded_patterns_are_reproducible_and_do_not_touch_the_global_rng():
     assert np.random.random() == before  # the global state was not reseeded or consumed
 
 
+def test_void_and_cluster_is_seeded_and_leaves_the_global_rng_alone():
+    np.random.seed(1234)
+    before = np.random.random()
+    np.random.seed(1234)
+    a = utils.void_and_cluster((40, 40), 30, seed=5)
+    b = utils.void_and_cluster((40, 40), 30, seed=5)
+    assert np.array_equal(a, b)
+    assert np.random.random() == before  # the global state was not consumed
+
+
 def test_poisson_points_keep_their_minimum_distance_at_low_density():
     mask = utils.poisson_disk_sampling((120, 120), 2, seed=3)
     ys, xs = np.nonzero(mask)

@@ -40,6 +40,14 @@ from excel_export import (
 # ---------------------------------------------------------------------------
 
 
+def _also_on_shared_session(mocker, post_mock):
+    """The shared query_all posts through hysprint_utils.api_calls.SESSION, not requests.post;
+    send both to the same mock so one side_effect sequence covers every call."""
+    from hysprint_utils import api_calls
+
+    mocker.patch.object(api_calls.SESSION, "post", new=post_mock)
+
+
 def test_flatten_entry_nested_dict():
     flat = flatten_entry({"annealing": {"temperature": 120, "time": 30}})
     assert flat == {"annealing.temperature": 120, "annealing.time": 30}
@@ -269,6 +277,7 @@ def test_fetch_process_entries_keeps_full_samples_list_and_filters_unpositioned(
     process_response.raise_for_status.return_value = None
 
     mock_post = mocker.patch("requests.post", side_effect=[entry_id_response, process_response])
+    _also_on_shared_session(mocker, mock_post)
 
     entries = fetch_process_entries("http://x", "tok", ["S1", "S2", "S3"])
 
@@ -303,7 +312,8 @@ def test_discover_entry_types_excludes_structural_types(mocker):
     }
     aggregation_response.raise_for_status.return_value = None
 
-    mocker.patch("requests.post", side_effect=[entry_id_response, aggregation_response])
+    post = mocker.patch("requests.post", side_effect=[entry_id_response, aggregation_response])
+    _also_on_shared_session(mocker, post)
 
     result = discover_entry_types("http://x", "tok", ["S1"])
 
@@ -314,7 +324,8 @@ def test_discover_entry_types_no_entries_returns_empty(mocker):
     entry_id_response = mocker.Mock()
     entry_id_response.json.return_value = {"data": []}
     entry_id_response.raise_for_status.return_value = None
-    mocker.patch("requests.post", return_value=entry_id_response)
+    post = mocker.patch("requests.post", return_value=entry_id_response)
+    _also_on_shared_session(mocker, post)
 
     assert discover_entry_types("http://x", "tok", ["S1"]) == []
 
@@ -1075,7 +1086,9 @@ def test_a_process_returned_by_two_query_chunks_is_counted_once(mocker):
         }
         return response
 
-    mocker.patch("requests.post", side_effect=[sample_entries, process_page(), process_page()])
+    pages = [sample_entries, process_page(), process_page()]
+    post = mocker.patch("requests.post", side_effect=pages)
+    _also_on_shared_session(mocker, post)
     entries = fetch_process_entries("http://x", "tok", ["S1"])
     assert len(entries) == 1
 
@@ -1085,6 +1098,7 @@ def test_requests_have_a_timeout(mocker):
     response.raise_for_status.return_value = None
     response.json.return_value = {"data": []}
     post = mocker.patch("requests.post", return_value=response)
+    _also_on_shared_session(mocker, post)
     fetch_process_entries("http://x", "tok", ["S1"])
     assert post.call_args.kwargs.get("timeout")
 
@@ -1156,6 +1170,7 @@ def test_process_entries_beyond_the_first_result_page_are_read(mocker):
             page([process("p2", 2)]),
         ],
     )
+    _also_on_shared_session(mocker, post)
     entries = fetch_process_entries("http://x", "tok", ["S1"])
     assert [entry_type for _data, entry_type in entries] == ["T1", "T2"]
     process_query = post.call_args_list[2].kwargs["json"]
