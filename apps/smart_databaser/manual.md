@@ -32,8 +32,10 @@ setup is applied when the page opens.
 Search and select a **past batch** and click *Replicate Experiment*: its process steps **replace**
 your current process sequence and are filled in with its values (if a value differed between that
 batch's samples, the first sample's value is used). This can take a while for batches with many
-steps: until everything is filled in, a *Loading the template batch...* line stands in for the
-process sequence and the varying fields, which then appear together. Everything stays editable
+steps: a moving bar under the button shows the app is working (the counter next to it says how
+many processes are filled in so far), and until everything is filled in, a *Loading the template
+batch...* line stands in for the process sequence and the varying fields, which then appear
+together. *Adopt from template batch* shows the same moving bar. Everything stays editable
 afterwards, and picking another batch replaces the sequence again.
 The same batch is the source for the *Adopt from template batch* button of a single process (see
 below).
@@ -92,13 +94,13 @@ filled, with an encouraging message.
 Choose the *Target upload* (your own uploads are listed) and then one of:
 - *Download only*: the Excel file is downloaded;
 - *Upload only*: the file is put into the chosen upload and NOMAD processes it (the app waits for
-  the result and reports a failure);
+  the result, up to 2 minutes, with a moving bar, and reports a failure);
 - *Download + Upload*: both.
 
 Before any of these, the *Batch* and *Project_Name* fields must be filled in: without them the file's
-Nomad IDs would be wrong, so all three buttons refuse, with a message. After that the nudge review
-opens first and the action runs when you click *Continue with ...* (the checkbox *Skip nudge review*
-is for testing only). The file is named
+Nomad IDs would be wrong, so all three buttons refuse, with a message. The action then runs at
+once, because the checkbox *Skip nudge review* is ticked by default; untick it to have the nudge
+review open first, with the action running when you click *Continue with ...*. The file is named
 `<date>_<time>_<Project_Name>_<Batch>_experiment_file.xlsx`; the ending `experiment_file.xlsx` is
 what NOMAD's parser recognises, and the time and names keep two experiments of one day from
 replacing each other in the same upload. If the automatic download does not start (a download

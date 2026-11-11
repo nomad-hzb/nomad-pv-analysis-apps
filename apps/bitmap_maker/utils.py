@@ -61,10 +61,11 @@ def droplet_position_optimization(n, k):
     if np.max(min_dist[worst_point, np.arange(points)]) > 1:
         best_option_index = np.argmax(min_dist[worst_point, np.arange(points)])
     else:
+        # Of the options whose closest pair is equally bad, take the one with the fewest
+        # pairs at that worst distance (a new array: min_dist itself stays unchanged).
         worst_min_dist = np.min(min_dist, axis=0)
-        min_dist_copy = min_dist
-        min_dist_copy[np.where(min_dist != worst_min_dist)] = 0
-        best_option_index = np.argmin(np.sum(min_dist_copy, axis=0))
+        at_worst = np.where(min_dist == worst_min_dist, min_dist, 0)
+        best_option_index = np.argmin(np.sum(at_worst, axis=0))
     return x_base_pos[best_option_index], y_base_pos[best_option_index]
 
 
@@ -308,17 +309,18 @@ def floyd_steinberg_dither(shape, black_percentage):
     return image < 0.5
 
 
-def void_and_cluster(shape, black_percentage):
+def void_and_cluster(shape, black_percentage, seed=None):
     """
     Void-and-cluster algorithm for homogeneous distribution
-    Iteratively fills voids and removes clusters
+    Iteratively fills voids and removes clusters. seed makes the start pattern reproducible;
+    like the other patterns it never touches numpy's global random state.
     """
     rows, cols = shape
     total_pixels = rows * cols
-    n_black = int(total_pixels * black_percentage / 100.0)  # noqa: F841
+    rng = np.random.default_rng(seed)
 
     # Start with random distribution
-    pattern = np.random.random(shape) < (black_percentage / 100.0)
+    pattern = rng.random(shape) < (black_percentage / 100.0)
 
     # Create Gaussian filter for detecting voids/clusters
     def gaussian_weights(size=5, sigma=1.5):
