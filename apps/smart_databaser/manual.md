@@ -99,8 +99,8 @@ Choose the *Target upload* (your own uploads are listed) and then one of:
 
 Before any of these, the *Batch* and *Project_Name* fields must be filled in: without them the file's
 Nomad IDs would be wrong, so all three buttons refuse, with a message. The action then runs at
-once: the nudge review no longer opens first (use *Start Nudge Review* above to check the missing
-fields before finishing). The file is named
+once, because the checkbox *Skip nudge review* is ticked by default; untick it to have the nudge
+review open first, with the action running when you click *Continue with ...*. The file is named
 `<date>_<time>_<Project_Name>_<Batch>_experiment_file.xlsx`; the ending `experiment_file.xlsx` is
 what NOMAD's parser recognises, and the time and names keep two experiments of one day from
 replacing each other in the same upload. If the automatic download does not start (a download

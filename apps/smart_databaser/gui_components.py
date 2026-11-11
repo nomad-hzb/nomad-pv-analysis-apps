@@ -63,8 +63,9 @@ from IPython.display import Javascript, display
 
 logger = logging.getLogger(__name__)
 
-# Whether the Finish buttons open the nudge review (missing/outlier fields) before they act.
-# Off for now (issue #258); set True to make the review the step before every Finish action.
+# Default of the Finish section's "Skip nudge review" checkbox: False means it starts ticked, so
+# the Finish buttons act at once instead of opening the "Missing field" questionnaire first
+# (issue #258). Unticking the box brings the questionnaire back for that session.
 NUDGE_BEFORE_FINISH = False
 
 
@@ -318,10 +319,9 @@ def create_finish_section(
     With nudge_before_finish (default NUDGE_BEFORE_FINISH, currently off, issue #258),
     clicking any of the three finish buttons opens the nudge review flow first and the
     action itself only runs once the user clicks 'Continue' beneath it - the eventual
-    intent is that nudge review is mandatory before finishing. The 'Skip nudge review'
-    checkbox (unchecked then) is a testing-only escape hatch back to the immediate
-    behavior. With the gate off, the checkbox is checked and hidden, and the actions run
-    at once; the optional 'Start Nudge Review' button still opens the flow.
+    intent is that nudge review is mandatory before finishing. The visible 'Skip nudge
+    review' checkbox starts as `not nudge_before_finish` (ticked for now), so the actions
+    run at once unless the user unticks it.
 
     Upload shows a moving activity bar (activity_html) until NOMAD has processed the file.
 
@@ -354,18 +354,14 @@ def create_finish_section(
     )
 
     skip_nudge_checkbox = widgets.Checkbox(
-        value=not nudge_before_finish, indent=False, description="Skip nudge review (testing only)"
+        value=not nudge_before_finish, indent=False, description="Skip nudge review"
     )
     skip_nudge_caption = widgets.HTML(
         value=(
-            "<i style='color:#7f8c8d; font-size:11px;'>By default you'll be guided "
-            "through any missing/outlier fields before finishing. Check this to skip "
-            "straight to Download/Upload while testing.</i>"
+            "<i style='color:#7f8c8d; font-size:11px;'>Untick this to be guided "
+            "through any missing/outlier fields before Download/Upload.</i>"
         )
     )
-    if not nudge_before_finish:  # checked and hidden while the gate is switched off
-        skip_nudge_checkbox.layout.display = "none"
-        skip_nudge_caption.layout.display = "none"
 
     status_output = widgets.HTML(value="")
     nudge_area = widgets.VBox([])

@@ -3701,7 +3701,7 @@ def test_create_finish_section_gates_download_behind_nudge_flow_when_switched_on
 
 
 def test_create_finish_section_acts_at_once_while_the_nudge_gate_is_off(fresh_state):
-    """Issue #258: no nudge review before Finish for now; the skip checkbox is hidden."""
+    """Issue #258: 'Skip nudge review' starts ticked, so Finish acts at once."""
     import gui_components
 
     assert gui_components.NUDGE_BEFORE_FINISH is False
@@ -3716,7 +3716,7 @@ def test_create_finish_section_acts_at_once_while_the_nudge_gate_is_off(fresh_st
             section.children
         )
         assert skip_checkbox.value is True
-        assert skip_checkbox.layout.display == "none" and caption.layout.display == "none"
+        assert skip_checkbox.layout.display != "none" and caption.layout.display != "none"
         buttons_row.children[0].click()
 
     assert nudge_area.children == ()
