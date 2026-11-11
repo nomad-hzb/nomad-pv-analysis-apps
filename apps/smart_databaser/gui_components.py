@@ -44,6 +44,7 @@ from gui_fields import (  # noqa: F401
     _provenance_summary_html,
     _quick_fill_button_for,
     _sync_widget_value,
+    activity_html,
 )
 from gui_matrix import (  # noqa: F401
     VariationTemplatePanel,
@@ -61,6 +62,10 @@ from gui_sequence import (  # noqa: F401
 from IPython.display import Javascript, display
 
 logger = logging.getLogger(__name__)
+
+# Whether the Finish buttons open the nudge review (missing/outlier fields) before they act.
+# Off for now (issue #258); set True to make the review the step before every Finish action.
+NUDGE_BEFORE_FINISH = False
 
 
 def create_quick_fill_all_button(state: ExperimentState, on_change=None) -> widgets.VBox:
@@ -298,6 +303,7 @@ def create_finish_section(
     token: str,
     cache: NomadSessionCache,
     progress_bar: widgets.Widget | None = None,
+    nudge_before_finish: bool = NUDGE_BEFORE_FINISH,
 ) -> widgets.VBox:
     """Three explicit end-of-workflow actions, not one combined action, per the product
     requirement: 'Download only', 'Upload only', 'Download + Upload'. The upload target
@@ -309,11 +315,15 @@ def create_finish_section(
     the three action buttons - product ask: the completion bar reads better right where
     the user is about to finish, not up at the top of the page.
 
-    By default, clicking any of the three finish buttons opens the nudge review flow
-    first and the action itself only runs once the user clicks 'Continue' beneath it -
-    the eventual intent is that nudge review is mandatory before finishing. The 'Skip
-    nudge review' checkbox (unchecked by default) is a testing-only escape hatch back to
-    the old immediate behavior.
+    With nudge_before_finish (default NUDGE_BEFORE_FINISH, currently off, issue #258),
+    clicking any of the three finish buttons opens the nudge review flow first and the
+    action itself only runs once the user clicks 'Continue' beneath it - the eventual
+    intent is that nudge review is mandatory before finishing. The 'Skip nudge review'
+    checkbox (unchecked then) is a testing-only escape hatch back to the immediate
+    behavior. With the gate off, the checkbox is checked and hidden, and the actions run
+    at once; the optional 'Start Nudge Review' button still opens the flow.
+
+    Upload shows a moving activity bar (activity_html) until NOMAD has processed the file.
 
     Either action (immediate, or 'Continue' after the nudge flow) that produces a file
     auto-starts the actual browser download via _trigger_browser_download - product
@@ -344,7 +354,7 @@ def create_finish_section(
     )
 
     skip_nudge_checkbox = widgets.Checkbox(
-        value=False, indent=False, description="Skip nudge review (testing only)"
+        value=not nudge_before_finish, indent=False, description="Skip nudge review (testing only)"
     )
     skip_nudge_caption = widgets.HTML(
         value=(
@@ -353,6 +363,9 @@ def create_finish_section(
             "straight to Download/Upload while testing.</i>"
         )
     )
+    if not nudge_before_finish:  # checked and hidden while the gate is switched off
+        skip_nudge_checkbox.layout.display = "none"
+        skip_nudge_caption.layout.display = "none"
 
     status_output = widgets.HTML(value="")
     nudge_area = widgets.VBox([])
@@ -369,15 +382,20 @@ def create_finish_section(
                 "<br><span style='color:#c0392b'>Pick a target upload first.</span>"
             )
             return False
+        before = status_output.value
+        # Shown before the blocking upload: ipywidgets sends it to the browser at once.
+        status_output.value = before + activity_html(
+            f"Uploading {filename} and waiting for NOMAD to process it (up to 2 minutes)..."
+        )
         try:
             upload_experiment_excel(url, token, upload_dropdown.value, filename, data)
-            status_output.value += (
+            status_output.value = before + (
                 f"<br><span style='color:#2c7a4b'>Uploaded {html.escape(filename)} to "
                 f"{html.escape(str(upload_dropdown.value))}.</span>"
             )
             return True
         except Exception as exc:
-            status_output.value += (
+            status_output.value = before + (
                 f"<br><span style='color:#c0392b'>Upload failed: {html.escape(str(exc))}</span>"
             )
             return False
