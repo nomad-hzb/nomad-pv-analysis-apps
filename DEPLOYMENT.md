@@ -162,7 +162,8 @@ real proxy address belong in the gitignored `oasis_local_config.py` of that
 one deployment; get the actual address from whoever administers the Oasis.
 The one exception is the HZB SE Oasis, which always needs the HZB outbound
 proxy: `bootstrap.py` applies it by default (`HZB_SE_PROXY`) whenever
-`HYSPRINT_URL_BASE` is unset or the HZB SE URL and no proxy is configured, so
+`HYSPRINT_URL_BASE` is unset or the HZB SE URL (after it has been filled in from
+`NOMAD_CLIENT_URL` inside NORTH, see the table below) and no proxy is configured, so
 that deployment needs no local file. To opt out, set `HTTP_PROXY = ""` and
 `HTTPS_PROXY = ""` in `oasis_local_config.py`; any other `HYSPRINT_URL_BASE`
 turns the default off.
@@ -172,7 +173,8 @@ Oasis needs. The table after it explains each variable.
 
 ```python
 # --- Which Oasis -----------------------------------------------------------------------------
-# Required on any Oasis other than the HZB SE one. No trailing slash.
+# Inside NORTH taken from NOMAD_CLIENT_URL when unset; otherwise required on any Oasis other
+# than the HZB SE one. No trailing slash.
 # HYSPRINT_URL_BASE = "https://nomad-ce-ame.helmholtz-berlin.de"
 # Only if the API is not at /nomad-oasis/api/v1:
 # HYSPRINT_API_ENDPOINT = "/nomad-oasis/api/v1"
@@ -233,7 +235,7 @@ Oasis needs. The table after it explains each variable.
 
 | Variable | Needed when | Notes |
 |---|---|---|
-| `HYSPRINT_URL_BASE` | always, on any non-HZB Oasis | Read by `shared/hysprint_utils/config.py`. No trailing slash. This is the one variable you cannot skip. |
+| `HYSPRINT_URL_BASE` | on a non-HZB Oasis, unless NORTH provides the address | Read by `shared/hysprint_utils/config.py`. No trailing slash. Inside NORTH, when neither the container nor this file sets it, `bootstrap.py` takes it from `NOMAD_CLIENT_URL` (which NOMAD sets in every NORTH tool, e.g. `https://<oasis>/nomad-oasis/api`): scheme and host become `HYSPRINT_URL_BASE`, the path plus `/v1` becomes `HYSPRINT_API_ENDPOINT` if that is unset too. An unspecified host (`0.0.0.0`, as HZB SE sets it) is ignored, so HZB SE keeps its default and proxy. Check with `echo $NOMAD_CLIENT_URL` in a NORTH terminal; set `HYSPRINT_URL_BASE` explicitly if that address is not the one the apps should call (it always wins). Outside NORTH (no `NOMAD_CLIENT_URL`) it is required on any non-HZB Oasis. |
 | `HYSPRINT_API_ENDPOINT` | only if the API is not at `/nomad-oasis/api/v1` | Identical to the HZB default on CE-AME. Set anyway so the deployment is fully described by one file. |
 | `HTTP_PROXY`, `HTTPS_PROXY` | the container has no direct outbound route | Applied *before* `pip install shared/` runs, because pip fetches `hatchling` from PyPI to build it. Also picked up by `git` for the `insitu_analyser` dependency. |
 | `NO_PROXY` | whenever a proxy is set | Hosts that must be reached *without* the proxy. Defaults to `localhost,127.0.0.1` if omitted. Do not add the Oasis host unless a direct call to it actually works from the container - on CE-AME it does not, and excluding it breaks every API call with `Errno 113 No route to host`. |
@@ -467,7 +469,9 @@ retries once (its defaults, 15 s and 5 retries, let an unreachable proxy or
 index hold a start for minutes per package), and a whole install is stopped
 after 10 minutes. A stopped install counts as a failed one and takes the
 failure path described for its step. The same limits apply when `shared/`
-reinstalls because its sources changed, for example after a branch switch.
+reinstalls because its `pyproject.toml` changed. Editing its Python sources or
+switching branches does not reinstall it: the kernel imports `hysprint_utils`
+from `shared/` on `sys.path`, not from the installed copy.
 
 **A failed app install is a warning, not an error.** Most apps need nothing
 beyond what the NORTH image already provides, and none of them were installed
