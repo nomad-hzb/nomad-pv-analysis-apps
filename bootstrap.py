@@ -20,6 +20,14 @@ the same name, so a new override needs no change here. Variables already
 set at the container level always win - this file never overwrites them.
 See DEPLOYMENT.md for the recognised names and a worked example.
 
+Inside NORTH no override is needed to find the Oasis: NOMAD sets
+NOMAD_CLIENT_URL (e.g. https://<oasis>/nomad-oasis/api) in every tool,
+together with a NOMAD_CLIENT_ACCESS_TOKEN valid for that same Oasis. When
+neither the container nor oasis_local_config.py sets HYSPRINT_URL_BASE, it
+is taken from there (and HYSPRINT_API_ENDPOINT, if also unset, from its
+path). Precedence: container variable > oasis_local_config.py >
+NOMAD_CLIENT_URL > the HZB SE default in hysprint_utils.config.
+
 Notebooks invoke this via a fixed 2-line cell 0 (cwd is always the
 notebook's own directory under Voila, regardless of the upload session
 hash, so the relative path here is invariant):
@@ -43,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +97,44 @@ def _apply_config_env(config: dict[str, str]) -> None:
         os.environ[key] = value
 
 
+def _apply_nomad_client_url() -> None:
+    """Point the apps at the Oasis that started this NORTH tool, unless told otherwise.
+
+    Runs after _apply_config_env, so an explicit HYSPRINT_URL_BASE (container or
+    oasis_local_config.py) always wins, and before _apply_proxy_env, so the HZB SE proxy
+    default follows the Oasis actually in use. Without this, an Oasis other than HZB SE with
+    no override sent its tool token to HZB SE (rejected) through the HZB proxy.
+    """
+    if os.environ.get("HYSPRINT_URL_BASE"):
+        return
+    client_url = os.environ.get("NOMAD_CLIENT_URL", "").strip()
+    if not client_url:
+        return
+    parsed = urlsplit(client_url)
+    # HZB SE sets NOMAD_CLIENT_URL=http://0.0.0.0/nomad-oasis/api: the address NOMAD listens on,
+    # not one a client can call. An unspecified host says nothing about the Oasis, so it falls
+    # back to the default (and, on HZB SE, to the HZB proxy) as before.
+    if parsed.scheme not in ("http", "https") or parsed.hostname in (None, "", "0.0.0.0", "::"):
+        logger.warning("Ignoring unusable NOMAD_CLIENT_URL %r", client_url)
+        return
+
+    os.environ["HYSPRINT_URL_BASE"] = f"{parsed.scheme}://{parsed.netloc}"
+    path = parsed.path.rstrip("/")
+    if path and not os.environ.get("HYSPRINT_API_ENDPOINT"):
+        os.environ["HYSPRINT_API_ENDPOINT"] = path if path.endswith("/v1") else f"{path}/v1"
+    logger.info(
+        "Oasis from NOMAD_CLIENT_URL: %s%s",
+        os.environ["HYSPRINT_URL_BASE"],
+        os.environ.get("HYSPRINT_API_ENDPOINT", ""),
+    )
+
+
 def _apply_proxy_env(config: dict[str, str]) -> None:
     if os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY"):
         return
 
-    # _apply_config_env has already exported any HYSPRINT_URL_BASE override.
+    # _apply_config_env and _apply_nomad_client_url have already set HYSPRINT_URL_BASE if
+    # anything names the Oasis.
     uses_hzb_se = os.environ.get("HYSPRINT_URL_BASE", HZB_SE_URL_BASE) == HZB_SE_URL_BASE
     if uses_hzb_se and "HTTP_PROXY" not in config and "HTTPS_PROXY" not in config:
         config = {**config, "HTTP_PROXY": HZB_SE_PROXY, "HTTPS_PROXY": HZB_SE_PROXY}
@@ -512,6 +554,7 @@ def _install_tracked_tags() -> None:
 
 _local_config = _load_local_config()
 _apply_config_env(_local_config)
+_apply_nomad_client_url()
 _apply_proxy_env(_local_config)
 _apply_usage_log_dir()
 _install_shared()
