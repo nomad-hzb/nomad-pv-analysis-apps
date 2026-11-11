@@ -56,7 +56,7 @@ def setup_app():
                 logger.warning(
                     "Notebook not found for %s: %s/%s", entry.name, entry.folder, entry.notebook
                 )
-            full_url = f"{dm.URL_BASE}{dm.build_voila_url(entry, user, uploads_path)}"
+            full_url = f"{dm.LINK_BASE}{dm.build_voila_url(entry, user, uploads_path)}"
         needs_user = not entry.external_url
         return gui.create_app_card_overlay(
             entry,
@@ -68,7 +68,7 @@ def setup_app():
 
     def render_learning_card():
         entry = dm.LEARNING_FOLDER
-        full_url = f"{dm.URL_BASE}{dm.build_jupyter_url(entry, user, dm.get_upload_id())}"
+        full_url = f"{dm.LINK_BASE}{dm.build_jupyter_url(entry, user, dm.get_upload_id())}"
         return gui.create_app_card_overlay(
             entry, full_url, lambda _b, name=entry.name, url=full_url: open_app(name, url)
         )
