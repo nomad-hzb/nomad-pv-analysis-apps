@@ -63,6 +63,9 @@ class APIClient:
         self.base_url = base_url
         self.api_endpoint = api_endpoint
         self.full_api_url = f"{base_url}{api_endpoint}"
+        # The GUI sits next to the API: "/nomad-oasis/api/v1" -> "/nomad-oasis/gui", and
+        # "/api/v1" (an Oasis served at the root) -> "/gui".
+        self.gui_url = f"{base_url}{api_endpoint.split('/api/')[0]}/gui"
 
     # Authentication endpoints
     def get_auth_token_url(self):
@@ -76,12 +79,12 @@ class APIClient:
     # Data entry URLs
     def get_entry_data_url(self, entry_id):
         """Get URL for entry data view"""
-        return f"{self.base_url}/nomad-oasis/gui/entry/id/{entry_id}/data/data"
+        return f"{self.gui_url}/entry/id/{entry_id}/data/data"
 
     def get_entry_image_preview_url(self, entry_id, image_index=0):
         """Get URL for entry image preview (for SEM images)"""
         return (
-            f"{self.base_url}/nomad-oasis/gui/entry/id/{entry_id}/data/data/"
+            f"{self.gui_url}/entry/id/{entry_id}/data/data/"
             f"images:{image_index}/image_preview/preview"
         )
 
