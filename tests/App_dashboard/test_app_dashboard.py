@@ -1,5 +1,8 @@
+import importlib.util
 import os
+from pathlib import Path
 
+import pytest
 from data_manager import (
     CATEGORIES,
     JUPYTER_PATH_TEMPLATE,
@@ -103,6 +106,26 @@ def test_categories_cover_every_app_folder_without_repeating_a_notebook():
 
 def test_url_base_has_no_trailing_slash():
     assert not URL_BASE.endswith("/")
+
+
+def _fresh_data_manager():
+    """A separate copy of data_manager, so LINK_BASE is computed from the current env."""
+    path = Path(__file__).resolve().parents[2] / "apps" / "App_dashboard" / "data_manager.py"
+    spec = importlib.util.spec_from_file_location("data_manager_app_dashboard_link_base", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"), [("/nomad-oasis/north/user/edgar/voila/", ""), (None, URL_BASE)]
+)
+def test_link_base_is_server_relative_only_inside_north(monkeypatch, prefix, expected):
+    if prefix is None:
+        monkeypatch.delenv("JUPYTERHUB_SERVICE_PREFIX", raising=False)
+    else:
+        monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", prefix)
+    assert _fresh_data_manager().LINK_BASE == expected
 
 
 def test_build_voila_url_uses_upload_id_when_set():

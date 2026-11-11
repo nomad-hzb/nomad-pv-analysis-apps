@@ -386,3 +386,99 @@ def test_shared_install_timeout_still_starts_the_app(bs, monkeypatch, caplog):
     assert "stopped after" in caplog.text
     assert str(bs.REPO_ROOT / "shared") in bs.sys.path
     assert not bs._shared_install_marker(bs.REPO_ROOT / "shared").exists()
+
+
+# --- NOMAD_CLIENT_URL: the Oasis that started the NORTH tool ---------------------------------
+_OASIS_KEYS = ("HYSPRINT_URL_BASE", "HYSPRINT_API_ENDPOINT", "NOMAD_CLIENT_URL")
+
+
+@pytest.fixture
+def client_env(monkeypatch):
+    for key in (*_OASIS_KEYS, "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(key, raising=False)
+    return monkeypatch
+
+
+def test_nomad_client_url_fills_in_url_base_and_endpoint(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", "http://172.17.0.1:8000/nomad-oasis/api")
+    bs._apply_nomad_client_url()
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == "http://172.17.0.1:8000"
+    assert bs.os.environ["HYSPRINT_API_ENDPOINT"] == "/nomad-oasis/api/v1"
+
+
+@pytest.mark.parametrize(
+    "path", ["/nomad-oasis/api/v1", "/nomad-oasis/api/v1/", "/nomad-oasis/api/"]
+)
+def test_nomad_client_url_v1_is_added_once(bs, client_env, path):
+    client_env.setenv("NOMAD_CLIENT_URL", f"https://oasis.example.org{path}")
+    bs._apply_nomad_client_url()
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == "https://oasis.example.org"
+    assert bs.os.environ["HYSPRINT_API_ENDPOINT"] == "/nomad-oasis/api/v1"
+
+
+def test_explicit_url_base_wins_over_nomad_client_url(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", "http://172.17.0.1:8000/nomad-oasis/api")
+    bs._apply_config_env({"HYSPRINT_URL_BASE": "https://nomad-ce-ame.helmholtz-berlin.de"})
+    bs._apply_nomad_client_url()
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == "https://nomad-ce-ame.helmholtz-berlin.de"
+    assert "HYSPRINT_API_ENDPOINT" not in bs.os.environ
+
+
+def test_explicit_endpoint_is_kept(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", "https://oasis.example.org/nomad-oasis/api")
+    client_env.setenv("HYSPRINT_API_ENDPOINT", "/other/api/v1")
+    bs._apply_nomad_client_url()
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == "https://oasis.example.org"
+    assert bs.os.environ["HYSPRINT_API_ENDPOINT"] == "/other/api/v1"
+
+
+def test_without_nomad_client_url_nothing_is_set(bs, client_env):
+    bs._apply_nomad_client_url()
+    assert not any(key in bs.os.environ for key in _OASIS_KEYS)
+
+
+@pytest.mark.parametrize(
+    "value", ["   ", "not a url", "ftp://oasis.example.org/api", "/nomad-oasis/api"]
+)
+def test_unusable_nomad_client_url_is_ignored(bs, client_env, caplog, value):
+    client_env.setenv("NOMAD_CLIENT_URL", value)
+    with caplog.at_level(logging.WARNING):
+        bs._apply_nomad_client_url()
+    assert "HYSPRINT_URL_BASE" not in bs.os.environ
+    assert "HYSPRINT_API_ENDPOINT" not in bs.os.environ
+    if value.strip():
+        assert "NOMAD_CLIENT_URL" in caplog.text
+
+
+def test_host_only_nomad_client_url_keeps_the_default_endpoint(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", "https://oasis.example.org")
+    bs._apply_nomad_client_url()
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == "https://oasis.example.org"
+    assert "HYSPRINT_API_ENDPOINT" not in bs.os.environ
+
+
+def test_hzb_se_from_nomad_client_url_keeps_the_hzb_proxy(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", f"{bs.HZB_SE_URL_BASE}/nomad-oasis/api")
+    bs._apply_nomad_client_url()
+    bs._apply_proxy_env({})
+    assert bs.os.environ["HYSPRINT_URL_BASE"] == bs.HZB_SE_URL_BASE
+    assert bs.os.environ["HTTPS_PROXY"] == bs.HZB_SE_PROXY
+
+
+def test_other_oasis_from_nomad_client_url_gets_no_hzb_proxy(bs, client_env):
+    client_env.setenv("NOMAD_CLIENT_URL", "http://172.17.0.1:8000/nomad-oasis/api")
+    bs._apply_nomad_client_url()
+    bs._apply_proxy_env({})
+    assert "HTTP_PROXY" not in bs.os.environ
+    assert "HTTPS_PROXY" not in bs.os.environ
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "[::]"])
+def test_unspecified_host_keeps_hzb_se_and_its_proxy(bs, client_env, host):
+    # What HZB SE actually sets (checked 2026-11-11): must behave as if it were unset.
+    client_env.setenv("NOMAD_CLIENT_URL", f"http://{host}/nomad-oasis/api")
+    bs._apply_nomad_client_url()
+    bs._apply_proxy_env({})
+    assert "HYSPRINT_URL_BASE" not in bs.os.environ
+    assert "HYSPRINT_API_ENDPOINT" not in bs.os.environ
+    assert bs.os.environ["HTTPS_PROXY"] == bs.HZB_SE_PROXY
