@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-import requests
+from hysprint_utils.api_calls import SESSION
 
 # Usage logging moved to usage_tracking; re-exported so existing imports keep working.
 from hysprint_utils.usage_tracking import log_button_usage, log_notebook_usage  # noqa: F401
@@ -86,7 +86,7 @@ def get_token(url, name=None):
     password = getpass.getpass()
 
     # get token from the api:
-    response = requests.post(
+    response = SESSION.post(
         f"{url}/auth/token", data=dict(username=user, password=password), timeout=60
     )
     if response.status_code == 401:

@@ -3391,12 +3391,17 @@ def _mock_response(json_data=None, raise_error=False):
     return response
 
 
+# Uploads go through api_calls.WRITE_SESSION (never retried), polls through api_calls.SESSION.
+_WRITE = "hysprint_utils.api_calls.WRITE_SESSION"
+_READ = "hysprint_utils.api_calls.SESSION"
+
+
 def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()) as mock_put,
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()) as mock_put,
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3416,10 +3421,10 @@ def test_upload_experiment_excel_put_uses_correct_url_headers_and_file_tuple():
 
 def test_upload_experiment_excel_triggers_process_action_after_put():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()) as mock_post,
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()) as mock_post,
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3440,9 +3445,9 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
         _mock_response({"data": {"process_running": False}}),
     ]
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get", side_effect=poll_responses) as mock_get,
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get", side_effect=poll_responses) as mock_get,
         patch("hysprint_utils.api_calls.time.sleep"),
     ):
         upload_experiment_excel("https://nomad.example/api/v1", "tok", "UP1", "test.xlsx", b"bytes")
@@ -3457,11 +3462,9 @@ def test_upload_experiment_excel_polls_until_processing_finishes():
 
 def test_upload_experiment_excel_raises_on_put_failure():
     with (
-        patch(
-            "hysprint_utils.api_calls.requests.put", return_value=_mock_response(raise_error=True)
-        ),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get"),
+        patch(f"{_WRITE}.put", return_value=_mock_response(raise_error=True)),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get"),
         patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(requests.HTTPError),
     ):
@@ -3475,12 +3478,10 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
     NOMAD version. Must not raise here (matches apps/File_Uploader/gui_components.py's
     proven _process_upload pattern) - the polling loop is the real source of truth."""
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response(raise_error=True)),
         patch(
-            "hysprint_utils.api_calls.requests.post", return_value=_mock_response(raise_error=True)
-        ),
-        patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": False}}),
         ) as mock_get,
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -3492,10 +3493,10 @@ def test_upload_experiment_excel_ignores_process_action_failure_and_still_polls(
 
 def test_upload_experiment_excel_raises_timeout_if_never_finishes():
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
         patch(
-            "hysprint_utils.api_calls.requests.get",
+            f"{_READ}.get",
             return_value=_mock_response({"data": {"process_running": True}}),
         ),
         patch("hysprint_utils.api_calls.time.sleep"),
@@ -4404,9 +4405,9 @@ def test_upload_reports_a_failed_processing_instead_of_success():
         }
     )
     with (
-        patch("hysprint_utils.api_calls.requests.put", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.post", return_value=_mock_response()),
-        patch("hysprint_utils.api_calls.requests.get", return_value=failed),
+        patch(f"{_WRITE}.put", return_value=_mock_response()),
+        patch(f"{_WRITE}.post", return_value=_mock_response()),
+        patch(f"{_READ}.get", return_value=failed),
         patch("hysprint_utils.api_calls.time.sleep"),
         pytest.raises(RuntimeError, match="bad sheet"),
     ):

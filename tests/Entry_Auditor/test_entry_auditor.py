@@ -14,6 +14,15 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_batch.json"
 # ---------------------------------------------------------------------------
 
 
+def _patch_post(monkeypatch, fake_post):
+    """Replace requests.post and the shared session's post (hysprint_utils.api_calls.SESSION,
+    used by query_all) with the same fake."""
+    from hysprint_utils import api_calls
+
+    monkeypatch.setattr(dm.requests, "post", fake_post)
+    monkeypatch.setattr(api_calls.SESSION, "post", fake_post)
+
+
 def test_modify_file_field_json_replaces_value():
     file_text = '{"name": "Cleaning", "location": "HySpinbox", "other": "HySpinbox"}'
     modified, count = dm.modify_file_field(
@@ -168,7 +177,7 @@ def test_get_ids_in_batch_tolerant_dedupes_and_warns_on_duplicates(monkeypatch, 
         ],
         "pagination": {},
     }
-    monkeypatch.setattr(dm.requests, "post", lambda *a, **k: _FakeResponse(payload))
+    _patch_post(monkeypatch, lambda *a, **k: _FakeResponse(payload))
 
     with caplog.at_level("WARNING"):
         result = dm.get_ids_in_batch_tolerant("https://example.test/api/v1", "tok", ["Batch1"])
@@ -186,7 +195,7 @@ def test_get_ids_in_batch_tolerant_uses_the_configured_batch_type(monkeypatch):
         sent.append(json["query"]["entry_type"])
         return _FakeResponse({"data": [], "pagination": {}})
 
-    monkeypatch.setattr(dm.requests, "post", fake_post)
+    _patch_post(monkeypatch, fake_post)
     monkeypatch.setitem(ENTRY_TYPES, "batch", "Other_Batch")
 
     dm.get_ids_in_batch_tolerant("https://example.test/api/v1", "tok", ["B1"])
@@ -208,7 +217,7 @@ def test_fetch_entry_files_reads_every_page(monkeypatch):
         pagination = {} if after else {"next_page_after_value": "p2"}
         return _FakeResponse({"data": rows, "pagination": pagination})
 
-    monkeypatch.setattr(dm.requests, "post", fake_post)
+    _patch_post(monkeypatch, fake_post)
 
     files = dm.fetch_entry_files("https://example.test/api/v1", "tok", ["S1"], "HySprint_JV")
 
@@ -249,7 +258,7 @@ def test_discover_present_entry_types_covers_all_three_match_strategies(monkeypa
             )
         raise AssertionError(f"unexpected query: {json}")
 
-    monkeypatch.setattr(dm.requests, "post", fake_post)
+    _patch_post(monkeypatch, fake_post)
 
     sample_entry_ids, ref_ids, entry_types = dm.discover_present_entry_types(
         "https://example.test/api/v1", "tok", ["S1", "S2"]
@@ -1040,7 +1049,7 @@ def test_load_generic_data_keeps_a_field_that_only_some_entries_have(monkeypatch
         def json(self):
             return {"data": entries}
 
-    monkeypatch.setattr(dm.requests, "post", lambda *a, **k: _Response())
+    _patch_post(monkeypatch, lambda *a, **k: _Response())
     monkeypatch.setattr(dm, "_resolve_sample_entry_ids", lambda *a, **k: [])
 
     df = dm.load_generic_data("http://x/api/v1", "t", ["s1"], "HySprint_SpinCoating")

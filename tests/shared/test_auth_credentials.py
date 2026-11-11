@@ -32,9 +32,9 @@ def seen(monkeypatch):
         calls.append(("get", url, kwargs))
         return _Resp()
 
-    for module in (auth_manager, access_token, api_calls):
-        monkeypatch.setattr(module.requests, "post", post)
-        monkeypatch.setattr(module.requests, "get", get)
+    # Every login goes through the one shared session (api_calls.SESSION).
+    monkeypatch.setattr(api_calls.SESSION, "post", post)
+    monkeypatch.setattr(api_calls.SESSION, "get", get)
     monkeypatch.setattr("getpass.getpass", lambda: "secret")
     monkeypatch.delenv("NOMAD_CLIENT_ACCESS_TOKEN", raising=False)
     monkeypatch.setattr(access_token, "_load_token_from_secrets_file", lambda: None)

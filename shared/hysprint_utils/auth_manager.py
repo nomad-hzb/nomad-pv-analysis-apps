@@ -3,6 +3,8 @@ import os
 
 import requests
 
+from hysprint_utils.api_calls import SESSION
+
 # Re-exported: code written against auth_manager.LAYOUT / STRINGS keeps working.
 from hysprint_utils.ui_constants import LAYOUT, STRINGS  # noqa: F401
 
@@ -86,7 +88,7 @@ class AuthenticationManager:
 
         try:
             # NOMAD takes the login as form data; query params would leak the password into URLs.
-            response = requests.post(token_url, data=auth_dict, timeout=LAYOUT["TIMEOUT_STANDARD"])
+            response = SESSION.post(token_url, data=auth_dict, timeout=LAYOUT["TIMEOUT_STANDARD"])
             response.raise_for_status()
 
             token_data = response.json()
@@ -121,7 +123,7 @@ class AuthenticationManager:
         headers = {"Authorization": f"Bearer {self.current_token}"}
 
         try:
-            verify_response = requests.get(
+            verify_response = SESSION.get(
                 verify_url, headers=headers, timeout=LAYOUT["TIMEOUT_STANDARD"]
             )
             verify_response.raise_for_status()
