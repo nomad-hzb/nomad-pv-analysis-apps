@@ -402,6 +402,22 @@ class ExperimentInfoPanel(widgets.VBox):
         self._notify_change()
 
 
+def activity_html(label: str) -> str:
+    """A moving bar plus `label`, as HTML for a status widget, shown while the kernel waits
+    on NOMAD. The animation is plain CSS, so it keeps moving in the browser although the
+    click handler blocks the kernel until the request returns. It shows that the app is
+    working, not how far it is."""
+    return (
+        "<style>@keyframes hysprint-activity{0%{left:-35%}100%{left:100%}}</style>"
+        "<div style='position:relative; overflow:hidden; width:300px; height:8px; "
+        "margin:4px 0; border-radius:4px; background:#dbe8f4;'>"
+        "<div style='position:absolute; top:0; left:-35%; width:35%; height:100%; "
+        "border-radius:4px; background:#2b7bb9; "
+        "animation:hysprint-activity 1.2s ease-in-out infinite;'></div></div>"
+        f"<i style='color:#2c3e50;'>{html.escape(label)}</i>"
+    )
+
+
 def _create_batch_picker(
     cache: NomadSessionCache,
     url: str,
@@ -452,7 +468,7 @@ def _create_batch_picker(
         # Set BEFORE the (possibly slow, network-bound) on_load call below, not after -
         # ipywidgets flushes this to the browser immediately even though the rest of this
         # handler runs synchronously and blocks the kernel until on_load returns.
-        status.value = warning + "<i>Working...</i>"
+        status.value = warning + activity_html(f"Working on Batch {batch_id}, please wait...")
         try:
             result_message = on_load(batch_id)
         except Exception as exc:

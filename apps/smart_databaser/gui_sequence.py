@@ -34,6 +34,7 @@ from gui_fields import (
     _field_row_caption,
     _progress_html,
     _sync_widget_value,
+    activity_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,9 @@ class _ProcessRow(widgets.VBox):
                 "above first.</span>"
             )
             return
-        self._adopt_status.value = "<i>Working...</i>"
+        self._adopt_status.value = activity_html(
+            f"Looking up {process.process_type} in Batch {template_batch_id}..."
+        )
         try:
             occurrences = list_process_occurrences(
                 builder.url, builder.token, builder.cache, template_batch_id, process.process_type
@@ -354,7 +357,7 @@ class _ProcessRow(widgets.VBox):
 
     def _apply_adopt(self, batch_id: str, occurrence: int) -> None:
         builder = self._builder
-        self._adopt_status.value = "<i>Working...</i>"
+        self._adopt_status.value = activity_html(f"Adopting values from Batch {batch_id}...")
         try:
             written = apply_process_override(
                 builder.state,
