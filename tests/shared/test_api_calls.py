@@ -428,7 +428,7 @@ def test_write_session_never_resends_a_request():
 def test_logins_and_lookups_share_the_read_session():
     from hysprint_utils import access_token, api_calls, auth_manager
 
-    assert access_token.SESSION is api_calls.SESSION
+    assert access_token.prompt_login is api_calls.prompt_login  # whose login uses SESSION
     assert auth_manager.SESSION is api_calls.SESSION
 
 

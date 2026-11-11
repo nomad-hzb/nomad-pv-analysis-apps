@@ -3,7 +3,7 @@ import os
 
 import requests
 
-from hysprint_utils.api_calls import SESSION
+from hysprint_utils.api_calls import SESSION, password_login
 
 # Re-exported: code written against auth_manager.LAYOUT / STRINGS keeps working.
 from hysprint_utils.ui_constants import LAYOUT, STRINGS  # noqa: F401
@@ -83,19 +83,13 @@ class AuthenticationManager:
         if not username or not password:
             raise ValueError("Username and Password are required.")
 
-        auth_dict = dict(username=username, password=password)
-        token_url = self.api_client.get_auth_token_url()
-
         try:
-            # NOMAD takes the login as form data; query params would leak the password into URLs.
-            response = SESSION.post(token_url, data=auth_dict, timeout=LAYOUT["TIMEOUT_STANDARD"])
-            response.raise_for_status()
-
-            token_data = response.json()
-            if "access_token" not in token_data:
-                raise ValueError("Access token not found in response.")
-
-            self.current_token = token_data["access_token"]
+            self.current_token = password_login(
+                self.api_client.get_api_url(),
+                username,
+                password,
+                timeout=LAYOUT["TIMEOUT_STANDARD"],
+            )
             return self.current_token
 
         except requests.exceptions.RequestException as e:
