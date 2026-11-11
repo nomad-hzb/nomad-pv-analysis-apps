@@ -699,53 +699,57 @@ def _index_linked_data_by_sample(linked_data):
     return res
 
 
-def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
-    query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    entries = query_all(url, token, "entries/query", query)
-    entry_ids = [entry["entry_id"] for entry in entries]
+MPPT_ARCHIVE_PAGE_SIZE = 100
 
-    query = {
-        "required": {
-            "data": "*",
-            "metadata": "*",
+
+def get_linked_entries(url, token, sample_ids, query, required=None, page_size=DEFAULT_PAGE_SIZE):
+    """Archives of the entries that reference the given samples and match query.
+
+    Two queries, as every get_all_* lookup did on its own before: the entry ids of the
+    samples (entry_id only, not their full metadata), then the archives of the entries
+    that reference any of them and also match query (e.g. {"entry_type": ...}).
+    required defaults to data and metadata. No samples, or none NOMAD knows, gives []
+    without the second query."""
+    if not sample_ids:
+        return []
+    samples = query_all(
+        url,
+        token,
+        "entries/query",
+        {
+            "required": {"include": ["entry_id"]},
+            "owner": "visible",
+            "query": {"results.eln.lab_ids:any": list(sample_ids)},
         },
-        "owner": "visible",
-        "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": jv_type},
-        "pagination": {"page_size": 10000},
-    }
-    linked_data = query_all(url, token, "entries/archive/query", query)
+    )
+    entry_ids = [entry["entry_id"] for entry in samples if entry.get("entry_id")]
+    if not entry_ids:
+        return []
+    return query_all(
+        url,
+        token,
+        "entries/archive/query",
+        {
+            "required": required if required is not None else {"data": "*", "metadata": "*"},
+            "owner": "visible",
+            "query": {"entry_references.target_entry_id:any": entry_ids, **query},
+            "pagination": {"page_size": page_size},
+        },
+    )
+
+
+def get_all_JV(url, token, sample_ids, jv_type=ENTRY_TYPES["jv"]):
+    linked_data = get_linked_entries(url, token, sample_ids, {"entry_type": jv_type})
     return _index_linked_data_by_sample(linked_data)
 
 
 def get_all_measurements_except_JV(url, token, sample_ids):
-    # collect the results of the sample, in this case it are all the annealing temperatures
-    query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    entries = query_all(url, token, "entries/query", query)
-    entry_ids = [entry["entry_id"] for entry in entries]
-
-    query = {
-        "required": {
-            "data": "*",
-            "metadata": "*",
-        },
-        "owner": "visible",
-        "query": {
-            "entry_references.target_entry_id:any": entry_ids,
-            "section_defs.definition_qualified_name": ENTRY_TYPES["base_measurement"],
-        },
-        "pagination": {"page_size": 10000},
-    }
-    linked_data = query_all(url, token, "entries/archive/query", query)
+    linked_data = get_linked_entries(
+        url,
+        token,
+        sample_ids,
+        {"section_defs.definition_qualified_name": ENTRY_TYPES["base_measurement"]},
+    )
     non_jv = [
         ldata
         for ldata in linked_data
@@ -756,76 +760,26 @@ def get_all_measurements_except_JV(url, token, sample_ids):
 
 
 def get_all_eqe(url, token, sample_ids, eqe_type=ENTRY_TYPES["eqe"]):
-    #
-    query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    entries = query_all(url, token, "entries/query", query)
-    entry_ids = [entry["entry_id"] for entry in entries]
-
-    query = {
-        "required": {
-            "data": "*",
-            "metadata": "*",
-        },
-        "owner": "visible",
-        "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": eqe_type},
-        "pagination": {"page_size": 10000},
-    }
-    linked_data = query_all(url, token, "entries/archive/query", query)
+    linked_data = get_linked_entries(url, token, sample_ids, {"entry_type": eqe_type})
     return _index_linked_data_by_sample(linked_data)
 
 
 def get_all_mppt(url, token, sample_ids, mppt_type=ENTRY_TYPES["mppt"]):
-    #
-    query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 100},
-    }
-    entries = query_all(url, token, "entries/query", query)
-    entry_ids = [entry["entry_id"] for entry in entries]
-
-    query = {
-        "required": {
-            "data": "*",
-            "metadata": "*",
-        },
-        "owner": "visible",
-        "query": {"entry_references.target_entry_id:any": entry_ids, "entry_type": mppt_type},
-        "pagination": {"page_size": 100},
-    }
-    linked_data = query_all(url, token, "entries/archive/query", query)
+    # MPPT archives hold long time series: pages of 100 keep each answer small.
+    linked_data = get_linked_entries(
+        url, token, sample_ids, {"entry_type": mppt_type}, page_size=MPPT_ARCHIVE_PAGE_SIZE
+    )
     return _index_linked_data_by_sample(linked_data)
 
 
 def get_processing_steps(url, token, sample_ids, process_type=ENTRY_TYPES["base_process"]):
-    # collect the entry ids of the samples
-    query = {
-        "required": {"metadata": "*"},
-        "owner": "visible",
-        "query": {"results.eln.lab_ids:any": sample_ids},
-        "pagination": {"page_size": 10000},
-    }
-    entries = query_all(url, token, "entries/query", query)
-    entry_ids = [entry["entry_id"] for entry in entries]
-
-    query = {
-        "required": {
-            "data": "*",
-        },
-        "owner": "visible",
-        "query": {
-            "entry_references.target_entry_id:any": entry_ids,
-            "section_defs.definition_qualified_name": process_type,
-        },
-        "pagination": {"page_size": 10000},
-    }
-    data = query_all(url, token, "entries/archive/query", query)
+    data = get_linked_entries(
+        url,
+        token,
+        sample_ids,
+        {"section_defs.definition_qualified_name": process_type},
+        required={"data": "*"},
+    )
     data = list(map(lambda process: process["archive"]["data"], data))
     # delete entries for which "position_in_experimental_plan" is not defined, these are likely not proper processing steps
     data = [step for step in data if "positon_in_experimental_plan" in step]
