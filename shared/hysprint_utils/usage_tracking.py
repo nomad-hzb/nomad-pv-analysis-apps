@@ -9,6 +9,7 @@ oasis_local_config.py or the container to log somewhere else.
 Logging must never break an app: every failure is caught and logged, never raised.
 """
 
+import csv
 import datetime
 import logging
 import os
@@ -45,12 +46,15 @@ def _log_path(filename: str) -> Path:
     return path
 
 
-def _append(filename: str, header: str, row: str) -> None:
+def _append(filename: str, header: list[str], row: list[str]) -> None:
+    """Append row (with header first in a new file) as one CSV line. csv.writer quotes a
+    value that holds a comma, a quote or a line break, so it can never shift the columns."""
     path = _log_path(filename)
-    with open(path, "a", encoding="utf-8") as f:
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, lineterminator="\n")
         if path.stat().st_size == 0:
-            f.write(header + "\n")
-        f.write(row + "\n")
+            writer.writerow(header)
+        writer.writerow(row)
 
 
 def _now() -> tuple[str, str]:
@@ -91,8 +95,8 @@ def log_notebook_usage(log_filename: str = NOTEBOOK_LOG) -> None:
         app_type, file = _current_notebook()
         _append(
             log_filename,
-            "Date,Time,User,App,File",
-            f"{date_str},{time_str},{user},{app_type},{file}",
+            ["Date", "Time", "User", "App", "File"],
+            [date_str, time_str, user, app_type, file],
         )
     except Exception:
         logger.exception("Error logging notebook usage")
@@ -106,7 +110,9 @@ def log_button_usage(action: str, user: str | None = None, log_filename: str = B
         date_str, time_str = _now()
         resolved_user = user if user is not None else os.environ.get("NOMAD_CLIENT_USER", "Unknown")
         _append(
-            log_filename, "Date,Time,User,Action", f"{date_str},{time_str},{resolved_user},{action}"
+            log_filename,
+            ["Date", "Time", "User", "Action"],
+            [date_str, time_str, resolved_user, action],
         )
     except Exception:
         logger.exception("Error logging button usage")

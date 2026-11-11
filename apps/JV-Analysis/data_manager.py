@@ -99,6 +99,29 @@ def extract_status_from_metadata(data, metadata):
     return "N/A"
 
 
+# One curve per measurement: these columns identify which JV row a curve belongs to.
+CURVE_KEY_COLUMNS = ("sample_id", "cell", "direction", "ilum")
+
+
+def rows_matching(frame, reference, columns):
+    """The rows of frame whose values in columns occur together in some row of reference.
+
+    One vectorized lookup (MultiIndex.isin) instead of a row-by-row DataFrame.apply against a
+    set of tuples. Missing values match missing values. If either frame lacks one of the
+    columns, nothing matches. Returns a copy, with frame's columns, possibly empty.
+    """
+    columns = list(columns)
+    if (
+        frame.empty
+        or reference.empty
+        or not set(columns) <= set(frame.columns)
+        or not set(columns) <= set(reference.columns)
+    ):
+        return frame.iloc[0:0].copy()
+    wanted = pd.MultiIndex.from_frame(reference[columns])
+    return frame[pd.MultiIndex.from_frame(frame[columns]).isin(wanted)].copy()
+
+
 class DataManager:
     """Main data management class for JV analysis application"""
 
@@ -394,29 +417,7 @@ class DataManager:
         """Create curves data that exactly matches filtered JV data using sample_id"""
         if not hasattr(self, "data") or "curves" not in self.data or filtered_jv_df.empty:
             return pd.DataFrame()
-
-        # Get unique sample_id + cell + direction + ilum combinations from filtered JV
-        filtered_combinations = set()
-        for _, row in filtered_jv_df.iterrows():
-            combination = (row["sample_id"], row["cell"], row["direction"], row["ilum"])
-            filtered_combinations.add(combination)
-
-        # Filter curves data to match exactly
-        def should_include_curve(curve_row):
-            if "sample_id" not in curve_row:
-                return False
-            combination = (
-                curve_row["sample_id"],
-                curve_row["cell"],
-                curve_row["direction"],
-                curve_row["ilum"],
-            )
-            return combination in filtered_combinations
-
-        curves_data = self.data["curves"]
-        matching_curves = curves_data[curves_data.apply(should_include_curve, axis=1)].copy()
-
-        return matching_curves
+        return rows_matching(self.data["curves"], filtered_jv_df, CURVE_KEY_COLUMNS)
 
     def _process_sample_info(self, identifiers):
         """Process sample information and create identifiers with enhanced deduplication"""
