@@ -44,7 +44,7 @@ _utils_spec.loader.exec_module(_utils)
 
 from data_manager import DataManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "JV-Analysis" / "demo" / "api_responses.json"
 
 
 @pytest.fixture

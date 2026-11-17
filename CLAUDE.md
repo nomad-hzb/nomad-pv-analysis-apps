@@ -24,7 +24,8 @@ bootstrap.py              # run by every notebook's cell 0
 pyproject.toml            # root: the only ruff and pytest config
 ```
 
-API-connected apps also provide `load_offline(fixture_path)` for demo mode and tests. Not
+API-connected apps also provide `load_offline(fixture_path)` for demo mode and tests; the
+demo data lives in `apps/<App>/demo/` (tests read it from there too). Not
 converted to the layout (parked, excluded from ruff and the rule checks; leave alone unless
 asked): `Electrochemical_analysis`, `XPS-Automated`. `Peak_Explorer`
 and `ISA_Previewer` use their own module sets. `SEM_crystal_counter` adds `grain_core.py` (the

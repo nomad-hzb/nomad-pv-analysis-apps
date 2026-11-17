@@ -5,7 +5,7 @@ from pathlib import Path
 
 from data_manager import MEASUREMENT_TYPE, EQEDataManager
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "EQE_Analysis" / "demo" / "api_responses.json"
 
 
 # ---------------------------------------------------------------------------

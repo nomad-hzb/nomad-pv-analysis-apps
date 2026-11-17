@@ -41,8 +41,7 @@ from hysprint_utils.table_utils import csv_safe, keep_text_as_text
 
 logger = logging.getLogger(__name__)
 
-_TESTS_ROOT = Path(__file__).parent.parent.parent / "tests"
-DEMO_FIXTURE_PATH = _TESTS_ROOT / "JV-Analysis" / "fixtures" / "api_responses.json"
+DEMO_FIXTURE_PATH = Path(__file__).parent / "demo" / "api_responses.json"
 
 try:
     from hysprint_utils.config import API_ENDPOINT, URL_BASE

@@ -14,7 +14,7 @@ from app_state import AppState
 from data_manager import DataManager, MPPTRow
 from pydantic import ValidationError
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "MPPT_Analysis" / "demo" / "api_responses.json"
 
 # Mirror of conftest.FIXTURE_ROWS — kept local to avoid cross-conftest import
 _TIME = np.array([0.0, 0.5, 1.0, 1.5, 2.0])

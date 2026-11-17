@@ -21,7 +21,7 @@ _spec.loader.exec_module(_dm)
 
 from data_manager import AbsPlDataManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "AbsPL_Analysis" / "demo" / "api_responses.json"
 
 
 @pytest.fixture
