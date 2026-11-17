@@ -283,30 +283,35 @@ def floyd_steinberg_dither(shape, black_percentage):
     Classic algorithm for uniform distribution
     """
     rows, cols = shape
-
-    # Create initial grayscale image with target percentage
-    threshold_value = (100 - black_percentage) / 100.0
-    image = np.full(shape, threshold_value, dtype=float)
-
-    # Apply Floyd-Steinberg dithering
+    # Every pixel starts at the target grey level. Error diffusion is sequential along a row,
+    # so it cannot be vectorised; plain Python floats (the same IEEE doubles, the same order
+    # of operations) give the same result as indexing a numpy array per pixel, ~4x faster.
+    start = (100 - black_percentage) / 100.0
+    black = np.zeros(shape, dtype=bool)
+    row = [start] * cols
     for y in range(rows):
+        below = [start] * cols
+        last_row = y + 1 >= rows
+        flags = [False] * cols
         for x in range(cols):
-            old_pixel = image[y, x]
-            new_pixel = 1.0 if old_pixel > 0.5 else 0.0
-            image[y, x] = new_pixel
-            error = old_pixel - new_pixel
-
-            # Distribute error to neighbors
+            old_pixel = row[x]
+            if old_pixel > 0.5:
+                error = old_pixel - 1.0
+            else:
+                error = old_pixel - 0.0
+                flags[x] = True
+            # Distribute the error to the neighbours
             if x + 1 < cols:
-                image[y, x + 1] += error * 7 / 16
-            if y + 1 < rows:
+                row[x + 1] += error * 7 / 16
+            if not last_row:
                 if x > 0:
-                    image[y + 1, x - 1] += error * 3 / 16
-                image[y + 1, x] += error * 5 / 16
+                    below[x - 1] += error * 3 / 16
+                below[x] += error * 5 / 16
                 if x + 1 < cols:
-                    image[y + 1, x + 1] += error * 1 / 16
-
-    return image < 0.5
+                    below[x + 1] += error * 1 / 16
+        black[y] = flags
+        row = below
+    return black
 
 
 def void_and_cluster(shape, black_percentage, seed=None):
