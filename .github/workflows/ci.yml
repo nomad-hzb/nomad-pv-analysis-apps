@@ -81,7 +81,4 @@ jobs:
         # Printed to the log too, so it can be read without opening the summary page.
         run: |
           report=$(python -m coverage report --format=markdown 2>&1) || report="No coverage data."
-          printf '### Coverage: %s
-
-%s
-' "$SUITE" "$report" | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '### Coverage: %s\n\n%s\n' "$SUITE" "$report" | tee -a "$GITHUB_STEP_SUMMARY"
