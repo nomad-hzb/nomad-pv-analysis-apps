@@ -78,8 +78,10 @@ jobs:
         if: always()
         env:
           SUITE: ${{ matrix.suite }}
+        # Printed to the log too, so it can be read without opening the summary page.
         run: |
-          {
-            echo "### Coverage: $SUITE"
-            python -m coverage report --format=markdown || echo "No coverage data."
-          } >> "$GITHUB_STEP_SUMMARY"
+          report=$(python -m coverage report --format=markdown 2>&1) || report="No coverage data."
+          printf '### Coverage: %s
+
+%s
+' "$SUITE" "$report" | tee -a "$GITHUB_STEP_SUMMARY"
