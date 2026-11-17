@@ -597,7 +597,9 @@ def test_discrete_levels_include_the_top_level_and_carry_no_float_noise(lo, hi, 
 
 def test_every_algorithm_can_reach_the_top_fractional_level():
     variables = [_discrete("conc", 0.0, 0.3, 0.1), _continuous("t", 0.0, 1.0)]
-    design = SamplingEngine().generate_samples(variables, "Uniform Grid Sampling", 12)
+    # 16 = the full 4 x 4 grid: with fewer samples a random subset is kept and can miss the
+    # top level (1 run in 1820, issue #219).
+    design = SamplingEngine().generate_samples(variables, "Uniform Grid Sampling", 16)
     assert 0.3 in set(design["conc"])
     assert set(design["conc"]) <= {0.0, 0.1, 0.2, 0.3}
 
