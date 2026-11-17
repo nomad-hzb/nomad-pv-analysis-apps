@@ -66,6 +66,14 @@ def _missing_note(result: dict) -> str:
     )
 
 
+def _show_figure(output, fig) -> None:
+    """Replaces what output shows with fig; just clears it when fig is None."""
+    with output:
+        clear_output(wait=True)
+        if fig is not None:
+            ipy_display(fig)
+
+
 class AnalysisHandlersMixin:
     def _on_download_correlations(self, button):
         """Download the last-computed correlation matrix as CSV via browser."""
@@ -217,9 +225,10 @@ class AnalysisHandlersMixin:
                         title='Switch "Format" to Heatmap to use this view'
                     )
                     combined_df = corr_source[checked_results + checked_metadata]
-                    used_cols, truncated = self.plot_manager.create_correlation_scatter_matrix(
+                    fig, used_cols, truncated = self.plot_manager.correlation_scatter_matrix_figure(
                         combined_df, min_unique=min_unique
                     )
+                    _show_figure(self.gui.correlation_scatter_output, fig)
                     numeric_combined = combined_df.select_dtypes(include="number")
                     dropped_for_variance = [
                         c
@@ -341,7 +350,10 @@ class AnalysisHandlersMixin:
             )
             ipy_display(Markdown(summary))
             self.plot_manager.create_feature_importance_plot(result["importances"], target)
-            self.plot_manager.create_partial_dependence_plot(result["partial_dependence"], target)
+            _show_figure(
+                self.gui.rf_pdp_output,
+                self.plot_manager.partial_dependence_figure(result["partial_dependence"], target),
+            )
             self._last_rf_result = result
 
     def _bo_inputs(self, target: str):
