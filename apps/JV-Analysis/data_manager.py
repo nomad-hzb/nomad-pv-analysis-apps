@@ -542,12 +542,13 @@ class DataManager:
         # Apply sample/cell selection filter if provided
         sample_selection_filtered_count = 0
         if selected_items is not None:
-
-            def is_selected(row):
-                cell_key = f"{row['sample']}_{row['cell']}"
-                return cell_key in selected_items
-
-            selection_mask = data.apply(is_selected, axis=1)
+            # f-strings, not astype(str): pandas keeps NaN as NaN there, f"{nan}" is "nan"
+            wanted = set(selected_items)
+            selection_mask = pd.Series(
+                [f"{s}_{c}" in wanted for s, c in zip(data["sample"], data["cell"])],
+                index=data.index,
+                dtype=bool,
+            )
             data.loc[~selection_mask, "filter_reason"] += "sample/cell not selected, "
 
             sample_selection_filtered_count = len(data[~selection_mask])
