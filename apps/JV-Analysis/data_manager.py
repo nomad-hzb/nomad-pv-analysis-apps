@@ -12,10 +12,22 @@ import operator
 import re
 from typing import Optional
 
+import openpyxl
 import pandas as pd
+from openpyxl.utils.dataframe import dataframe_to_rows
 from pydantic import BaseModel, ValidationError, field_validator
+from utils import (
+    CURRENT_DENSITY_FLIP_NOTE,
+    flip_current_density_sign,
+    save_combined_excel_data,
+)
 
-from hysprint_utils.api_calls import get_all_JV, get_ids_in_batch, get_sample_description
+from hysprint_utils.api_calls import (
+    get_all_JV,
+    get_all_measurements_except_JV,
+    get_ids_in_batch,
+    get_sample_description,
+)
 from hysprint_utils.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
@@ -766,3 +778,153 @@ class DataManager:
     def get_export_data(self):
         """Get the export data for CSV download"""
         return self.export_jvc_data, self.export_curves_data
+
+    def other_measurements(self, batch_ids):
+        """The non-JV measurements of the batches' samples, by measurement type (as
+        api_calls.get_all_measurements_except_JV returns them). Raises what the API raises."""
+        url = self.auth_manager.url
+        token = self.auth_manager.current_token
+        sample_ids = get_ids_in_batch(url, token, list(batch_ids))
+        return get_all_measurements_except_JV(url, token, sample_ids)
+
+
+def curves_for_rows(curves, jv_rows):
+    """Curves of the given JV rows, matched on sample and cell. If none match, on the part
+    of the sample name after its last "_" and cell, for tables that write the same sample
+    differently (e.g. "C-11" against "HZB_..._C-11"). Always a DataFrame."""
+    matched = rows_matching(curves, jv_rows, ["sample", "cell"])
+    logger.debug("Exact matching found %s curve records", len(matched))
+    if matched.empty and all("sample" in frame.columns for frame in (jv_rows, curves)):
+
+        def with_short_name(frame):
+            return frame.assign(_short=frame["sample"].astype(str).str.split("_").str[-1])
+
+        matched = rows_matching(
+            with_short_name(curves), with_short_name(jv_rows), ["_short", "cell"]
+        ).drop(columns="_short")
+        logger.debug("Alternative matching found %s curve records", len(matched))
+    return matched
+
+
+def _condition_from_identifier(identifier) -> str:
+    """The variation part of an identifier ("batch&variation"), or "Unknown"."""
+    if identifier and "&" in str(identifier):
+        return str(identifier).split("&", 1)[1]
+    return "Unknown"
+
+
+def conditions_from_inputs(identifiers, inputs: dict) -> dict:
+    """Condition per identifier: the text the user typed for it, else the variation part of
+    the identifier itself, else "Unknown"."""
+    conditions = {}
+    for identifier in identifiers:
+        typed = str(inputs.get(identifier) or "").strip()
+        conditions[identifier] = typed or _condition_from_identifier(identifier)
+    return conditions
+
+
+NOT_SELECTED_REASON = "sample/cell not selected"
+
+
+def filter_summary(original_count: int, filtered, omitted, selected_items) -> dict:
+    """What a filter run removed: counts (original, by sample selection, by filter
+    conditions, final, retention %) and, for the rows the conditions removed, the cells
+    per sample per condition ({condition: {sample: [cells]}})."""
+    final_count = len(filtered)
+    total_excluded = original_count - final_count
+    has_reasons = len(omitted) > 0 and "filter_reason" in omitted.columns
+    not_selected = (
+        omitted["filter_reason"].str.contains(NOT_SELECTED_REASON, na=False)
+        if has_reasons
+        else pd.Series(dtype=bool)
+    )
+    if selected_items is None:
+        by_selection, by_conditions = 0, total_excluded
+    else:
+        by_selection = int(not_selected.sum())
+        by_conditions = int((~not_selected).sum())
+
+    groups: dict = {}
+    if has_reasons:
+        for _, row in omitted[~not_selected].iterrows():
+            for reason in [r.strip() for r in row["filter_reason"].split(",") if r.strip()]:
+                cells = groups.setdefault(reason, {}).setdefault(row["sample"], [])
+                if row["cell"] not in cells:
+                    cells.append(row["cell"])
+    return {
+        "original": original_count,
+        "by_selection": by_selection,
+        "by_conditions": by_conditions,
+        "final": final_count,
+        "retention": (final_count / original_count) * 100 if original_count else 0.0,
+        "removed_by_condition": groups,
+    }
+
+
+# Excel column of each plotted variable (PCE -> PCE(%)).
+EXPORT_COLUMNS = {
+    "PCE": "PCE(%)",
+    "Voc": "Voc(V)",
+    "Jsc": "Jsc(mA/cm2)",
+    "FF": "FF(%)",
+    "Voc x FF": "Voc x FF(V%)",
+    "R_ser": "R_series(Ohmcm2)",
+    "R_shu": "R_shunt(Ohmcm2)",
+    "V_mpp": "V_mpp(V)",
+    "J_mpp": "J_mpp(mA/cm2)",
+    "P_mpp": "P_mpp(mW/cm2)",
+}
+
+_GROUPING_COLUMNS = {
+    "by Variable": "condition",
+    "by Sample": "sample",
+    "by Cell": "cell",
+    "by Scan Direction": "direction",
+}
+
+_NOT_EXPORTED_BOXPLOTS = (
+    "Correlation (heatmap)",
+    "Correlation (scatter matrix)",
+    "Plot Voc, Jsc, FF, PCE",
+)
+
+
+def build_analysis_workbook(filtered, omitted, filter_params, plot_selections):
+    """The Excel analysis export: an "All_data" sheet with the filtered rows, then one
+    sheet (data plus statistics) per variable of every selected boxplot. Jsc/J_mpp are
+    stored negative (the raw JV-curve sign convention) and are exported as magnitudes."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    export_data = flip_current_density_sign(filtered)
+
+    main_sheet = wb.create_sheet(title="All_data")
+    main_sheet.append([CURRENT_DENSITY_FLIP_NOTE])
+    main_sheet.append([])
+    for r in dataframe_to_rows(export_data, index=True, header=True):
+        main_sheet.append(r)
+
+    filtered_info = (
+        flip_current_density_sign(omitted) if omitted is not None else pd.DataFrame(),
+        filter_params,
+    )
+    for plot_type, option1, option2, *_ in plot_selections:
+        if plot_type not in ["Boxplot", "Boxplot (omitted)"] or option1 in _NOT_EXPORTED_BOXPLOTS:
+            continue
+        # "The big 4" is one combined boxplot of all four parameters, so it gets a sheet per
+        # parameter, as picking each of them separately would.
+        var_y_list = (
+            ["Voc", "Jsc", "FF", "PCE"] if option1 == "The big 4: Voc, Jsc, FF, PCE" else [option1]
+        )
+        if option2 == "by Batch":
+            grouping_col = (
+                "batch_for_plotting" if "batch_for_plotting" in filtered.columns else "batch"
+            )
+        else:
+            grouping_col = _GROUPING_COLUMNS.get(option2, "condition")
+        for var_y in var_y_list:
+            name_y = EXPORT_COLUMNS.get(var_y, var_y + "(%)")
+            stats_df = export_data.groupby(grouping_col)[name_y].describe()
+            wb = save_combined_excel_data(
+                "", wb, export_data, filtered_info, grouping_col, name_y, var_y, stats_df
+            )
+    return wb
