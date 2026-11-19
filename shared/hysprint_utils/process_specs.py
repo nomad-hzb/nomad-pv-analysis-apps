@@ -434,7 +434,11 @@ PROCESSES = {
                 "path": ["solution", 0, "solution_volume"],
                 "unit_verified": False,
             },
-            "Spin Delay [s]": {"test": 0.5},
+            "Spin Delay [s]": {
+                "test": 0.5,
+                "path": ["recipe_steps", 0, "spin_delay"],
+                "unit_verified": False,
+            },
             "Rotation speed [rpm]": {
                 "test": 1500,
                 "path": ["recipe_steps", 0, "speed"],

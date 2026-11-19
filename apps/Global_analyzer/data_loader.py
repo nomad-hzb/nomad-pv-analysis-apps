@@ -692,6 +692,7 @@ class HySprintDataLoader:
                             f"step_{i + 1}_time": step.get("time", None),
                             f"step_{i + 1}_speed": step.get("speed", None),
                             f"step_{i + 1}_acceleration": step.get("acceleration", None),
+                            f"step_{i + 1}_spin_delay": step.get("spin_delay", None),
                         }
                     )
 

@@ -676,7 +676,7 @@ SPIN_COATING_STEP = {
         }
     ],
     "annealing": {"temperature": 100.0, "time": 600.0},
-    "recipe_steps": [{"time": 30.0, "speed": 3000.0}],
+    "recipe_steps": [{"time": 30.0, "speed": 3000.0, "spin_delay": 0.5}],
 }
 
 SPIN_COATING_STEP_VARIATION = {
@@ -728,7 +728,19 @@ def test_fetch_process_field_values_returns_mapped_values_and_source_sample():
     assert values["Solute 1 Concentration [mM]"] == 0.003
     assert values["Rotation speed [rpm]"] == 3000.0
     assert values["Annealing temperature [°C]"] == 100.0
+    assert values["Spin Delay [s]"] == 0.5
     assert source_sample_id == "HZB_MMB_12_10_C-1"
+
+
+def test_fetch_process_field_values_spin_delay_absent_in_older_entries_stays_unfilled():
+    # entries processed before nomad-baseclasses had spin_delay: leave the field empty
+    cache = NomadSessionCache()
+    cache._processing_steps_by_batch["B1"] = [SPIN_COATING_STEP_TWO_SOLVENTS]
+
+    values, _ = fetch_process_field_values("url", "token", cache, "B1", "Spin Coating")
+
+    assert "Spin Delay [s]" not in values
+    assert values["Rotation speed [rpm]"] == 3000.0
 
 
 def test_fetch_process_field_values_unmapped_process_type_returns_empty():
