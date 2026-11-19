@@ -3,7 +3,7 @@ import os
 
 import requests
 
-from hysprint_utils.api_calls import SESSION, password_login
+from hysprint_utils.api_calls import get_current_user, password_login
 
 # Re-exported: code written against auth_manager.LAYOUT / STRINGS keeps working.
 from hysprint_utils.ui_constants import LAYOUT, STRINGS  # noqa: F401
@@ -113,16 +113,12 @@ class AuthenticationManager:
         if not self.current_token:
             raise ValueError("No token available for verification.")
 
-        verify_url = self.api_client.get_user_verification_url()
-        headers = {"Authorization": f"Bearer {self.current_token}"}
-
         try:
-            verify_response = SESSION.get(
-                verify_url, headers=headers, timeout=LAYOUT["TIMEOUT_STANDARD"]
+            self.current_user_info = get_current_user(
+                self.api_client.get_api_url(),
+                self.current_token,
+                timeout=LAYOUT["TIMEOUT_STANDARD"],
             )
-            verify_response.raise_for_status()
-
-            self.current_user_info = verify_response.json()
             return self.current_user_info
 
         except requests.exceptions.RequestException as e:

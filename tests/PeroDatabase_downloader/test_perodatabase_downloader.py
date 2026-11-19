@@ -120,10 +120,12 @@ def test_a_network_failure_is_not_reported_as_an_invalid_token(monkeypatch):
     import auth
     import requests
 
+    from hysprint_utils import api_calls
+
     def boom(*args, **kwargs):
         raise requests.ConnectionError("down")
 
-    monkeypatch.setattr(auth.requests, "get", boom)
+    monkeypatch.setattr(api_calls.SESSION, "get", boom)
     result = auth.authenticate("https://x/api/v1", token="tok")
     assert not result.ok and not result.reachable
     assert "Could not reach" in result.message
@@ -133,10 +135,12 @@ def test_a_network_failure_is_not_reported_as_an_invalid_token(monkeypatch):
 def test_a_refused_token_says_so_and_a_good_one_authenticates(monkeypatch):
     import auth
 
-    monkeypatch.setattr(auth.requests, "get", lambda *a, **k: _response(401))
+    from hysprint_utils import api_calls
+
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _response(401))
     refused = auth.authenticate("https://x/api/v1", token="tok")
     assert "not valid" in refused.message and refused.reachable and refused.raw_token == "tok"
-    monkeypatch.setattr(auth.requests, "get", lambda *a, **k: _response(200))
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _response(200))
     assert auth.authenticate("https://x/api/v1", token="tok").ok
 
 
