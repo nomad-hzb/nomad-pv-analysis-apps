@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TEST_TOOLS = ["pytest", "pytest-mock"]
+TEST_TOOLS = ["pytest", "pytest-mock", "pytest-cov"]
 
 
 def requirements(suite: str) -> list[str]:
