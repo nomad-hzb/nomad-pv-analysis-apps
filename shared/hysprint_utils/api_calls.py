@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 from hysprint_utils.config import ENTRY_TYPES
+from hysprint_utils.north import expired_token_hint, is_expired_token
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,29 @@ def _make_session(retry_transient):
         adapter = HTTPAdapter(max_retries=retry)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
+    session.hooks["response"].append(_explain_expired_token)
     return session
+
+
+def _explain_expired_token(response, *args, **kwargs):
+    """Response hook: an expired-token 401 raises with what to do about it on a new line.
+
+    Every app prints a failed request as str(error); with this the user also reads how to
+    get a fresh token (north.expired_token_hint) instead of only "401 Unauthorized"."""
+    if not is_expired_token(response):
+        return response
+    raise_original = response.raise_for_status
+
+    def raise_with_hint():
+        try:
+            raise_original()
+        except requests.HTTPError as error:
+            raise requests.HTTPError(
+                f"{error}\n{expired_token_hint()}", response=error.response, request=error.request
+            ) from None
+
+    response.raise_for_status = raise_with_hint
+    return response
 
 
 # Reads, queries (POST to entries/query) and logins: safe to send again.

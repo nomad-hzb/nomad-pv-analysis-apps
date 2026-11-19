@@ -4,6 +4,7 @@ import os
 import requests
 
 from hysprint_utils.api_calls import get_current_user, password_login
+from hysprint_utils.north import expired_token_hint, is_expired_token
 
 # Re-exported: code written against auth_manager.LAYOUT / STRINGS keeps working.
 from hysprint_utils.ui_constants import LAYOUT, STRINGS  # noqa: F401
@@ -140,6 +141,8 @@ class AuthenticationManager:
                     )
             except json.JSONDecodeError:
                 error_message = f"API Error ({e.response.status_code}): {e.response.text}"
+            if is_expired_token(e.response):
+                error_message += f" {expired_token_hint()}"
         else:
             error_message = f"Network/API Error: {e}"
 
