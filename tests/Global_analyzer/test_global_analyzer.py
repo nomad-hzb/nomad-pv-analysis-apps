@@ -289,6 +289,32 @@ def test_load_spin_coating_data_operator_defaults_to_empty_string():
     assert df.loc[0, "operator"] == ""
 
 
+def test_load_spin_coating_data_extracts_spin_delay_per_step():
+    steps = [
+        {"time": 10.0, "speed": 1000.0, "acceleration": 500.0, "spin_delay": 0.5},
+        {"time": 30.0, "speed": 4000.0, "acceleration": 2000.0, "spin_delay": 0.5},
+    ]
+    fake_data = {"s1": [[{"name": "spin", "recipe_steps": steps}]]}
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_spin_coating_data(["s1"], {"s1": "v1"})
+
+    assert df.loc[0, "step_1_spin_delay"] == 0.5
+    assert df.loc[0, "step_2_spin_delay"] == 0.5
+    assert df.loc[0, "step_1_time"] == 10.0
+
+
+def test_load_spin_coating_data_spin_delay_missing_in_older_entries_is_none():
+    # entries processed before nomad-baseclasses had spin_delay: missing, never 0
+    fake_data = {"s1": [[{"name": "spin", "recipe_steps": [{"time": 30.0, "speed": 3000.0}]}]]}
+    loader = _fake_loader(fake_data)
+
+    df = loader.load_spin_coating_data(["s1"], {"s1": "v1"})
+
+    assert df.loc[0, "step_1_spin_delay"] is None
+    assert df.loc[0, "step_1_time"] == 30.0
+
+
 def test_load_annealing_data_renames_columns_to_avoid_embedded_annealing_collision():
     # HySprint_Annealing (a standalone entry) nests temperature/time/atmosphere
     # under the same "annealing" key the embedded per-process extractors

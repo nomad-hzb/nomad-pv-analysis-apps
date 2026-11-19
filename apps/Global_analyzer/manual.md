@@ -18,7 +18,10 @@ lists which result types were found and which parameters exist. Alternatively yo
 your own table (see *Analysis Data*). For the coating steps (spin coating, slot die coating,
 inkjet printing) every recorded value is kept as a parameter, including the concentration,
 volume and chemical ID of each solute and solvent (for example `solute_concentration_<name>`),
-so a value that differs between samples can be selected and plotted.
+so a value that differs between samples can be selected and plotted. The spin
+coating recipe steps appear as `step_<n>_time`, `step_<n>_speed`, `step_<n>_acceleration` and
+`step_<n>_spin_delay`; the spin delay is empty for entries that NOMAD processed before it was
+recorded.
 
 ## Step by step
 
