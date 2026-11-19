@@ -197,3 +197,85 @@ def test_showing_plots_again_closes_the_previous_ones():
     ResizablePlotManager.display_plots_resizable([go.Figure()], ["second"])
     assert all(widget.comm is None for widget in first)  # closed
     assert ResizablePlotManager._live_widgets and ResizablePlotManager._live_widgets[0] not in first
+
+
+# ---------------------------------------------------------------------------
+# Hover: every box plot names the sample and cell of each point (#279)
+# ---------------------------------------------------------------------------
+
+BIG_FOUR = ["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)"]
+
+
+@pytest.fixture
+def hover_df(jvc_df):
+    """Distinct sample per row, a second cell, unique values, one missing PCE value."""
+    df = pd.concat([jvc_df, jvc_df.assign(cell="C2")], ignore_index=True)
+    n = len(df)
+    df["sample"] = [f"S{i}" for i in range(n)]
+    df["Voc(V)"] = [1.0 + i / 100 for i in range(n)]
+    df["Jsc(mA/cm2)"] = [-(20.0 + i) for i in range(n)]
+    df["FF(%)"] = [70.0 + i for i in range(n)]
+    df["PCE(%)"] = [10.0 + i for i in range(n)]
+    df.loc[1, "PCE(%)"] = np.nan  # dropped from y; must not shift the names after it
+    return df
+
+
+def _points(fig):
+    """(value, sample, cell) for every drawn point of every box trace."""
+    out = []
+    for trace in fig.data:
+        assert "Sample" in trace.hovertemplate and "Cell" in trace.hovertemplate
+        # With the sample on the x axis, px shows it from x and customdata holds the cell only.
+        sample_on_x = len(trace.customdata[0]) == 1
+        xs = trace.x if trace.x is not None else [None] * len(trace.y)
+        for x, value, custom in zip(xs, trace.y, trace.customdata):
+            if not pd.isna(value):
+                sample, cell = (x, custom[0]) if sample_on_x else (custom[0], custom[1])
+                out.append((float(value), str(sample), str(cell)))
+    return out
+
+
+def _expected(df, columns=("PCE(%)",)):
+    out = []
+    for column in columns:
+        rows = df.dropna(subset=[column])
+        values = rows[column].abs() if column.startswith("Jsc") else rows[column]
+        out += [(float(v), s, c) for v, s, c in zip(values, rows["sample"], rows["cell"])]
+    return out
+
+
+def test_boxplot_hover_matches_the_point_when_a_value_is_missing(
+    plot_manager, hover_df, filtered_info
+):
+    fig, _, _ = plot_manager.create_boxplot(
+        data=hover_df, var_x="condition", var_y="pce", filtered_info=filtered_info
+    )
+    assert sorted(_points(fig)) == sorted(_expected(hover_df))
+
+
+@pytest.mark.parametrize("combination_type", ["sg", "cg", "bg"])
+def test_combination_plots_hover_names_sample_and_cell(
+    plot_manager, hover_df, filtered_info, combination_type
+):
+    figs, _ = plot_manager.create_combination_plots(
+        hover_df, "pce", combination_type, filtered_info
+    )
+    assert figs
+    points = [p for fig in figs for p in _points(fig)]
+    assert sorted(points) == sorted(_expected(hover_df))
+
+
+def test_triple_combination_plot_hover_names_sample_and_cell(plot_manager, hover_df, filtered_info):
+    figs, _ = plot_manager.create_triple_combination_plots(hover_df, "pce", "sgc", filtered_info)
+    assert sorted(_points(figs[0])) == sorted(_expected(hover_df))
+
+
+@pytest.mark.parametrize("direction_split", [False, True])
+@pytest.mark.parametrize("var_x", ["condition", "sample"])
+def test_big_four_subplots_hover_names_sample_and_cell(
+    plot_manager, hover_df, filtered_info, direction_split, var_x
+):
+    fig, _ = plot_manager.create_voc_jsc_ff_pce_subplots(
+        hover_df, filtered_info, var_x=var_x, direction_split=direction_split
+    )
+    assert sorted(_points(fig)) == sorted(_expected(hover_df, BIG_FOUR))

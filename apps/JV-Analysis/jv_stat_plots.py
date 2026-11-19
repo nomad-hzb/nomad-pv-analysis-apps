@@ -238,7 +238,8 @@ class StatPlotsMixin:
         else:
             # Original single-color per category
             for i, category in enumerate(orderc):
-                category_data = data[data[var_x] == category][var_name_y].dropna()
+                category_rows = data[data[var_x] == category]
+                category_data = category_rows[var_name_y].dropna()
                 if not category_data.empty:
                     data_count = data_counts.get(category, 0)
                     trash_count = trash_counts.get(category, 0)
@@ -264,7 +265,11 @@ class StatPlotsMixin:
                             fillcolor=colors[i % len(colors)],
                             boxmean=True,
                             width=0.8,
-                            customdata=data[data[var_x] == category][["sample", "cell"]].values,
+                            # Same rows as y: a NaN value dropped from y must not shift the
+                            # names of the points after it.
+                            customdata=category_rows.loc[
+                                category_data.index, ["sample", "cell"]
+                            ].values,
                             hovertemplate=(
                                 f"<b>{category}</b><br>"
                                 + "Value: %{y:.3f}<br>"
@@ -598,9 +603,8 @@ class StatPlotsMixin:
 
             # Add boxplot for each secondary value within this primary value
             for i, secondary_val in enumerate(secondary_values):
-                subset_data = primary_data[primary_data[secondary_var] == secondary_val][
-                    var_name_y
-                ].dropna()
+                subset_rows = primary_data[primary_data[secondary_var] == secondary_val]
+                subset_data = subset_rows[var_name_y].dropna()
 
                 if not subset_data.empty:
                     count = len(subset_data)
@@ -620,9 +624,14 @@ class StatPlotsMixin:
                             fillcolor=colors[i % len(colors)],
                             boxmean=True,
                             width=0.8,
+                            customdata=subset_rows.loc[
+                                subset_data.index, ["sample", "cell"]
+                            ].values,
                             hovertemplate=(
                                 f"<b>{secondary_val}</b><br>"
                                 + "Value: %{y:.3f}<br>"
+                                + "Sample: %{customdata[0]}<br>"
+                                + "Cell: %{customdata[1]}<br>"
                                 + f"Median: {median:.3f}<br>"
                                 + f"Mean: {mean:.3f}<br>"
                                 + f"Count: {count}"
@@ -700,12 +709,17 @@ class StatPlotsMixin:
             facet_col="condition",
             facet_col_wrap=3,
             points="outliers",
+            hover_data=[c for c in ("sample", "cell") if c in data.columns],
             template="plotly_white",
             color_discrete_map={
                 "Reverse": "rgba(255, 182, 193, 0.8)",
                 "Forward": "rgba(173, 216, 230, 0.8)",
             },
-            labels={var_name_y: self.UNIT_LABELS.get(var_name_y, var_name_y)},
+            labels={
+                var_name_y: self.UNIT_LABELS.get(var_name_y, var_name_y),
+                "sample": "Sample",
+                "cell": "Cell",
+            },
             title=f"{var_y} by Direction and Status per Condition<br><sup>Light measurements only, {len(data)} records</sup>",  # noqa: E501
         )
 
@@ -989,6 +1003,9 @@ class StatPlotsMixin:
             id_vars = [var_x, "direction"]
         else:
             id_vars = [var_x]
+        # Carried through the melt so a point's hover names its sample and cell.
+        hover_vars = [c for c in ("sample", "cell") if c in data.columns]
+        id_vars += [c for c in hover_vars if c not in id_vars]
 
         # Melt to long format so px.box can use facet_col
         melt_df = data[id_vars + available].melt(
@@ -1025,6 +1042,8 @@ class StatPlotsMixin:
             facet_col_wrap=2,
             facet_col_spacing=0.08,
             points="all",
+            hover_data=hover_vars,
+            labels={"sample": "Sample", "cell": "Cell"},
             template="plotly_white",
             title=(
                 f"The big 4 — Voc, Jsc, FF, PCE by {var_x}{dir_note}<br>"
