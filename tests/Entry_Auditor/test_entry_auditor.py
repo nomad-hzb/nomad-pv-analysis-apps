@@ -7,7 +7,7 @@ import data_manager as dm
 import gui_components as gc
 import pandas as pd
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_batch.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "Entry_Auditor" / "demo" / "sample_batch.json"
 
 # ---------------------------------------------------------------------------
 # modify_file_field -- raw-text regex correction mechanism

@@ -9,7 +9,7 @@ import pytest
 from data_manager import MEASUREMENT_TYPE, NMRDataManager
 from plot_manager import NMRPlotManager
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "NMR_Analysis" / "demo" / "api_responses.json"
 
 
 # ---------------------------------------------------------------------------

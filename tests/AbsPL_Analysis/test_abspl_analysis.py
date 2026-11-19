@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 from data_manager import MEASUREMENT_TYPE, AbsPlDataManager
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "AbsPL_Analysis" / "demo" / "api_responses.json"
 
 
 # ---------------------------------------------------------------------------

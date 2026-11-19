@@ -9,7 +9,9 @@ import plotly.graph_objects as go
 from data_manager import MEASUREMENT_TYPE, XRDDataManager, parse_xy_file
 from plot_manager import XRDPlotManager
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = (
+    Path(__file__).parents[2] / "apps" / "XRD_peak_finder" / "demo" / "api_responses.json"
+)
 
 
 # ---------------------------------------------------------------------------

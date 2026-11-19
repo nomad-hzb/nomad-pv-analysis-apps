@@ -14,7 +14,7 @@ from skimage import segmentation
 
 APP_DIR = Path(__file__).parent.parent.parent / "apps" / "SEM_crystal_counter"
 _SHARED_DIR = Path(__file__).parent.parent.parent / "shared"
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "apps" / "SEM_crystal_counter" / "demo"
 
 # shared/ first, so hysprint_utils is this checkout's and not an older installed copy.
 if str(_SHARED_DIR) not in sys.path:
