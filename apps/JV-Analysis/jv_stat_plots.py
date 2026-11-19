@@ -21,6 +21,34 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# What the hover of a boxplot point names, in this order: (column, label).
+HOVER_FIELDS = (
+    ("sample", "Sample"),
+    ("cell", "Cell"),
+    ("direction", "Scan direction"),
+    ("status", "Status"),
+    ("condition", "Variable"),
+)
+HOVER_LABELS = dict(HOVER_FIELDS)
+
+
+def _hover_columns(frame):
+    """The HOVER_FIELDS columns frame has."""
+    return [column for column, _ in HOVER_FIELDS if column in frame.columns]
+
+
+def _hover_point(frame, index):
+    """customdata for the points frame.loc[index] and the hovertemplate lines naming them.
+
+    index must be the rows actually drawn (after dropna on y), or the names of the points
+    after a dropped value would shift onto the wrong points."""
+    columns = _hover_columns(frame)
+    customdata = frame.loc[index, columns].astype(object).fillna("").values
+    lines = "<br>".join(
+        f"{HOVER_LABELS[column]}: %{{customdata[{i}]}}" for i, column in enumerate(columns)
+    )
+    return customdata, lines
+
 
 def _parse_custom_order(order_str):
     """
@@ -202,13 +230,14 @@ class StatPlotsMixin:
             for direction in ["Reverse", "Forward"]:
                 dir_data = data[data["direction"] == direction]
                 x_vals, y_vals, customdata = [], [], []
+                hover_lines = _hover_point(dir_data, dir_data.index[:0])[1]
                 for category in orderc:
                     cat_dir = dir_data[dir_data[var_x] == category]
                     ys = cat_dir[var_name_y].dropna()
                     if not ys.empty:
                         x_vals.extend([str(category)] * len(ys))
                         y_vals.extend(ys.tolist())
-                        customdata.extend(cat_dir.loc[ys.index, ["sample", "cell"]].values.tolist())
+                        customdata.extend(_hover_point(cat_dir, ys.index)[0].tolist())
 
                 if y_vals:
                     fig.add_trace(
@@ -229,8 +258,7 @@ class StatPlotsMixin:
                             hovertemplate=(
                                 f"<b>%{{x}} — {direction}</b><br>"
                                 + "Value: %{y:.3f}<br>"
-                                + "Sample: %{customdata[0]}<br>"
-                                + "Cell: %{customdata[1]}"
+                                + hover_lines
                             ),
                         )
                     )
@@ -238,7 +266,8 @@ class StatPlotsMixin:
         else:
             # Original single-color per category
             for i, category in enumerate(orderc):
-                category_data = data[data[var_x] == category][var_name_y].dropna()
+                category_rows = data[data[var_x] == category]
+                category_data = category_rows[var_name_y].dropna()
                 if not category_data.empty:
                     data_count = data_counts.get(category, 0)
                     trash_count = trash_counts.get(category, 0)
@@ -250,6 +279,7 @@ class StatPlotsMixin:
                         if trash_count == 0
                         else f"{category} ({data_count}/{data_count + trash_count})"
                     )
+                    customdata, hover_lines = _hover_point(category_rows, category_data.index)
 
                     fig.add_trace(
                         go.Box(
@@ -264,12 +294,11 @@ class StatPlotsMixin:
                             fillcolor=colors[i % len(colors)],
                             boxmean=True,
                             width=0.8,
-                            customdata=data[data[var_x] == category][["sample", "cell"]].values,
+                            customdata=customdata,
                             hovertemplate=(
                                 f"<b>{category}</b><br>"
                                 + "Value: %{y:.3f}<br>"
-                                + "Sample: %{customdata[0]}<br>"
-                                + "Cell: %{customdata[1]}<br>"
+                                + f"{hover_lines}<br>"
                                 + f"Median: {median:.3f}<br>"
                                 + f"Mean: {mean:.3f}<br>"
                                 + f"Count: {data_count}"
@@ -598,9 +627,9 @@ class StatPlotsMixin:
 
             # Add boxplot for each secondary value within this primary value
             for i, secondary_val in enumerate(secondary_values):
-                subset_data = primary_data[primary_data[secondary_var] == secondary_val][
-                    var_name_y
-                ].dropna()
+                subset_rows = primary_data[primary_data[secondary_var] == secondary_val]
+                subset_data = subset_rows[var_name_y].dropna()
+                customdata, hover_lines = _hover_point(subset_rows, subset_data.index)
 
                 if not subset_data.empty:
                     count = len(subset_data)
@@ -620,9 +649,11 @@ class StatPlotsMixin:
                             fillcolor=colors[i % len(colors)],
                             boxmean=True,
                             width=0.8,
+                            customdata=customdata,
                             hovertemplate=(
                                 f"<b>{secondary_val}</b><br>"
                                 + "Value: %{y:.3f}<br>"
+                                + f"{hover_lines}<br>"
                                 + f"Median: {median:.3f}<br>"
                                 + f"Mean: {mean:.3f}<br>"
                                 + f"Count: {count}"
@@ -700,12 +731,16 @@ class StatPlotsMixin:
             facet_col="condition",
             facet_col_wrap=3,
             points="outliers",
+            hover_data=_hover_columns(data),
             template="plotly_white",
             color_discrete_map={
                 "Reverse": "rgba(255, 182, 193, 0.8)",
                 "Forward": "rgba(173, 216, 230, 0.8)",
             },
-            labels={var_name_y: self.UNIT_LABELS.get(var_name_y, var_name_y)},
+            labels={
+                **HOVER_LABELS,
+                var_name_y: self.UNIT_LABELS.get(var_name_y, var_name_y),
+            },
             title=f"{var_y} by Direction and Status per Condition<br><sup>Light measurements only, {len(data)} records</sup>",  # noqa: E501
         )
 
@@ -989,6 +1024,10 @@ class StatPlotsMixin:
             id_vars = [var_x, "direction"]
         else:
             id_vars = [var_x]
+        # Carried through the melt so a point's hover names its sample, cell, scan direction,
+        # status and variable.
+        hover_vars = _hover_columns(data)
+        id_vars += [c for c in hover_vars if c not in id_vars]
 
         # Melt to long format so px.box can use facet_col
         melt_df = data[id_vars + available].melt(
@@ -1025,6 +1064,8 @@ class StatPlotsMixin:
             facet_col_wrap=2,
             facet_col_spacing=0.08,
             points="all",
+            hover_data=hover_vars,
+            labels=HOVER_LABELS,
             template="plotly_white",
             title=(
                 f"The big 4 — Voc, Jsc, FF, PCE by {var_x}{dir_note}<br>"
