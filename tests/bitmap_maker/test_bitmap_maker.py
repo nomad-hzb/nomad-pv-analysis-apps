@@ -202,3 +202,34 @@ def test_controls_keep_their_width_next_to_a_wide_preview():
     controls, preview = row.children
     assert controls.layout.flex == "0 0 auto" and controls.layout.min_width == "340px"
     assert preview.layout.min_width == "0" and preview.layout.flex == "1 1 0"
+
+
+def _floyd_steinberg_reference(shape, black_percentage):
+    """The original per-pixel numpy implementation (before issue #271), as the reference."""
+    rows, cols = shape
+    image = np.full(shape, (100 - black_percentage) / 100.0, dtype=float)
+    for y in range(rows):
+        for x in range(cols):
+            old_pixel = image[y, x]
+            new_pixel = 1.0 if old_pixel > 0.5 else 0.0
+            image[y, x] = new_pixel
+            error = old_pixel - new_pixel
+            if x + 1 < cols:
+                image[y, x + 1] += error * 7 / 16
+            if y + 1 < rows:
+                if x > 0:
+                    image[y + 1, x - 1] += error * 3 / 16
+                image[y + 1, x] += error * 5 / 16
+                if x + 1 < cols:
+                    image[y + 1, x + 1] += error * 1 / 16
+    return image < 0.5
+
+
+@pytest.mark.parametrize("shape", [(1, 1), (1, 9), (9, 1), (13, 17), (40, 33)])
+@pytest.mark.parametrize("pct", [0, 0.5, 33.3, 50, 50.0001, 99.5, 100])
+def test_floyd_steinberg_matches_the_original_pixel_for_pixel(shape, pct):
+    import utils
+
+    fast = utils.floyd_steinberg_dither(shape, pct)
+    assert fast.dtype == bool and fast.shape == shape
+    assert (fast == _floyd_steinberg_reference(shape, pct)).all()
