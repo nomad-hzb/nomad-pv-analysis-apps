@@ -36,7 +36,9 @@ _gui_spec.loader.exec_module(_gui)
 
 from data_manager import XRDDataManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = (
+    Path(__file__).parents[2] / "apps" / "XRD_peak_finder" / "demo" / "api_responses.json"
+)
 
 
 @pytest.fixture

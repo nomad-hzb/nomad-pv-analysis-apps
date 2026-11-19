@@ -8,7 +8,7 @@ Usage:
         --batch BATCH_ID \\
         --app TRPL_Analysis
 
-Writes: tests/<app>/fixtures/api_responses.json
+Writes: apps/<app>/demo/api_responses.json (the app's demo data, also used by its tests)
 """
 
 import argparse
@@ -126,7 +126,7 @@ def main():
     )
     parser.add_argument(
         "--out",
-        help="Output path (default: tests/<app>/fixtures/api_responses.json)",
+        help="Output path (default: apps/<app>/demo/api_responses.json)",
     )
     args = parser.parse_args()
 
@@ -137,7 +137,7 @@ def main():
     out_path = (
         Path(args.out)
         if args.out
-        else Path(__file__).parent.parent / "tests" / args.app / "fixtures" / "api_responses.json"
+        else Path(__file__).parent.parent / "apps" / args.app / "demo" / "api_responses.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

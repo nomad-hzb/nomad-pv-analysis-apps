@@ -16,14 +16,13 @@ Classes:
 Author: HySprint Team
 """
 
+import html
 import logging
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from IPython.display import HTML, clear_output
-from IPython.display import display as ipy_display
 from plotly.subplots import make_subplots
 from utils import get_material_column as _get_material_column
 
@@ -58,6 +57,18 @@ def _ordered_unique_values(series: pd.Series) -> list:
     return sorted(series.dropna().unique())
 
 
+def selected_sample_html(sample_id, url: str | None) -> str:
+    """HTML for a clicked point: the sample id and, if known, its NOMAD link. Both are
+    escaped, since they come from NOMAD."""
+    label = f"<b>Selected:</b> {html.escape(str(sample_id))}"
+    if not url:
+        return f'{label} <span style="color:gray;">(no NOMAD link available)</span>'
+    return (
+        f'{label} &nbsp;<a href="{html.escape(str(url), quote=True)}" target="_blank" '
+        f'style="color:#1a73e8;font-weight:bold;">\U0001f517 Open in NOMAD</a>'
+    )
+
+
 class PlotManager:
     """Manages plot creation and data preparation."""
 
@@ -68,14 +79,12 @@ class PlotManager:
         correlation_widget=None,
         rf_widget=None,
         bo_widget=None,
-        correlation_scatter_output=None,
         pca_widget=None,
         pareto_widget=None,
         outlier_widget=None,
         drift_widget=None,
         anova_widget=None,
         bo_loo_widget=None,
-        rf_pdp_output=None,
     ):
         """
         Initialize plot manager.
@@ -86,12 +95,6 @@ class PlotManager:
             correlation_widget: Plotly FigureWidget for the correlation matrix heatmap
             rf_widget: Plotly FigureWidget for the Random Forest feature-importance chart
             bo_widget: Plotly FigureWidget for the Bayesian Optimization suggestions chart
-            correlation_scatter_output: Output widget for the correlation scatter-matrix
-                view (a second FigureWidget doesn't work here - its subplot grid size
-                changes with how many parameters pass the min_unique filter, and a
-                FigureWidget's axis layout doesn't cleanly reset between calls with a
-                different grid size, so this view is rendered fresh into an Output
-                each time instead)
             pca_widget: Plotly FigureWidget for the Experimental tab's PCA scatter
             pareto_widget: Plotly FigureWidget for the Experimental tab's Pareto front
             outlier_widget: Plotly FigureWidget for the Experimental tab's outlier plot
@@ -101,9 +104,6 @@ class PlotManager:
                 open on the main Plotting tab
             bo_loo_widget: Plotly FigureWidget for the Bayesian Optimization tab's
                 leave-one-sample-out model check (predicted vs observed)
-            rf_pdp_output: Output widget for the Random Forest partial-dependence
-                subplots (an Output, like correlation_scatter_output, because the
-                number of subplots varies)
         """
         self.plot_widget = plot_widget
         self.stats_output = stats_output
@@ -111,8 +111,6 @@ class PlotManager:
         self.rf_widget = rf_widget
         self.bo_widget = bo_widget
         self.bo_loo_widget = bo_loo_widget
-        self.rf_pdp_output = rf_pdp_output
-        self.correlation_scatter_output = correlation_scatter_output
         self.pca_widget = pca_widget
         self.pareto_widget = pareto_widget
         self.outlier_widget = outlier_widget
@@ -332,10 +330,11 @@ class PlotManager:
 
         return df
 
-    def register_click_handler(self, sample_entry_links: dict, output_widget):
+    def register_click_handler(self, sample_entry_links: dict, show_html):
         """
         Attach a click handler to the FigureWidget.
-        Clicking a point displays a clickable NOMAD link in output_widget.
+        Clicking a point calls show_html with selected_sample_html's text (a NOMAD link);
+        the GUI decides where it appears.
         Requires customdata[0] = sample_id (set in create_scatter_plot / create_box_plot).
         """
 
@@ -348,26 +347,7 @@ class PlotManager:
             except (IndexError, TypeError):
                 return
 
-            url = sample_entry_links.get(sample_id)
-
-            with output_widget:
-                clear_output(wait=True)
-                if url:
-                    ipy_display(
-                        HTML(
-                            f"<b>Selected:</b> {sample_id} &nbsp;"
-                            f'<a href="{url}" target="_blank" '
-                            f'style="color:#1a73e8;font-weight:bold;">'
-                            f"\U0001f517 Open in NOMAD</a>"
-                        )
-                    )
-                else:
-                    ipy_display(
-                        HTML(
-                            f"<b>Selected:</b> {sample_id} "
-                            f'<span style="color:gray;">(no NOMAD link available)</span>'
-                        )
-                    )
+            show_html(selected_sample_html(sample_id, sample_entry_links.get(sample_id)))
 
         # Attach to all current traces
         for trace in self.plot_widget.data:
@@ -682,22 +662,20 @@ class PlotManager:
         )
         return results_used, metadata_used
 
-    def create_correlation_scatter_matrix(
+    def correlation_scatter_matrix_figure(
         self, df: pd.DataFrame, min_unique: int = 5, max_params: int = 12
     ) -> tuple:
         """
-        Render the second correlation view (matching JV-Analysis's Heatmap/Scatter
-        Matrix pair): diagonal histograms, lower-triangle scatter, upper-triangle
-        Pearson r as colored text. Capped at max_params columns - an NxN subplot grid
-        gets unusably large/slow well before then.
+        The second correlation view (matching JV-Analysis's Heatmap/Scatter Matrix pair):
+        diagonal histograms, lower-triangle scatter, upper-triangle Pearson r as colored
+        text. Capped at max_params columns - an NxN subplot grid gets unusably large/slow
+        well before then.
 
-        Renders into self.correlation_scatter_output (a plain Output, not a
-        FigureWidget - see __init__'s docstring for why) rather than
-        self.correlation_widget. Returns (columns_used, truncated).
+        Returns (figure, columns_used, truncated); figure is None with fewer than two
+        usable columns. The GUI shows it in a plain Output, not a FigureWidget: the grid
+        size changes with how many parameters pass min_unique, and a FigureWidget's axis
+        layout does not reset cleanly between grids of different sizes.
         """
-        if self.correlation_scatter_output is None:
-            raise ValueError("PlotManager has no correlation_scatter_output configured")
-
         numeric_df = df.select_dtypes(include="number")
         varying_cols = [
             col for col in numeric_df.columns if numeric_df[col].dropna().nunique() > min_unique
@@ -705,131 +683,126 @@ class PlotManager:
         truncated = len(varying_cols) > max_params
         varying_cols = varying_cols[:max_params]
 
-        with self.correlation_scatter_output:
-            clear_output(wait=True)
+        if len(varying_cols) < 2:
+            return None, varying_cols, truncated
 
-            if len(varying_cols) < 2:
-                return varying_cols, truncated
+        subset = numeric_df[varying_cols]
+        corr = subset.corr()
+        n = len(varying_cols)
 
-            subset = numeric_df[varying_cols]
-            corr = subset.corr()
-            n = len(varying_cols)
+        scatter_color = "rgba(93, 164, 214, 0.5)"
+        hist_color = "rgba(93, 164, 214, 0.7)"
 
-            scatter_color = "rgba(93, 164, 214, 0.5)"
-            hist_color = "rgba(93, 164, 214, 0.7)"
+        fig = make_subplots(
+            rows=n,
+            cols=n,
+            shared_xaxes=False,
+            shared_yaxes=False,
+            horizontal_spacing=0.04,
+            vertical_spacing=0.04,
+        )
 
-            fig = make_subplots(
-                rows=n,
-                cols=n,
-                shared_xaxes=False,
-                shared_yaxes=False,
-                horizontal_spacing=0.04,
-                vertical_spacing=0.04,
-            )
+        for row_idx, label_y in enumerate(varying_cols):
+            for col_idx, label_x in enumerate(varying_cols):
+                r, c = row_idx + 1, col_idx + 1
 
-            for row_idx, label_y in enumerate(varying_cols):
-                for col_idx, label_x in enumerate(varying_cols):
-                    r, c = row_idx + 1, col_idx + 1
-
-                    if col_idx > row_idx:
-                        # Upper triangle: Pearson r as colored text (red=positive, blue=negative)
-                        r_val = corr.loc[label_y, label_x]
-                        abs_r = abs(r_val)
-                        text_color = (
-                            f"rgba(215, 48, 39, {0.4 + 0.6 * abs_r:.2f})"
-                            if r_val > 0
-                            else f"rgba(69, 117, 180, {0.4 + 0.6 * abs_r:.2f})"
-                        )
-                        font_size = int(9 + 9 * abs_r)
-                        fig.add_trace(
-                            go.Scatter(
-                                x=[0.5],
-                                y=[0.5],
-                                mode="text",
-                                text=[f"<b>{r_val:.2f}</b>"],
-                                textfont=dict(size=font_size, color=text_color),
-                                showlegend=False,
-                                hovertemplate=(
-                                    f"<b>{label_x} vs {label_y}</b><br>"
-                                    f"Pearson r = {r_val:.3f}<extra></extra>"
-                                ),
+                if col_idx > row_idx:
+                    # Upper triangle: Pearson r as colored text (red=positive, blue=negative)
+                    r_val = corr.loc[label_y, label_x]
+                    abs_r = abs(r_val)
+                    text_color = (
+                        f"rgba(215, 48, 39, {0.4 + 0.6 * abs_r:.2f})"
+                        if r_val > 0
+                        else f"rgba(69, 117, 180, {0.4 + 0.6 * abs_r:.2f})"
+                    )
+                    font_size = int(9 + 9 * abs_r)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[0.5],
+                            y=[0.5],
+                            mode="text",
+                            text=[f"<b>{r_val:.2f}</b>"],
+                            textfont=dict(size=font_size, color=text_color),
+                            showlegend=False,
+                            hovertemplate=(
+                                f"<b>{label_x} vs {label_y}</b><br>"
+                                f"Pearson r = {r_val:.3f}<extra></extra>"
                             ),
-                            row=r,
-                            col=c,
-                        )
-                        fig.update_xaxes(
-                            range=[0, 1],
-                            showticklabels=False,
-                            showgrid=False,
-                            zeroline=False,
-                            row=r,
-                            col=c,
-                        )
-                        fig.update_yaxes(
-                            range=[0, 1],
-                            showticklabels=False,
-                            showgrid=False,
-                            zeroline=False,
-                            row=r,
-                            col=c,
-                        )
-                        continue
-                    elif col_idx == row_idx:
-                        # Diagonal: histogram of the variable
-                        vals = subset[label_x].dropna()
-                        fig.add_trace(
-                            go.Histogram(
-                                x=vals,
-                                marker_color=hist_color,
-                                showlegend=False,
-                                hovertemplate=(
-                                    f"<b>{label_x}</b><br>Value: %{{x:.3f}}<br>"
-                                    "Count: %{y}<extra></extra>"
-                                ),
+                        ),
+                        row=r,
+                        col=c,
+                    )
+                    fig.update_xaxes(
+                        range=[0, 1],
+                        showticklabels=False,
+                        showgrid=False,
+                        zeroline=False,
+                        row=r,
+                        col=c,
+                    )
+                    fig.update_yaxes(
+                        range=[0, 1],
+                        showticklabels=False,
+                        showgrid=False,
+                        zeroline=False,
+                        row=r,
+                        col=c,
+                    )
+                    continue
+                elif col_idx == row_idx:
+                    # Diagonal: histogram of the variable
+                    vals = subset[label_x].dropna()
+                    fig.add_trace(
+                        go.Histogram(
+                            x=vals,
+                            marker_color=hist_color,
+                            showlegend=False,
+                            hovertemplate=(
+                                f"<b>{label_x}</b><br>Value: %{{x:.3f}}<br>"
+                                "Count: %{y}<extra></extra>"
                             ),
-                            row=r,
-                            col=c,
-                        )
-                    else:
-                        # Lower triangle: scatter
-                        common_idx = subset[[label_x, label_y]].dropna().index
-                        fig.add_trace(
-                            go.Scatter(
-                                x=subset.loc[common_idx, label_x],
-                                y=subset.loc[common_idx, label_y],
-                                mode="markers",
-                                marker=dict(size=3, color=scatter_color, opacity=0.7),
-                                showlegend=False,
-                                hovertemplate=(
-                                    f"<b>{label_x} vs {label_y}</b><br>"
-                                    f"{label_x}: %{{x:.3f}}<br>"
-                                    f"{label_y}: %{{y:.3f}}<extra></extra>"
-                                ),
+                        ),
+                        row=r,
+                        col=c,
+                    )
+                else:
+                    # Lower triangle: scatter
+                    common_idx = subset[[label_x, label_y]].dropna().index
+                    fig.add_trace(
+                        go.Scatter(
+                            x=subset.loc[common_idx, label_x],
+                            y=subset.loc[common_idx, label_y],
+                            mode="markers",
+                            marker=dict(size=3, color=scatter_color, opacity=0.7),
+                            showlegend=False,
+                            hovertemplate=(
+                                f"<b>{label_x} vs {label_y}</b><br>"
+                                f"{label_x}: %{{x:.3f}}<br>"
+                                f"{label_y}: %{{y:.3f}}<extra></extra>"
                             ),
-                            row=r,
-                            col=c,
-                        )
+                        ),
+                        row=r,
+                        col=c,
+                    )
 
-            for i, label in enumerate(varying_cols):
-                fig.update_xaxes(title_text=label, title_font=dict(size=9), row=n, col=i + 1)
-                if i > 0:
-                    fig.update_yaxes(title_text=label, title_font=dict(size=9), row=i + 1, col=1)
+        for i, label in enumerate(varying_cols):
+            fig.update_xaxes(title_text=label, title_font=dict(size=9), row=n, col=i + 1)
+            if i > 0:
+                fig.update_yaxes(title_text=label, title_font=dict(size=9), row=i + 1, col=1)
 
-            cell_size = max(90, min(150, 900 // n))
-            title = f"Scatter matrix ({n} parameters, >{min_unique} unique values)"
-            if truncated:
-                title += f" - showing first {max_params}"
-            fig.update_layout(
-                title=title,
-                height=cell_size * n + 80,
-                template="plotly_white",
-                margin=dict(l=80, r=40, t=80, b=80),
-                showlegend=False,
-            )
+        cell_size = max(90, min(150, 900 // n))
+        title = f"Scatter matrix ({n} parameters, >{min_unique} unique values)"
+        if truncated:
+            title += f" - showing first {max_params}"
+        fig.update_layout(
+            title=title,
+            height=cell_size * n + 80,
+            template="plotly_white",
+            margin=dict(l=80, r=40, t=80, b=80),
+            showlegend=False,
+        )
 
-            ipy_display(fig)
-
-        return varying_cols, truncated
+        return fig, varying_cols, truncated
 
     def create_feature_importance_plot(self, importances: list, target: str):
         """Render Random Forest permutation importances, (name, mean, sd) tuples, as
@@ -861,51 +834,46 @@ class PlotManager:
             margin=dict(l=200),
         )
 
-    def create_partial_dependence_plot(self, partial_dependence: list, target: str):
+    def partial_dependence_figure(self, partial_dependence: list, target: str):
         """One subplot per parameter from ml_analysis.run_random_forest's
-        partial_dependence: a line for a numeric parameter, bars for a
-        categorical one. Each shows the forest's average prediction as only that
-        parameter changes."""
-        if self.rf_pdp_output is None:
-            raise ValueError("PlotManager has no rf_pdp_output configured")
-
-        with self.rf_pdp_output:
-            clear_output(wait=True)
-            if not partial_dependence:
-                return
-            fig = make_subplots(
-                rows=1,
-                cols=len(partial_dependence),
-                subplot_titles=[item["feature"] for item in partial_dependence],
-                shared_yaxes=True,
-            )
-            for i, item in enumerate(partial_dependence, start=1):
-                if item["kind"] == "categorical":
-                    trace = go.Bar(
-                        x=[str(g) for g in item["grid"]],
-                        y=item["average"],
-                        marker=dict(color="#2E86AB"),
-                        showlegend=False,
-                    )
-                else:
-                    trace = go.Scatter(
-                        x=item["grid"],
-                        y=item["average"],
-                        mode="lines+markers",
-                        line=dict(color="#2E86AB"),
-                        showlegend=False,
-                    )
-                fig.add_trace(trace, row=1, col=i)
-            fig.update_yaxes(title_text=f"Predicted {target}", row=1, col=1)
-            fig.update_layout(
-                title=(
-                    f"How {target} changes with each top parameter "
-                    "(others held at their measured values)"
-                ),
-                template="plotly_white",
-                height=380,
-            )
-            ipy_display(fig)
+        partial_dependence: a line for a numeric parameter, bars for a categorical one. Each
+        shows the forest's average prediction as only that parameter changes. Returns the
+        figure, or None when there is nothing to show; the GUI displays it."""
+        if not partial_dependence:
+            return None
+        fig = make_subplots(
+            rows=1,
+            cols=len(partial_dependence),
+            subplot_titles=[item["feature"] for item in partial_dependence],
+            shared_yaxes=True,
+        )
+        for i, item in enumerate(partial_dependence, start=1):
+            if item["kind"] == "categorical":
+                trace = go.Bar(
+                    x=[str(g) for g in item["grid"]],
+                    y=item["average"],
+                    marker=dict(color="#2E86AB"),
+                    showlegend=False,
+                )
+            else:
+                trace = go.Scatter(
+                    x=item["grid"],
+                    y=item["average"],
+                    mode="lines+markers",
+                    line=dict(color="#2E86AB"),
+                    showlegend=False,
+                )
+            fig.add_trace(trace, row=1, col=i)
+        fig.update_yaxes(title_text=f"Predicted {target}", row=1, col=1)
+        fig.update_layout(
+            title=(
+                f"How {target} changes with each top parameter "
+                "(others held at their measured values)"
+            ),
+            template="plotly_white",
+            height=380,
+        )
+        return fig
 
     def create_pareto_suggestions_plot(
         self, measured: pd.DataFrame, suggestions: pd.DataFrame, col_a: str, col_b: str

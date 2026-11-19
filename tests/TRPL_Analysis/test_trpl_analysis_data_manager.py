@@ -11,7 +11,7 @@ import pytest
 from data_manager import MEASUREMENT_TYPE, TRPLDataManager
 from plot_manager import TRPLPlotManager
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "TRPL_Analysis" / "demo" / "api_responses.json"
 
 
 # ---------------------------------------------------------------------------

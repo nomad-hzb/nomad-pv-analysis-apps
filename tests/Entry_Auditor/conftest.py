@@ -39,7 +39,7 @@ if "gui_components" not in sys.modules or not hasattr(
 
 from data_manager import EntryAuditSession  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_batch.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "Entry_Auditor" / "demo" / "sample_batch.json"
 
 
 @pytest.fixture

@@ -24,8 +24,7 @@ from hysprint_utils.plotting_utils import WidgetFactory
 
 logger = logging.getLogger(__name__)
 
-_TESTS_ROOT = Path(__file__).parent.parent.parent / "tests"
-DEMO_FIXTURE_PATH = _TESTS_ROOT / "XRD_peak_finder" / "fixtures" / "api_responses.json"
+DEMO_FIXTURE_PATH = Path(__file__).parent / "demo" / "api_responses.json"
 
 
 class XRDApp:

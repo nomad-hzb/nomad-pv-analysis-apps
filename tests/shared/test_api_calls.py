@@ -479,7 +479,7 @@ def test_logins_and_lookups_share_the_read_session():
     from hysprint_utils import access_token, api_calls, auth_manager
 
     assert access_token.prompt_login is api_calls.prompt_login  # whose login uses SESSION
-    assert auth_manager.SESSION is api_calls.SESSION
+    assert auth_manager.get_current_user is api_calls.get_current_user  # on SESSION
 
 
 class _UsersResponse:
@@ -541,3 +541,53 @@ def test_sample_entry_links_only_for_the_requested_samples(monkeypatch):
     links = api_calls.get_sample_entry_links("https://o.test/nomad-oasis/api/v1", "t", ["S1", "S2"])
     assert set(links) == {"S1", "S2"}
     assert links["S2"].endswith("/upload/id/u2/entry/id/e2")
+
+
+class _MeResponse:
+    def __init__(self, status, data=None):
+        self.status_code = status
+        self._data = data if data is not None else {"detail": "Not authenticated"}
+        self.text = str(self._data)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+    def json(self):
+        return self._data
+
+
+def test_get_current_user_asks_users_me_with_the_token(monkeypatch):
+    from hysprint_utils import api_calls
+
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append((url, headers))
+        return _MeResponse(200, {"name": "Ada"})
+
+    monkeypatch.setattr(api_calls.SESSION, "get", fake_get)
+    assert api_calls.get_current_user("https://e.test/api/v1", "tok") == {"name": "Ada"}
+    assert calls == [("https://e.test/api/v1/users/me", {"Authorization": "Bearer tok"})]
+
+
+def test_verify_token_uses_the_shared_check_and_reports_a_refusal(monkeypatch):
+    import requests
+
+    from hysprint_utils import api_calls, auth_manager
+
+    manager = auth_manager.AuthenticationManager("https://e.test", "/api/v1")
+    manager.current_token = "tok"
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _MeResponse(200, {"name": "Ada"}))
+    assert manager.verify_token() == {"name": "Ada"}
+    assert manager.get_user_display_name() == "Ada"
+
+    monkeypatch.setattr(api_calls.SESSION, "get", lambda *a, **k: _MeResponse(401))
+    try:
+        manager.verify_token()
+    except requests.HTTPError:
+        pass
+    else:
+        raise AssertionError("a refused token must raise")

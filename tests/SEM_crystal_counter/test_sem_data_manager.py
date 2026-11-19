@@ -8,7 +8,7 @@ import data_manager as dm
 import numpy as np
 import pytest
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "apps" / "SEM_crystal_counter" / "demo"
 
 
 @pytest.fixture(scope="module")

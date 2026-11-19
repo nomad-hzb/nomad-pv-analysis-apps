@@ -7,7 +7,7 @@ import pytest
 from data_manager import DataManager, JVRow
 from pydantic import ValidationError
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "JV-Analysis" / "demo" / "api_responses.json"
 
 
 # ---------------------------------------------------------------------------

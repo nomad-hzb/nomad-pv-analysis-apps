@@ -12,6 +12,8 @@ from typing import Optional
 
 import requests
 
+from hysprint_utils.api_calls import get_current_user
+
 
 @dataclass
 class AuthResult:
@@ -32,13 +34,7 @@ def authenticate(api_url, token=None, timeout=10):
     if not token:
         return AuthResult(False, None, None, None, "Not signed in. Using public data.", None)
     try:
-        resp = requests.get(
-            f"{api_url.rstrip('/')}/users/me",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        info = resp.json()
+        info = get_current_user(api_url.rstrip("/"), token, timeout=timeout)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status in (401, 403):

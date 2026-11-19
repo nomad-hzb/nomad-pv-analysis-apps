@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parent.parent
 APPS = ROOT / "apps"
 PARKED = {"Electrochemical_analysis", "XPS-Automated"}
 
+# The layers a new frontend (Dash) reuses as they are: no ipywidgets and no IPython.display
+# (CLAUDE.md layout). get_ipython for the IPython store is not a widget and stays allowed.
+WIDGET_FREE_MODULES = {"data_manager.py", "plot_manager.py"}
+
 BOOTSTRAP_CELL = 'import runpy\n\n_ = runpy.run_path("../../bootstrap.py")'
 OASIS_HOSTS = ("nomad-hzb-se", "helmholtz-berlin.de")
 
@@ -88,6 +92,19 @@ def _in_import_error_fallback(node, parents) -> bool:
     return False
 
 
+def _imported_modules(tree):
+    """(module, line) for every import in tree, including ones inside functions."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name, node.lineno
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            yield node.module, node.lineno
+            if node.module == "IPython":  # from IPython import display
+                for alias in node.names:
+                    yield f"IPython.{alias.name}", node.lineno
+
+
 def check_python(problems):
     for app in app_dirs():
         for source_file in sorted(app.glob("*.py")):
@@ -119,6 +136,16 @@ def check_python(problems):
                             "Oasis URL literal outside the ImportError fallback",
                         )
                     )
+            if source_file.name in WIDGET_FREE_MODULES:
+                for module, lineno in _imported_modules(tree):
+                    if module.split(".")[0] == "ipywidgets" or module.startswith("IPython.display"):
+                        problems.append(
+                            (
+                                "layer",
+                                f"{rel(source_file)}:{lineno}",
+                                f"{source_file.name} imports {module}; keep it widget-free",
+                            )
+                        )
             if source_file.name.startswith("test_") or source_file.name == "conftest.py":
                 problems.append(("tests", rel(source_file), "tests belong in tests/<App>/"))
 

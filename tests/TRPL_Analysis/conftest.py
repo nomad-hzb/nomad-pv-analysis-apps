@@ -29,7 +29,7 @@ _pm_spec.loader.exec_module(_pm)
 
 from data_manager import TRPLDataManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "TRPL_Analysis" / "demo" / "api_responses.json"
 
 
 @pytest.fixture
