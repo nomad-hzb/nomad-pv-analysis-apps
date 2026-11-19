@@ -12,6 +12,14 @@ _SHARED_DIR = _APP_DIR.parent.parent / "shared"
 if str(_SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(_SHARED_DIR))
 
+# data_manager imports utils by bare name: load it first.
+sys.modules.pop("utils", None)
+_utils_spec = importlib.util.spec_from_file_location("utils_jv", _APP_DIR / "utils.py")
+_utils = importlib.util.module_from_spec(_utils_spec)
+sys.modules["utils_jv"] = _utils
+sys.modules["utils"] = _utils
+_utils_spec.loader.exec_module(_utils)
+
 sys.modules.pop("data_manager", None)
 _spec = importlib.util.spec_from_file_location("dm_jv", _APP_DIR / "data_manager.py")
 _dm = importlib.util.module_from_spec(_spec)
@@ -34,13 +42,6 @@ _pm = importlib.util.module_from_spec(_pm_spec)
 sys.modules["pm_jv"] = _pm
 sys.modules["plot_manager"] = _pm
 _pm_spec.loader.exec_module(_pm)
-
-sys.modules.pop("utils", None)
-_utils_spec = importlib.util.spec_from_file_location("utils_jv", _APP_DIR / "utils.py")
-_utils = importlib.util.module_from_spec(_utils_spec)
-sys.modules["utils_jv"] = _utils
-sys.modules["utils"] = _utils
-_utils_spec.loader.exec_module(_utils)
 
 from data_manager import DataManager  # noqa: E402
 

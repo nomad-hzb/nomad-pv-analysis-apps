@@ -15,12 +15,16 @@ import zipfile
 from pathlib import Path
 
 import ipywidgets as widgets
-import openpyxl
 import pandas as pd
-from data_manager import DataManager, rows_matching
+from data_manager import (
+    DataManager,
+    build_analysis_workbook,
+    conditions_from_inputs,
+    curves_for_rows,
+    filter_summary,
+)
 from gui_components import AuthenticationUI, ColorSchemeSelector, FilterUI, PlotUI, SaveUI
 from IPython.display import Javascript, Markdown, clear_output, display
-from openpyxl.utils.dataframe import dataframe_to_rows
 from plot_manager import plotting_string_action
 from resizable_plot_utility import ResizablePlotManager
 from utils import (
@@ -29,7 +33,6 @@ from utils import (
     flip_current_density_curve_rows,
     flip_current_density_sign,
     measurement_link_html,
-    save_combined_excel_data,
 )
 
 from hysprint_utils.auth_manager import AuthenticationManager
@@ -52,11 +55,6 @@ except ImportError:
     )
     URL_BASE = "https://nomad-hzb-se.helmholtz-berlin.de"
     API_ENDPOINT = "/nomad-oasis/api/v1"
-
-try:
-    from hysprint_utils.api_calls import get_all_measurements_except_JV, get_ids_in_batch
-except ImportError:
-    logger.warning("Warning: Some API modules not available")
 
 
 class JVAnalysisApp:
@@ -375,32 +373,13 @@ If you tested specific variables or conditions for each sample, please write the
         """Handle variable retrieval and condition assignment"""
         self.is_conditions = True
 
-        # Create conditions_dict from the text widget values
         data = self.data_manager.get_data()
+        conditions_dict = {}
         if data and "jvc" in data:
-            conditions_dict = {}
-
-            # For each unique identifier, get the user's input for the condition
-            for identifier in data["jvc"]["identifier"].unique():
-                if identifier in text_widgets_dict:
-                    # Use the user's input from the text widget
-                    user_condition = text_widgets_dict[identifier].value.strip()
-                    if user_condition:
-                        conditions_dict[identifier] = user_condition
-                    else:
-                        # Fallback to variation from identifier if user didn't enter anything
-                        if identifier and "&" in str(identifier):
-                            variation = str(identifier).split("&", 1)[1]
-                            conditions_dict[identifier] = variation
-                        else:
-                            conditions_dict[identifier] = "Unknown"
-                else:
-                    # Fallback for identifiers not in text_widgets_dict
-                    if identifier and "&" in str(identifier):
-                        variation = str(identifier).split("&", 1)[1]
-                        conditions_dict[identifier] = variation
-                    else:
-                        conditions_dict[identifier] = "Unknown"
+            conditions_dict = conditions_from_inputs(
+                data["jvc"]["identifier"].unique(),
+                {key: widget.value for key, widget in text_widgets_dict.items()},
+            )
 
         # Apply the conditions
         success = self.data_manager.apply_conditions(conditions_dict)
@@ -497,11 +476,9 @@ If you tested specific variables or conditions for each sample, please write the
                     return
 
                 url = self.auth_manager.url
-                token = self.auth_manager.current_token
 
                 try:
-                    sample_ids = get_ids_in_batch(url, token, batch_ids_value)
-                    measurements_data = get_all_measurements_except_JV(url, token, sample_ids)
+                    measurements_data = self.data_manager.other_measurements(batch_ids_value)
 
                     df = pd.DataFrame()
 
@@ -547,62 +524,21 @@ If you tested specific variables or conditions for each sample, please write the
                     filter_values, direction_value, selected_items, verbose=True
                 )
 
-                # Show results with detailed breakdown
-                original_count = len(data["jvc"])
-                final_count = len(filtered_df)
-                total_excluded = original_count - final_count
-
-                # Calculate the breakdown of exclusions
-                if selected_items is None:
-                    sample_selection_excluded = 0
-                    filter_condition_excluded = total_excluded
-                else:
-                    sample_selection_excluded = len(
-                        omitted_df[
-                            omitted_df["filter_reason"].str.contains(
-                                "sample/cell not selected", na=False
-                            )
-                        ]
-                    )
-                    filter_condition_excluded = len(
-                        omitted_df[
-                            ~omitted_df["filter_reason"].str.contains(
-                                "sample/cell not selected", na=False
-                            )
-                        ]
-                    )
-
+                summary = filter_summary(len(data["jvc"]), filtered_df, omitted_df, selected_items)
+                final_count = summary["final"]
                 print("Filtering Results:")
-                print("   Original dataset: %d records" % original_count)
-                print("   Excluded by sample selection: %d records" % sample_selection_excluded)
-                print("   Excluded by filter conditions: %d records" % filter_condition_excluded)
+                print("   Original dataset: %d records" % summary["original"])
+                print("   Excluded by sample selection: %d records" % summary["by_selection"])
+                print("   Excluded by filter conditions: %d records" % summary["by_conditions"])
                 print("   Final dataset: %d records" % final_count)
-                print("   Retention rate: %.1f%%" % ((final_count / original_count) * 100))
+                print("   Retention rate: %.1f%%" % summary["retention"])
 
-                if len(omitted_df) > 0:
-                    jv_filtered_samples = omitted_df[
-                        ~omitted_df["filter_reason"].str.contains(
-                            "sample/cell not selected", na=False
-                        )
-                    ]
-                    if len(jv_filtered_samples) > 0:
-                        # Group: condition → sample → [cells]
-                        condition_groups = {}
-                        for _, row in jv_filtered_samples.iterrows():
-                            sample = row["sample"]
-                            cell = row["cell"]
-                            for reason in [
-                                r.strip() for r in row["filter_reason"].split(",") if r.strip()
-                            ]:
-                                condition_groups.setdefault(reason, {}).setdefault(sample, [])
-                                if cell not in condition_groups[reason][sample]:
-                                    condition_groups[reason][sample].append(cell)
-
-                        print("\n📋 Removed by filter conditions:")
-                        for condition, samples in sorted(condition_groups.items()):
-                            print("\n• %s:" % condition)
-                            for s, cells in sorted(samples.items()):
-                                print("     %s [%s]" % (s, ", ".join(sorted(cells))))
+                if summary["removed_by_condition"]:
+                    print("\n📋 Removed by filter conditions:")
+                    for condition, samples in sorted(summary["removed_by_condition"].items()):
+                        print("\n• %s:" % condition)
+                        for s, cells in sorted(samples.items()):
+                            print("     %s [%s]" % (s, ", ".join(sorted(cells))))
 
                 if final_count > 0:
                     print("\n✅ Filtering complete! Switching to plotting tab.")
@@ -678,101 +614,18 @@ If you tested specific variables or conditions for each sample, please write the
         selected_colors = self.color_selector.get_colors(num_colors=None, sampling=sampling_method)
 
         try:
-            # Create workbook for Excel export with proper analysis sheets
-            wb = openpyxl.Workbook()
-            wb.remove(wb.active)  # Remove default sheet
-
-            # Jsc/J_mpp are stored as negative internally (matching the raw JV-curve sign
-            # convention); flip them positive here so exported files show the magnitude.
-            export_data = flip_current_density_sign(filtered_data)
-
-            # Add main data sheet first
-            main_sheet = wb.create_sheet(title="All_data")
-            main_sheet.append([CURRENT_DENSITY_FLIP_NOTE])
-            main_sheet.append([])  # Empty row
-            for r in dataframe_to_rows(export_data, index=True, header=True):
-                main_sheet.append(r)
-
-            # Create analysis sheets for each boxplot
-            # Variable name mapping (PCE -> PCE(%))
-            variable_mapping = {
-                "PCE": "PCE(%)",
-                "Voc": "Voc(V)",
-                "Jsc": "Jsc(mA/cm2)",
-                "FF": "FF(%)",
-                "Voc x FF": "Voc x FF(V%)",
-                "R_ser": "R_series(Ohmcm2)",
-                "R_shu": "R_shunt(Ohmcm2)",
-                "V_mpp": "V_mpp(V)",
-                "J_mpp": "J_mpp(mA/cm2)",
-                "P_mpp": "P_mpp(mW/cm2)",
-            }
-
-            # Process each boxplot for Excel export
-            for plot_type, option1, option2, *_ in plot_selections:
-                if plot_type not in ["Boxplot", "Boxplot (omitted)"] or option1 in (
-                    "Correlation (heatmap)",
-                    "Correlation (scatter matrix)",
-                    "Plot Voc, Jsc, FF, PCE",
-                ):
-                    continue
-
-                var_x = option2  # e.g., 'by Variable'
-                # "The big 4" is a single combined boxplot covering all four JV
-                # parameters at once, so it needs a sheet per parameter -- same as
-                # picking each of them individually via "Separated Boxplots" would.
-                var_y_list = (
-                    ["Voc", "Jsc", "FF", "PCE"]
-                    if option1 == "The big 4: Voc, Jsc, FF, PCE"
-                    else [option1]  # e.g., ['PCE']
-                )
-
-                # Determine grouping column
-                if var_x == "by Variable":
-                    grouping_col = "condition"
-                elif var_x == "by Batch":
-                    grouping_col = (
-                        "batch_for_plotting"
-                        if "batch_for_plotting" in filtered_data.columns
-                        else "batch"
-                    )
-                elif var_x == "by Sample":
-                    grouping_col = "sample"
-                elif var_x == "by Cell":
-                    grouping_col = "cell"
-                elif var_x == "by Scan Direction":
-                    grouping_col = "direction"
-                else:
-                    grouping_col = "condition"  # default
-
-                # Get omitted data and filter parameters from data manager
-                omitted_data = self.data_manager.get_omitted_data()
-                filter_params = self.data_manager.get_filter_parameters()
-
-                # Prepare filtered info (omitted data and filter parameters)
-                filtered_info = (
-                    flip_current_density_sign(omitted_data)
-                    if omitted_data is not None
-                    else pd.DataFrame(),
-                    filter_params,
-                )
-
-                for var_y in var_y_list:
-                    name_y = variable_mapping.get(var_y, var_y + "(%)")  # e.g., 'PCE(%)'
-
-                    # Calculate statistical summary
-                    stats_df = export_data.groupby(grouping_col)[name_y].describe()
-
-                    # Save to Excel
-                    wb = save_combined_excel_data(
-                        "", wb, export_data, filtered_info, grouping_col, name_y, var_y, stats_df
-                    )
+            wb = build_analysis_workbook(
+                filtered_data,
+                self.data_manager.get_omitted_data(),
+                self.data_manager.get_filter_parameters(),
+                plot_selections,
+            )
 
             # Use the precisely matched curves data instead of all curves
             filtered_curves = data.get("filtered_curves", pd.DataFrame())
             if filtered_curves.empty:
                 # Fallback to creating filtered curves if not available
-                filtered_curves = self._create_filtered_curves_data(filtered_data, data["curves"])
+                filtered_curves = curves_for_rows(data["curves"], filtered_data)
 
             # For JV curve plots, we want ALL curves data for complete plots
             # Create properly filtered curves for working/rejected cell plots
@@ -834,27 +687,6 @@ If you tested specific variables or conditions for each sample, please write the
                 """)
                 )
             ErrorHandler.handle_plot_error(e, self.plot_ui.plotted_content)
-
-    def _create_filtered_curves_data(self, filtered_jv_data, original_curves_data):
-        """Curves of the filtered JV rows, matched on sample and cell. If none match, on the
-        part of the sample name after its last "_" and cell, for tables that write the same
-        sample differently (e.g. "C-11" against "HZB_..._C-11"). Always a DataFrame."""
-        filtered_curves = rows_matching(original_curves_data, filtered_jv_data, ["sample", "cell"])
-        logger.debug("DEBUG: Exact matching found %s curve records", len(filtered_curves))
-        if filtered_curves.empty and all(
-            "sample" in frame.columns for frame in (filtered_jv_data, original_curves_data)
-        ):
-
-            def with_short_name(frame):
-                return frame.assign(_short=frame["sample"].astype(str).str.split("_").str[-1])
-
-            filtered_curves = rows_matching(
-                with_short_name(original_curves_data),
-                with_short_name(filtered_jv_data),
-                ["_short", "cell"],
-            ).drop(columns="_short")
-            logger.debug("DEBUG: Alternative matching found %s curve records", len(filtered_curves))
-        return filtered_curves
 
     def _on_save_plots(self, b):
         """Handle plots saving"""
