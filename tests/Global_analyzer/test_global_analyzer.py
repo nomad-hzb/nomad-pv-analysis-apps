@@ -2579,3 +2579,49 @@ def test_scrollable_table_escapes_cells():
 
     out = analysis_handlers._scrollable_table_html(["a<b"], [["x & y"]])
     assert "a&lt;b" in out and "x &amp; y" in out
+
+
+# ---------------------------------------------------------------------------
+# plot_manager returns figures and HTML; the GUI shows them (issue #261)
+# ---------------------------------------------------------------------------
+
+
+def test_selected_sample_html_escapes_the_nomad_values():
+    from plot_manager import selected_sample_html
+
+    text = selected_sample_html("<img src=x onerror=alert(1)>", 'https://e.test/a"b')
+    assert "<img" not in text and "&lt;img" in text
+    assert 'href="https://e.test/a&quot;b"' in text
+    assert "no NOMAD link" in selected_sample_html("S1", None)
+
+
+def test_correlation_scatter_matrix_figure_returns_a_figure():
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"a": rng.random(30), "b": rng.random(30), "flat": [1.0] * 30})
+    fig, used, truncated = _plot_manager().correlation_scatter_matrix_figure(df, min_unique=5)
+    assert used == ["a", "b"] and truncated is False
+    assert len(fig.data) == 4  # 2 histograms, 1 scatter, 1 Pearson-r text
+    assert _plot_manager().correlation_scatter_matrix_figure(df[["a", "flat"]])[0] is None
+
+
+def test_partial_dependence_figure_has_one_subplot_per_parameter():
+    items = [
+        {"feature": "temp", "kind": "numeric", "grid": [1, 2, 3], "average": [0.1, 0.2, 0.3]},
+        {"feature": "solvent", "kind": "categorical", "grid": ["A", "B"], "average": [1, 2]},
+    ]
+    fig = _plot_manager().partial_dependence_figure(items, "PCE")
+    assert [type(t).__name__ for t in fig.data] == ["Scatter", "Bar"]
+    assert _plot_manager().partial_dependence_figure([], "PCE") is None
+
+
+def test_click_handler_hands_the_html_to_the_gui():
+    pmgr = _plot_manager()
+    pmgr.plot_widget.add_trace(go.Scatter(x=[1], y=[2], customdata=[["S1"]]))
+    shown = []
+    pmgr.register_click_handler({"S1": "https://e.test/S1"}, shown.append)
+
+    class _Points:
+        point_inds = [0]
+
+    pmgr._click_handler(pmgr.plot_widget.data[0], _Points(), None)
+    assert "S1" in shown[0] and "https://e.test/S1" in shown[0]

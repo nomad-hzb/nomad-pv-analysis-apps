@@ -46,7 +46,7 @@ from data_manager import (
     uploaded_numeric_columns,
 )
 from gui_components import GUIManager
-from IPython.display import Markdown, clear_output
+from IPython.display import HTML, Markdown, clear_output
 from IPython.display import display as ipy_display
 from plot_manager import PlotManager
 from utils import ParameterManager, ProcessStepManager, trigger_csv_download
@@ -89,17 +89,15 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
         self.plot_manager = PlotManager(
             self.gui.plot_widget,
             self.gui.stats_output,
-            self.gui.correlation_widget,
-            self.gui.rf_widget,
-            self.gui.bo_widget,
-            self.gui.correlation_scatter_output,
-            self.gui.experimental_pca_widget,
-            self.gui.experimental_pareto_widget,
-            self.gui.experimental_outlier_widget,
-            self.gui.experimental_drift_widget,
-            self.gui.experimental_anova_widget,
+            correlation_widget=self.gui.correlation_widget,
+            rf_widget=self.gui.rf_widget,
+            bo_widget=self.gui.bo_widget,
+            pca_widget=self.gui.experimental_pca_widget,
+            pareto_widget=self.gui.experimental_pareto_widget,
+            outlier_widget=self.gui.experimental_outlier_widget,
+            drift_widget=self.gui.experimental_drift_widget,
+            anova_widget=self.gui.experimental_anova_widget,
             bo_loo_widget=self.gui.bo_loo_widget,
-            rf_pdp_output=self.gui.rf_pdp_output,
         )
         self.plot_manager.column_resolver = self.data_manager.resolve_result_column
 
@@ -179,6 +177,12 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
             }
         )
         self.gui.connect_preset_callbacks(self._apply_preset)
+
+    def _show_click_html(self, text: str):
+        """Shows plot_manager's clicked-point HTML (sample id and NOMAD link)."""
+        with self.gui.click_output:
+            clear_output(wait=True)
+            ipy_display(HTML(text))
 
     def _update_status(self, message: str):
         """Update status message."""
@@ -1159,7 +1163,7 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
             elif plot_type == "Boxplot":
                 bin_count = self.gui.boxplot_bin_count.value if numeric_x_boxplot else None
@@ -1167,14 +1171,14 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale, bin_count
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
             else:
                 self.plot_manager.create_scatter_plot(
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
 
             # Display statistics
