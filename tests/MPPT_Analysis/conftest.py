@@ -31,7 +31,7 @@ from app_state import AppState  # noqa: E402
 from data_manager import DataManager  # noqa: E402
 from plot_manager import PlotManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "MPPT_Analysis" / "demo" / "api_responses.json"
 
 FIXTURE_ROWS = [
     {"time": 0.0, "power_density": -15.2, "voltage": 0.92, "current_density": -16.5},

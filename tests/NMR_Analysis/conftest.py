@@ -37,7 +37,7 @@ _gui_spec.loader.exec_module(_gui)
 
 from data_manager import NMRDataManager  # noqa: E402
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "api_responses.json"
+FIXTURE_PATH = Path(__file__).parents[2] / "apps" / "NMR_Analysis" / "demo" / "api_responses.json"
 
 
 @pytest.fixture

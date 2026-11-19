@@ -388,8 +388,8 @@ class JVCurvePlotsMixin:
     def create_jv_all_cells_plot(self, jvc_data, curves_data, colors=None, flip_current=False):
         """Plot JV curves for all cells in the complete dataset"""
 
-        jv_devices = set(jvc_data[["sample", "cell"]].apply(tuple, axis=1))
-        curves_devices = set(curves_data[["sample", "cell"]].apply(tuple, axis=1))
+        jv_devices = set(zip(jvc_data["sample"], jvc_data["cell"]))
+        curves_devices = set(zip(curves_data["sample"], curves_data["cell"]))
 
         matching_devices = jv_devices.intersection(curves_devices)
         jv_only_devices = jv_devices - curves_devices

@@ -271,6 +271,17 @@ def password_login(url, username, password, timeout=REQUEST_TIMEOUT):
     return token
 
 
+def get_current_user(url, token, timeout=REQUEST_TIMEOUT):
+    """The NOMAD user the token belongs to ({url}/users/me), as NOMAD's JSON (name, username,
+    email, user_id, ...). Raises requests.HTTPError when the token is refused (401/403) or
+    the server fails, and the other requests exceptions when it cannot be reached."""
+    response = SESSION.get(
+        f"{url}/users/me", headers={"Authorization": f"Bearer {token}"}, timeout=timeout
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def prompt_login(url, name=None, timeout=REQUEST_TIMEOUT):
     """Ask for the username (unless name is given) and the password, then password_login."""
     user = name if name is not None else input("Username: ")

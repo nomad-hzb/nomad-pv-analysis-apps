@@ -17,9 +17,17 @@ Author: HySprint Team
 """
 
 import logging
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import pandas as pd
+
+from hysprint_utils.api_calls import (
+    get_ids_in_batch,
+    get_processing_steps,
+    get_sample_description,
+    get_sample_entry_links,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +131,38 @@ _COMMON_HANDLED = {
     "samples",
     "lab_id",
 }
+
+
+@dataclass
+class BatchOverview:
+    """What loading batches fetches before any process data: the samples, the batch each
+    was selected from, their descriptions, processing steps and NOMAD entry links. With no
+    samples only sample_ids and sample_batch are filled."""
+
+    sample_ids: list
+    sample_batch: dict
+    variation: Optional[object] = None
+    processing_steps: Optional[object] = None
+    entry_links: dict = field(default_factory=dict)
+
+
+def fetch_batch_overview(url: str, token: str, batch_ids: list) -> BatchOverview:
+    """The samples of batch_ids and what the analyzer needs about them (see BatchOverview).
+    A sample in several batches belongs to the first of them. Raises what the API raises."""
+    sample_ids = get_ids_in_batch(url, token, batch_ids)
+    sample_batch = {}
+    for batch_id in batch_ids:
+        for sample_id in get_ids_in_batch(url, token, [batch_id]):
+            sample_batch.setdefault(sample_id, batch_id)
+    if not sample_ids:
+        return BatchOverview(sample_ids, sample_batch)
+    return BatchOverview(
+        sample_ids,
+        sample_batch,
+        variation=get_sample_description(url, token, sample_ids),
+        processing_steps=get_processing_steps(url, token, sample_ids),
+        entry_links=get_sample_entry_links(url, token, sample_ids),
+    )
 
 
 class HySprintDataLoader:

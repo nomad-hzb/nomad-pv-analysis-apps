@@ -66,4 +66,19 @@ jobs:
         run: python scripts/ci_install_test_deps.py "${{ matrix.suite }}"
 
       - name: Run tests (no live)
-        run: python -m pytest "tests/${{ matrix.suite }}" -m "not live" -q
+        env:
+          SUITE: ${{ matrix.suite }}
+        # Coverage of the suite's own code: apps/<suite>, or the shared package.
+        run: |
+          if [ "$SUITE" = shared ]; then src=shared/hysprint_utils; else src="apps/$SUITE"; fi
+          python -m pytest "tests/$SUITE" -m "not live" -q --cov="$src" --cov-report=
+
+      # Visibility only, no minimum: the table appears on the run's summary page.
+      - name: Coverage summary
+        if: always()
+        env:
+          SUITE: ${{ matrix.suite }}
+        # Printed to the log too, so it can be read without opening the summary page.
+        run: |
+          report=$(python -m coverage report --format=markdown 2>&1) || report="No coverage data."
+          printf '### Coverage: %s\n\n%s\n' "$SUITE" "$report" | tee -a "$GITHUB_STEP_SUMMARY"

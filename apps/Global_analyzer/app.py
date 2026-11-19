@@ -33,7 +33,7 @@ import ml_analysis as ml
 import pandas as pd
 from analysis_data_handlers import AnalysisDataHandlersMixin
 from analysis_handlers import AnalysisHandlersMixin
-from data_loader import HySprintDataLoader
+from data_loader import HySprintDataLoader, fetch_batch_overview
 from data_manager import (
     DataManager,
     get_categorical_columns,
@@ -46,18 +46,12 @@ from data_manager import (
     uploaded_numeric_columns,
 )
 from gui_components import GUIManager
-from IPython.display import Markdown, clear_output
+from IPython.display import HTML, Markdown, clear_output
 from IPython.display import display as ipy_display
 from plot_manager import PlotManager
 from utils import ParameterManager, ProcessStepManager, trigger_csv_download
 
-from hysprint_utils.api_calls import (
-    get_all_eqe,
-    get_ids_in_batch,
-    get_processing_steps,
-    get_sample_description,
-    get_sample_entry_links,
-)
+from hysprint_utils.api_calls import get_all_eqe
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +83,15 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
         self.plot_manager = PlotManager(
             self.gui.plot_widget,
             self.gui.stats_output,
-            self.gui.correlation_widget,
-            self.gui.rf_widget,
-            self.gui.bo_widget,
-            self.gui.correlation_scatter_output,
-            self.gui.experimental_pca_widget,
-            self.gui.experimental_pareto_widget,
-            self.gui.experimental_outlier_widget,
-            self.gui.experimental_drift_widget,
-            self.gui.experimental_anova_widget,
+            correlation_widget=self.gui.correlation_widget,
+            rf_widget=self.gui.rf_widget,
+            bo_widget=self.gui.bo_widget,
+            pca_widget=self.gui.experimental_pca_widget,
+            pareto_widget=self.gui.experimental_pareto_widget,
+            outlier_widget=self.gui.experimental_outlier_widget,
+            drift_widget=self.gui.experimental_drift_widget,
+            anova_widget=self.gui.experimental_anova_widget,
             bo_loo_widget=self.gui.bo_loo_widget,
-            rf_pdp_output=self.gui.rf_pdp_output,
         )
         self.plot_manager.column_resolver = self.data_manager.resolve_result_column
 
@@ -179,6 +171,12 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
             }
         )
         self.gui.connect_preset_callbacks(self._apply_preset)
+
+    def _show_click_html(self, text: str):
+        """Shows plot_manager's clicked-point HTML (sample id and NOMAD link)."""
+        with self.gui.click_output:
+            clear_output(wait=True)
+            ipy_display(HTML(text))
 
     def _update_status(self, message: str):
         """Update status message."""
@@ -502,27 +500,18 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
         try:
             # Get batch data
             self.current_batches = list(self.gui.batch_selector.value)
-            self.current_sample_ids = get_ids_in_batch(self.url, self.token, self.current_batches)
+            overview = fetch_batch_overview(self.url, self.token, self.current_batches)
+            self.current_sample_ids = overview.sample_ids
             # the "batch" column is the batch each sample was selected from
-            self.data_manager.sample_batch = {}
-            for batch_id in self.current_batches:
-                for sample_id in get_ids_in_batch(self.url, self.token, [batch_id]):
-                    self.data_manager.sample_batch.setdefault(sample_id, batch_id)
+            self.data_manager.sample_batch = overview.sample_batch
 
             if not self.current_sample_ids:
                 self._update_status("❌ No samples found in selected batches.")
                 return
 
-            self.current_variation = get_sample_description(
-                self.url, self.token, self.current_sample_ids
-            )
-            self.processing_steps = get_processing_steps(
-                self.url, self.token, self.current_sample_ids
-            )
-
-            self.data_manager.sample_entry_links = get_sample_entry_links(
-                self.url, self.token, self.current_sample_ids
-            )
+            self.current_variation = overview.variation
+            self.processing_steps = overview.processing_steps
+            self.data_manager.sample_entry_links = overview.entry_links
 
             # Extract process types
             process_types = self.process_manager.extract_process_types(self.processing_steps)
@@ -1159,7 +1148,7 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
             elif plot_type == "Boxplot":
                 bin_count = self.gui.boxplot_bin_count.value if numeric_x_boxplot else None
@@ -1167,14 +1156,14 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale, bin_count
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
             else:
                 self.plot_manager.create_scatter_plot(
                     plot_df, x_col, y_col, color_col, x_param, y_param, colorscale
                 )
                 self.plot_manager.register_click_handler(
-                    self.data_manager.sample_entry_links, self.gui.click_output
+                    self.data_manager.sample_entry_links, self._show_click_html
                 )
 
             # Display statistics

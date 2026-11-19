@@ -15,7 +15,7 @@ import pytest
 
 from hysprint_utils.widget_cleanup import live_widgets
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "apps" / "SEM_crystal_counter" / "demo"
 
 
 @pytest.fixture(scope="module")
