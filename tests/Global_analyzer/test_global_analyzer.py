@@ -2625,3 +2625,53 @@ def test_click_handler_hands_the_html_to_the_gui():
 
     pmgr._click_handler(pmgr.plot_widget.data[0], _Points(), None)
     assert "S1" in shown[0] and "https://e.test/S1" in shown[0]
+
+
+# data_loader.fetch_batch_overview: batch loading moved out of app.py (issue #269)
+# ---------------------------------------------------------------------------
+
+
+def _fake_api(monkeypatch, members):
+    import data_loader
+
+    calls = []
+
+    def ids(url, token, batch_ids):
+        calls.append(("ids", list(batch_ids)))
+        return [s for b in batch_ids for s in members.get(b, [])]
+
+    def desc(url, token, sample_ids):
+        calls.append(("desc", list(sample_ids)))
+        return {s: f"d-{s}" for s in sample_ids}
+
+    def steps(url, token, sample_ids):
+        calls.append(("steps", list(sample_ids)))
+        return {"steps": len(sample_ids)}
+
+    def links(url, token, sample_ids):
+        calls.append(("links", list(sample_ids)))
+        return {s: f"https://e.test/{s}" for s in sample_ids}
+
+    monkeypatch.setattr(data_loader, "get_ids_in_batch", ids)
+    monkeypatch.setattr(data_loader, "get_sample_description", desc)
+    monkeypatch.setattr(data_loader, "get_processing_steps", steps)
+    monkeypatch.setattr(data_loader, "get_sample_entry_links", links)
+    return data_loader, calls
+
+
+def test_fetch_batch_overview_keeps_the_first_batch_of_a_shared_sample(monkeypatch):
+    data_loader, calls = _fake_api(monkeypatch, {"B1": ["S1", "S2"], "B2": ["S2", "S3"]})
+    overview = data_loader.fetch_batch_overview("u", "t", ["B1", "B2"])
+    assert overview.sample_ids == ["S1", "S2", "S2", "S3"]
+    assert overview.sample_batch == {"S1": "B1", "S2": "B1", "S3": "B2"}
+    assert overview.variation["S3"] == "d-S3" and overview.entry_links["S1"].endswith("/S1")
+    # the same calls, in the same order, as app.py made before
+    assert [c[0] for c in calls] == ["ids", "ids", "ids", "desc", "steps", "links"]
+
+
+def test_fetch_batch_overview_without_samples_stops_after_the_lookup(monkeypatch):
+    data_loader, calls = _fake_api(monkeypatch, {})
+    overview = data_loader.fetch_batch_overview("u", "t", ["B1"])
+    assert overview.sample_ids == [] and overview.variation is None
+    assert overview.entry_links == {}
+    assert [c[0] for c in calls] == ["ids", "ids"]

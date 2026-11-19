@@ -33,7 +33,7 @@ import ml_analysis as ml
 import pandas as pd
 from analysis_data_handlers import AnalysisDataHandlersMixin
 from analysis_handlers import AnalysisHandlersMixin
-from data_loader import HySprintDataLoader
+from data_loader import HySprintDataLoader, fetch_batch_overview
 from data_manager import (
     DataManager,
     get_categorical_columns,
@@ -51,13 +51,7 @@ from IPython.display import display as ipy_display
 from plot_manager import PlotManager
 from utils import ParameterManager, ProcessStepManager, trigger_csv_download
 
-from hysprint_utils.api_calls import (
-    get_all_eqe,
-    get_ids_in_batch,
-    get_processing_steps,
-    get_sample_description,
-    get_sample_entry_links,
-)
+from hysprint_utils.api_calls import get_all_eqe
 
 logger = logging.getLogger(__name__)
 
@@ -506,27 +500,18 @@ class SampleDataExplorer(AnalysisDataHandlersMixin, AnalysisHandlersMixin):
         try:
             # Get batch data
             self.current_batches = list(self.gui.batch_selector.value)
-            self.current_sample_ids = get_ids_in_batch(self.url, self.token, self.current_batches)
+            overview = fetch_batch_overview(self.url, self.token, self.current_batches)
+            self.current_sample_ids = overview.sample_ids
             # the "batch" column is the batch each sample was selected from
-            self.data_manager.sample_batch = {}
-            for batch_id in self.current_batches:
-                for sample_id in get_ids_in_batch(self.url, self.token, [batch_id]):
-                    self.data_manager.sample_batch.setdefault(sample_id, batch_id)
+            self.data_manager.sample_batch = overview.sample_batch
 
             if not self.current_sample_ids:
                 self._update_status("❌ No samples found in selected batches.")
                 return
 
-            self.current_variation = get_sample_description(
-                self.url, self.token, self.current_sample_ids
-            )
-            self.processing_steps = get_processing_steps(
-                self.url, self.token, self.current_sample_ids
-            )
-
-            self.data_manager.sample_entry_links = get_sample_entry_links(
-                self.url, self.token, self.current_sample_ids
-            )
+            self.current_variation = overview.variation
+            self.processing_steps = overview.processing_steps
+            self.data_manager.sample_entry_links = overview.entry_links
 
             # Extract process types
             process_types = self.process_manager.extract_process_types(self.processing_steps)
