@@ -60,7 +60,8 @@ The tabs are used from left to right.
      and Variable. *Split by direction* draws reverse and forward as two boxes side by side in every group. The two combined options
      draw one plot per condition (for example one per variable with L1/L2/L3 inside).
      Dark measurements (status D...) are left out of the *Status and Variable* and *Cell and
-     Variable* plots. In every boxplot, hovering over a point shows its sample and cell.
+     Variable* plots. In every boxplot, hovering over a point shows its sample, cell, scan
+     direction, status and variable.
    - **Boxplot (omitted)**: the same, built from the rows your filters removed. Titles say
      "(omitted data)".
    - **Histogram**: the distribution of one parameter.

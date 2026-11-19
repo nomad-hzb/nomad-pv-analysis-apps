@@ -200,18 +200,29 @@ def test_showing_plots_again_closes_the_previous_ones():
 
 
 # ---------------------------------------------------------------------------
-# Hover: every box plot names the sample and cell of each point (#279)
+# Hover: every box plot names the sample, cell, scan direction, status and variable of
+# each point (#279)
 # ---------------------------------------------------------------------------
 
 BIG_FOUR = ["Voc(V)", "Jsc(mA/cm2)", "FF(%)", "PCE(%)"]
+HOVER = {
+    "Sample": "sample",
+    "Cell": "cell",
+    "Scan direction": "direction",
+    "Status": "status",
+    "Variable": "condition",
+}
 
 
 @pytest.fixture
 def hover_df(jvc_df):
-    """Distinct sample per row, a second cell, unique values, one missing PCE value."""
+    """Distinct sample per row, two cells, statuses and variables, unique values, and one
+    missing PCE value."""
     df = pd.concat([jvc_df, jvc_df.assign(cell="C2")], ignore_index=True)
     n = len(df)
     df["sample"] = [f"S{i}" for i in range(n)]
+    df["status"] = ["L1", "L2"] * (n // 2)
+    df["condition"] = ["A", "A", "B", "B"] * (n // 4)
     df["Voc(V)"] = [1.0 + i / 100 for i in range(n)]
     df["Jsc(mA/cm2)"] = [-(20.0 + i) for i in range(n)]
     df["FF(%)"] = [70.0 + i for i in range(n)]
@@ -220,62 +231,85 @@ def hover_df(jvc_df):
     return df
 
 
+def _resolve(text, x, custom):
+    """A hovertemplate value: customdata, x, or a literal px wrote into the template."""
+    if text.startswith("%{customdata["):
+        return str(custom[int(text[len("%{customdata[") : text.index("]")])])
+    if text == "%{x}":
+        return str(x)
+    return text
+
+
 def _points(fig):
-    """(value, sample, cell) for every drawn point of every box trace."""
+    """(value, {hover label: shown value}) for every drawn point of every box trace."""
     out = []
     for trace in fig.data:
-        assert "Sample" in trace.hovertemplate and "Cell" in trace.hovertemplate
-        # With the sample on the x axis, px shows it from x and customdata holds the cell only.
-        sample_on_x = len(trace.customdata[0]) == 1
+        fields = {}
+        for part in trace.hovertemplate.replace("<extra></extra>", "").split("<br>"):
+            for sep in (": ", "="):
+                label, _, value = part.partition(sep)
+                if label in HOVER:
+                    fields[label] = value
+                    break
+        assert set(fields) == set(HOVER), trace.hovertemplate
         xs = trace.x if trace.x is not None else [None] * len(trace.y)
         for x, value, custom in zip(xs, trace.y, trace.customdata):
             if not pd.isna(value):
-                sample, cell = (x, custom[0]) if sample_on_x else (custom[0], custom[1])
-                out.append((float(value), str(sample), str(cell)))
+                shown = {label: _resolve(v, x, custom) for label, v in fields.items()}
+                out.append((float(value), shown))
     return out
 
 
-def _expected(df, columns=("PCE(%)",)):
-    out = []
+def _check(fig_or_figs, df, columns=("PCE(%)",)):
+    figs = fig_or_figs if isinstance(fig_or_figs, list) else [fig_or_figs]
+    expected = {}
     for column in columns:
         rows = df.dropna(subset=[column])
         values = rows[column].abs() if column.startswith("Jsc") else rows[column]
-        out += [(float(v), s, c) for v, s, c in zip(values, rows["sample"], rows["cell"])]
-    return out
+        for value, (_, row) in zip(values, rows.iterrows()):
+            expected[float(value)] = {label: str(row[col]) for label, col in HOVER.items()}
+    points = [p for fig in figs for p in _points(fig)]
+    assert sorted(v for v, _ in points) == sorted(expected)
+    for value, shown in points:
+        assert shown == expected[value], value
 
 
+@pytest.mark.parametrize("direction_split", [False, True])
 def test_boxplot_hover_matches_the_point_when_a_value_is_missing(
-    plot_manager, hover_df, filtered_info
+    plot_manager, hover_df, filtered_info, direction_split
 ):
     fig, _, _ = plot_manager.create_boxplot(
-        data=hover_df, var_x="condition", var_y="pce", filtered_info=filtered_info
+        data=hover_df,
+        var_x="condition",
+        var_y="pce",
+        filtered_info=filtered_info,
+        direction_split=direction_split,
     )
-    assert sorted(_points(fig)) == sorted(_expected(hover_df))
+    _check(fig, hover_df)
 
 
 @pytest.mark.parametrize("combination_type", ["sg", "cg", "bg"])
-def test_combination_plots_hover_names_sample_and_cell(
+def test_combination_plots_hover_names_every_field(
     plot_manager, hover_df, filtered_info, combination_type
 ):
     figs, _ = plot_manager.create_combination_plots(
         hover_df, "pce", combination_type, filtered_info
     )
     assert figs
-    points = [p for fig in figs for p in _points(fig)]
-    assert sorted(points) == sorted(_expected(hover_df))
+    _check(figs, hover_df)
 
 
-def test_triple_combination_plot_hover_names_sample_and_cell(plot_manager, hover_df, filtered_info):
+def test_triple_combination_plot_hover_names_every_field(plot_manager, hover_df, filtered_info):
     figs, _ = plot_manager.create_triple_combination_plots(hover_df, "pce", "sgc", filtered_info)
-    assert sorted(_points(figs[0])) == sorted(_expected(hover_df))
+    _check(figs, hover_df)
 
 
 @pytest.mark.parametrize("direction_split", [False, True])
-@pytest.mark.parametrize("var_x", ["condition", "sample"])
-def test_big_four_subplots_hover_names_sample_and_cell(
+@pytest.mark.parametrize("var_x", ["condition", "sample", "status"])
+def test_big_four_subplots_hover_names_every_field(
     plot_manager, hover_df, filtered_info, direction_split, var_x
 ):
     fig, _ = plot_manager.create_voc_jsc_ff_pce_subplots(
         hover_df, filtered_info, var_x=var_x, direction_split=direction_split
     )
-    assert sorted(_points(fig)) == sorted(_expected(hover_df, BIG_FOUR))
+    _check(fig, hover_df, BIG_FOUR)
