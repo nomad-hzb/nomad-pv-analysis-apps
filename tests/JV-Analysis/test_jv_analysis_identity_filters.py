@@ -217,3 +217,23 @@ def test_big4_direction_split_puts_reverse_and_forward_side_by_side():
     assert all(t.width is None for t in split.data)
     plain, _ = pm.create_voc_jsc_ff_pce_subplots(df, info, var_x="sample")
     assert all(t.width == 0.8 for t in plain.data)
+
+
+def test_sample_selection_mask_matches_the_row_by_row_version(loaded_manager):
+    """Issue #273: apply_filters keeps exactly the rows f"{sample}_{cell}" in items kept."""
+    import numpy as np
+
+    demo = loaded_manager.data["jvc"]
+    data = pd.concat([demo.iloc[[i % len(demo)]] for i in range(8)], ignore_index=True)
+    data["sample"] = pd.Series(["S1", "S1", "S2", 3, 3.0, np.nan, None, "S_4"], dtype=object)
+    data["cell"] = pd.Series(["a", 1, 2.0, "x", "x", "y", "z", "b_c"], dtype=object)
+    for items in (
+        ["S1_a", "S2_2.0", "3_x", "nan_y", "None_z", "S_4_b_c"],
+        {"S1_1", "3.0_x"},
+        [],
+    ):
+        old = data.apply(lambda row: f"{row['sample']}_{row['cell']}" in items, axis=1)
+        loaded_manager.data["jvc"] = data.copy()
+        filtered, _omitted, _ = loaded_manager.apply_filters([], "Both", items, verbose=False)
+        kept = set(filtered.index)
+        assert [i in kept for i in data.index] == list(old), items
