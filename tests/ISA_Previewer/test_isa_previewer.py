@@ -667,3 +667,42 @@ def test_preselect_prefers_the_exact_sample_over_a_prefix_of_it(dm, gui, monkeyp
     samples.options = ["HZB_X_1 [first]", "HZB_X_10 [tenth]"]
     gui.preselect_from_store(uploads, samples, measurements, _IntText())
     assert samples.value == "HZB_X_10 [tenth]"
+
+
+def test_a_linked_page_survives_changing_the_preselected_sample(dm, gui, monkeypatch):
+    """The preselect opens a file, and that file's Session closes every widget made after it.
+
+    Run before the page was built, it closed the page's own root with the next selection and
+    the linked notebook went blank (issue #283).
+    """
+    import ipywidgets as widgets
+
+    stored = "/uploads/up/run1.h5"
+    monkeypatch.setattr(dm, "get_current_user", lambda: "tester")
+    monkeypatch.setattr(dm, "list_uploads_with_measurements", lambda *_a: [("run", "up")])
+    monkeypatch.setattr(dm, "list_samples_in_upload", lambda *_a: ["---", "HZB_A [a]", "HZB_B [b]"])
+    monkeypatch.setattr(
+        dm,
+        "list_h5_measurements",
+        lambda _url, _token, sample, _upload: (
+            [("run1", stored)] if sample.startswith("HZB_A") else [("run2", "/uploads/up/b.h5")]
+        ),
+    )
+    monkeypatch.setattr(dm, "get_stored_h5_path", lambda: stored)
+    monkeypatch.setattr(dm, "get_stored_screenwidth", lambda: None)
+    monkeypatch.setattr(dm, "upload_id_from_path", lambda _path: "up")
+    monkeypatch.setattr(dm, "sample_name_in_h5", lambda _path: "HZB_A")
+    monkeypatch.setattr(gui, "open_source", lambda *_a: object())
+    monkeypatch.setattr(gui, "build_sections", lambda *_a: [widgets.Label("section")])
+    monkeypatch.setattr(gui, "handover_row", lambda *_a: None)
+    monkeypatch.setattr(gui, "manual_panel", lambda _file: widgets.HTML("manual"))
+
+    ui = gui.build_ui("url", "token", gui.config.VARIANTS["giwaxs"])
+    selector_row = ui.children[2]
+    samples = selector_row.children[2]
+    assert samples.value == "HZB_A [a]"  # the handed over file was preselected
+
+    samples.value = "HZB_B [b]"
+
+    for widget in (ui, selector_row, samples):
+        assert widget.comm is not None, "changing the sample closed the page itself"

@@ -209,15 +209,12 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
         samples.observe(on_select_sample, names=["value"])
         measurements.observe(on_select_measurement, names=["value"])
 
-    if variant.select_from_store:
-        preselect_from_store(uploads, samples, measurements, pixel_width)
-
     # The sample and measurement columns are left out of the tree of an upload variant rather
     # than shown empty: they would suggest a selection that has no effect on what it opens.
     columns = [uploads_filter, uploads]
     if not upload_only:
         columns += [samples, measurements]
-    return widgets.VBox(
+    ui = widgets.VBox(
         [
             widgets.HTML(OVERFLOW_CSS),
             manual_panel(__file__),
@@ -226,6 +223,13 @@ def build_ui(url: str, token: str, variant: config.Variant) -> widgets.Widget:
             out,
         ]
     )
+
+    # Only after the page itself exists: the preselect opens a file, and the Session it creates
+    # treats every widget made after that as its own. Built before, the page's root and selector
+    # row were closed with the next selection and the linked notebook went blank (issue #283).
+    if variant.select_from_store:
+        preselect_from_store(uploads, samples, measurements, pixel_width)
+    return ui
 
 
 def preselect_from_store(
